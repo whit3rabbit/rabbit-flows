@@ -7,6 +7,19 @@ The platform shares workflows by repo clone and skills/agents by plugin marketpl
 gives you no way to install *a workflow and its dependencies together*. This installer is
 that missing path.
 
+## Where things live
+
+| Path | What it is |
+|---|---|
+| `.claude/workflows/*.js` | The workflow scripts themselves: `starter`, `scaffold`, `security-audit`. Each runs via `/workflows`. Shared by cloning this repo. |
+| `.claude/skills/dynamic-workflow-authoring/` | A skill that helps you **write and debug** workflow scripts. Loads automatically when you work in this repo. Its `scripts/validate.py` lints workflow files (the linter CI runs). |
+| `plugins/workflow-kit/skills/`, `.../agents/` | Specialist roles (e.g. `architect`, `secure-review`) that some workflows lean on. These ship via the marketplace plugin and the installer copies them next to the workflow that needs them. |
+| `installer/manifest.json` | The catalog: maps each workflow to the skills/agents it bundles. |
+| `bin/cli.mjs` | The `npx` installer. |
+
+New workflows go in `.claude/workflows/<name>.js` (save with `/workflows` → `s`), then get
+an entry in `installer/manifest.json`. Authoring rules live in `CLAUDE.md` + `.claude/rules/`.
+
 ## Prerequisites
 
 Dynamic workflows need Claude Code **v2.1.154+**. On a Pro plan they are off by default:

@@ -22,6 +22,7 @@ The relevant implementation areas are:
   `pipeline`, and `workflow`.
 - `createWorkflowHooks`, the runner primitive layer for subagent state, git
   worktree isolation, retries, and budgets.
+- Tool resolution that registers project skill tools for workflow workers.
 - Coordinator-mode prompts for `SendMessage`, `Agent`, `Workflow`, task assignment,
   synthesis, and concurrency control.
 - Task claiming, `TaskList` integration, managed agents, and memory-store guidance.
@@ -137,6 +138,27 @@ Isolation behavior:
 Remote cloud containers are therefore handled through separate non-local endpoints,
 not by the local VM runner.
 
+### Worker Skill Access
+
+Workflow workers can use project skills through the `Skill` tool.
+
+During an `agent()` step, `createWorkflowHooks` reads coordinator app state from the
+host context. The tool resolver receives `appState.skillTools` and includes those
+skill tools in the worker's available tool set.
+
+The resolved tool list is passed to `runAgent` as `availableTools`, alongside the
+standard tools and configured MCP tools available to the worker.
+
+Coordinator-mode instructions also describe this behavior. They tell the coordinator
+that workers can use standard tools, configured MCP tools, and project skills through
+the `Skill` tool.
+
+If an agent definition declares preloaded skills, `runAgent` loads those skill
+definitions and appends them to the worker's conversation context before execution.
+
+This does not mean `agent()` has a `skills` option. Skill access comes from the
+coordinator session state and from registered agent definitions.
+
 ### `parallel(...fns)`
 
 `parallel()` runs multiple workflow tasks concurrently.
@@ -229,8 +251,12 @@ implies.
 
 Treat workflows as deterministic orchestration scripts, not general Node.js programs.
 
-Keep worker contracts inline in prompts. The runtime does not dynamically load skills
-for `agent()` calls, and `agentType` only resolves registered session agents.
+Keep workflow-specific worker contracts inline in prompts. Workers can still invoke
+project skills through the `Skill` tool when those skills are registered in the
+coordinator session.
+
+Do not model skill access as an `agent()` option. `agent()` receives a prompt and
+options; skill tools are resolved from session state and passed into the worker.
 
 Use `parallel()` with functions, not promises. Passing promises defeats the scheduler's
 control over when work starts.

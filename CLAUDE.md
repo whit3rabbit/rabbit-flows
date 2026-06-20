@@ -9,6 +9,7 @@ Optimize for the simplest thing that works, not the most sophisticated.
 ```bash
 npm run build:skill   # regenerate guardrails skill from .claude/rules/ (run after editing any rule)
 npm run check         # assert no drift: guardrails skill matches rules AND installer manifest matches workflows
+python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py .claude/workflows --strict   # lint workflow scripts (NOT scripts/validate.py); --selftest checks the linter. CI runs this.
 npx @whit3rabbit/rabbit-flows --list   # preview the installable workflow catalog
 ```
 
@@ -72,11 +73,15 @@ This repo is both a working project and a distributable marketplace.
 ```
 .
 ├── CLAUDE.md                       # this file — authoring rules for the repo
+├── WORKFLOW_ANALYSIS.md            # how the runtime actually works (VM sandbox, journal, caps, gotchas)
 ├── .claude/
 │   ├── workflows/                  # the workflow scripts (shared by clone)
-│   └── rules/                      # detailed rules (load as project context)
+│   ├── rules/                      # detailed rules (load as project context)
+│   └── skills/                     # dynamic-workflow-authoring (how-to + validate.py linter)
 ├── .claude-plugin/
 │   └── marketplace.json            # catalog of the plugin(s) below
+├── bin/cli.mjs                     # the npx installer
+├── installer/manifest.json         # catalog: each workflow + its skill/agent deps
 ├── scripts/build-skill.mjs         # generates the guardrails skill from the rules
 └── plugins/
     └── workflow-kit/               # the installable, cross-project plugin
@@ -110,3 +115,8 @@ the workflow's header comment. An unexplained deviation is a bug, not a choice.
 **Before authoring a workflow, read the relevant file in `.claude/rules/`.** For the runtime API
 (`agent`/`parallel`/`pipeline`/opts/caps) and the canonical `/deep-research` script saved verbatim,
 see the `dynamic-workflow-authoring` skill in `.claude/skills/` — the rules cover *what* good looks like, the skill covers *how* to write the script.
+
+For how the runtime *actually behaves* (VM sandbox limits, the resume journal and worker
+hash, concurrency/agent caps, `args` JSON parsing, rejected `isolation:'remote'`, the hidden
+45s retry, and other doc-vs-implementation gaps), read **`WORKFLOW_ANALYSIS.md`**. Consult it
+when a workflow behaves unexpectedly or you need a runtime detail the rules/skill don't cover.
