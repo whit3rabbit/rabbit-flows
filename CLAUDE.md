@@ -49,7 +49,8 @@ If you escalate a stage, note why. See `.claude/rules/model-routing.md`.
 
 - Parameterize with `args`; never hardcode paths or questions.
 - Save to `.claude/workflows/` (shared) or `~/.claude/workflows/` (personal).
-- Encode repeated specialist roles as skills in `.claude/skills/`, not re-prompted each run.
+- Encode repeated specialist roles as skills in `plugins/workflow-kit/skills/`, not re-prompted
+  each run (they travel via the plugin; a workflow's own one-off skill can live in `.claude/skills/`).
 - Workflows are token-heavy. Test on a small slice before full scale. Caps: 16 concurrent / 1000 agents per run.
 
 ## Repository structure

@@ -4,6 +4,13 @@
 // canonical example models it rather than rationalizing it away. See workflow-guardrails.
 // requires-skills: workflow-guardrails
 // Run with /workflows, or copy via `npx @whit3rabbit/rabbit-flows`.
+//
+// API: agent() / phase() / parallel() / the `schema` opt / `export const meta` / the `args`
+// global are the Claude Code dynamic-workflow runtime API (requires Claude Code v2.1.154+).
+// `meta.phases` and the phase() calls are complementary, not redundant: meta.phases declares
+// the progress groups, each phase() assigns the agents that follow to the matching group by title.
+// `node --check` reports an "illegal return" on the trailing return — expected: the runtime wraps
+// the script in an async function, so top-level return and await are legal there, not standalone.
 export const meta = {
   name: 'starter',
   description: 'Reference workflow: decompose a question, fan out workers, gate their notes, synthesize.',

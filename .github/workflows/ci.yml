@@ -17,16 +17,16 @@ jobs:
       - name: Installer manifest + skill drift
         run: npm run check
 
-  # Validates the plugin manifest itself. Requires the Claude Code CLI; `plugin validate`
-  # is an offline static check (no login). Adjust the install line to your CI if needed.
+  # Validates the plugin manifest itself. `plugin validate` is an offline static check
+  # (no login, no API key). Uses Anthropic's tested install script, not the deprecated
+  # npm package; install.sh drops the binary in ~/.local/bin.
   validate-plugin:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
       - name: Install Claude Code
-        run: npm install -g @anthropic-ai/claude-code
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: Validate plugin manifest
         run: claude plugin validate ./plugins/workflow-kit --strict
