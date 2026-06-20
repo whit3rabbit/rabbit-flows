@@ -49,8 +49,10 @@ If you escalate a stage, note why. See `.claude/rules/model-routing.md`.
 
 - Parameterize with `args`; never hardcode paths or questions.
 - Save to `.claude/workflows/` (shared) or `~/.claude/workflows/` (personal).
-- Encode repeated specialist roles as skills in `plugins/workflow-kit/skills/`, not re-prompted
-  each run (they travel via the plugin; a workflow's own one-off skill can live in `.claude/skills/`).
+- Specialist roles travel as skills/agents in the plugin (portability + Skill-tool/human use), but
+  workflow stages do NOT auto-load them: `agent()` has no `skills` option, and `agentType` resolves
+  only session-registered, plugin-namespaced agents. A worker's contract lives INLINE in its prompt;
+  the bundled skill is a portable copy, not the runtime source. Detail: `.claude/rules/workflow-design.md`.
 - Workflows are token-heavy. Test on a small slice before full scale. Caps: 16 concurrent / 1000 agents per run.
 
 ## Repository structure
@@ -95,4 +97,6 @@ Where new things go:
 These are defaults, not laws. Deviate when the task warrants — and write the reason in
 the workflow's header comment. An unexplained deviation is a bug, not a choice.
 
-**Before authoring a workflow, read the relevant file in `.claude/rules/`.**
+**Before authoring a workflow, read the relevant file in `.claude/rules/`.** For the runtime API
+(`agent`/`parallel`/`pipeline`/opts/caps) and the canonical `/deep-research` script saved verbatim,
+see the `dynamic-workflow-authoring` skill in `.claude/skills/` — the rules cover *what* good looks like, the skill covers *how* to write the script.
