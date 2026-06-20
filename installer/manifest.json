@@ -7,6 +7,20 @@
       "description": "Reference workflow: decompose a question, fan out workers, gate their notes, synthesize.",
       "skills": ["workflow-guardrails"],
       "agents": []
+    },
+    {
+      "name": "security-audit",
+      "file": ".claude/workflows/security-audit.js",
+      "description": "Defensive code audit: map attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation.",
+      "skills": ["secure-review"],
+      "agents": []
+    },
+    {
+      "name": "scaffold",
+      "file": ".claude/workflows/scaffold.js",
+      "description": "Start a project from scratch: frame the brief, draft blind architecture attempts, merge to one, build a DAG skeleton, verify it, write back the decisions.",
+      "skills": ["architect"],
+      "agents": []
     }
   ]
 }

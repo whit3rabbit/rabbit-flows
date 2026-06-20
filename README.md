@@ -48,6 +48,8 @@ plugins/workflow-kit/     the marketplace plugin (skills + agents)
 3. Add an entry to `installer/manifest.json` listing the workflow file and its
    `skills`/`agents` by name.
 4. `npm run check` asserts every referenced file exists (run it in CI to catch drift).
+5. If you touched a file in `.claude/rules/`, run `npm run build:skill` to regenerate the
+   `workflow-guardrails` skill (never hand-edit it); `npm run check` fails if it drifts.
 
 ## The marketplace plugin
 

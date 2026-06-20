@@ -17,9 +17,9 @@ jobs:
       - name: Installer manifest + skill drift
         run: npm run check
 
-  # Validates the plugin manifest itself. `plugin validate` is an offline static check
-  # (no login, no API key). Uses Anthropic's tested install script, not the deprecated
-  # npm package; install.sh drops the binary in ~/.local/bin.
+  # Best-effort guard. `plugin validate` is believed to be an offline static check (no login, no API
+  # key) but that is UNVERIFIED — the `check` job above is the reliable gate. Uses Anthropic's tested
+  # install script, not the deprecated npm package; install.sh drops the binary in ~/.local/bin.
   validate-plugin:
     runs-on: ubuntu-latest
     steps:
@@ -28,5 +28,7 @@ jobs:
         run: |
           curl -fsSL https://claude.ai/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Confirm binary on PATH
+        run: claude --version  # fails loudly if install.sh did not land it on $HOME/.local/bin
       - name: Validate plugin manifest
         run: claude plugin validate ./plugins/workflow-kit --strict
