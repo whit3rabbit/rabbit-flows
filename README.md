@@ -27,8 +27,25 @@ The menu lets you pick workflows; each selected workflow copies its `.js` into
 These are plain file copies, not plugin-managed installs, so there is no
 `/plugin update` for them: re-run with `--force` to overwrite and update.
 
-Flags: `--workflow a,b` (skip menu), `--scope project|user`, `--force` (overwrite
-existing), `--list`, `--check`.
+Flags: `--workflow a,b` (skip menu), `--scope project|user` (defaults to `project`
+when omitted non-interactively), `--force` (overwrite existing), `--list`, `--check`.
+
+## Run a workflow
+
+After installing, enable **Dynamic workflows** in `/config`, then run one by name.
+Pass structured inputs as an `args` object:
+
+```
+/starter         What are the tradeoffs between SQLite and Postgres for a single-node app?
+/deep-research   Latest evidence on intermittent fasting and HbA1c
+/scaffold        { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }
+/security-audit  { "scope": "src", "focus": ["authz", "ssrf"] }
+```
+
+`/scaffold` only writes files when `write: true`, and only EXECUTES the generated
+install/build/test when `verify: true` (both default true). Use `write: false` for a
+dry run, or `write: true, verify: false` to write the scaffold and inspect it before
+running anything.
 
 ## Repo layout
 

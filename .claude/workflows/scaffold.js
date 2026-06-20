@@ -24,6 +24,12 @@
 // gated only by whatever allowlist the session grants the subagents. Intended for a from-scratch personal
 // scaffold; run it where that sandbox/allowlist is acceptable. Point it at an EMPTY or new dir.
 //
+// Two independent knobs control how far it goes:
+//   write:false                 -> dry run: stop after the decision, write NOTHING. Review architecture first.
+//   write:true,  verify:false   -> write the scaffold but do NOT execute anything. Inspect, then run it yourself.
+//   write:true,  verify:true    -> default: write, then run install/build/test and report (the empirical gate).
+// verify only matters when write is true (a dry run executes nothing regardless).
+//
 // requires-skills: architect
 //   (Bundling only — the installer copies this skill alongside the workflow as a portable role doc.
 //    Workflow stages do NOT auto-load skills; agent() has no skills option. The propose stage carries
@@ -173,6 +179,7 @@ const brief = args?.brief ?? 'A small command-line tool. (Pass args.brief to des
 const dir = args?.dir ?? '.'
 const attempts = Math.min(args?.attempts ?? 3, 6) // independent BLIND architecture attempts (diversity knob)
 const write = args?.write ?? true                  // false -> stop after the decision (dry run; writes nothing)
+const runVerify = args?.verify ?? true             // false -> write the scaffold but don't EXECUTE it (no install/build/test)
 
 // 1. Frame — strong model. Turns the brief into requirements, hard constraints, the irreversible
 //    decisions each attempt must make, and the empirical success check. Sets the trajectory.
@@ -270,15 +277,21 @@ await parallel([
 
 // 5. Verify — empirical admission gate for the generated code (run-and-report -> Haiku). Pairs the LLM
 //    build with a real check: run install/build/test and report pass/fail. No auto-repair on purpose.
-phase('Verify')
-const verify = await agent(
-  `Run the success check against the scaffold in "${dir}" and report results. Run, in order, capturing ` +
-    `each outcome: install ("${decision.commands.install}"), build ("${decision.commands.build ?? 'n/a'}"), ` +
-    `test ("${decision.commands.test}"). Success criteria: ${frame.successCheck}. Set passed=true only if the ` +
-    `required steps succeed. Report each step's status and a short detail (the error head on failure). ` +
-    `Do not fix anything.`,
-  { label: 'verify', model: 'haiku', schema: VERIFY_SCHEMA },
-)
+//    Gated by runVerify: with verify:false we write the scaffold but never EXECUTE unreviewed code.
+let verify
+if (runVerify) {
+  phase('Verify')
+  verify = await agent(
+    `Run the success check against the scaffold in "${dir}" and report results. Run, in order, capturing ` +
+      `each outcome: install ("${decision.commands.install}"), build ("${decision.commands.build ?? 'n/a'}"), ` +
+      `test ("${decision.commands.test}"). Success criteria: ${frame.successCheck}. Set passed=true only if the ` +
+      `required steps succeed. Report each step's status and a short detail (the error head on failure). ` +
+      `Do not fix anything.`,
+    { label: 'verify', model: 'haiku', schema: VERIFY_SCHEMA },
+  )
+} else {
+  verify = { passed: null, results: [], skipped: true } // verify:false — scaffold written, not run
+}
 
 // 6. Write-back — an agent writes the new project's CLAUDE.md (the script can't). memory.md's three
 //    highest-value items map straight onto earlier stages: build/run/test COMMANDS, the chosen
@@ -304,7 +317,7 @@ return {
   attempts: candidates.length,
   chosen: decision.chosen.stack,
   rejected: decision.rejected.length,
-  verified: verify.passed,
+  verified: runVerify ? verify.passed : null, // null when verify:false (not executed)
   steps: verify.results,
   written: true,
 }

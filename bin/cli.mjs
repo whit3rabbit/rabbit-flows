@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Installer/bundler: pick workflows from a menu, copy each one plus the skills/agents
 // it depends on into the user's .claude/ (project or user scope).
-import { cp, mkdir, readFile } from 'node:fs/promises'
+import { cp, mkdir, readFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -61,6 +61,11 @@ async function check(workflows) {
         )
       }
     }
+    // meta is required to be the first thing in every script, so the first name: is meta.name.
+    const metaName = src.match(/name:\s*['"]([^'"]+)['"]/)?.[1]
+    if (metaName && metaName !== w.name) {
+      drift.push(`${w.name}: meta.name "${metaName}" != manifest name "${w.name}"`)
+    }
   }
   if (missing.length || drift.length) {
     if (missing.length) console.error('manifest drift, missing:\n  ' + missing.join('\n  '))
@@ -81,6 +86,8 @@ function list(workflows) {
 // Copy src->dest unless dest exists (skip, unless force). Returns 'copied'|'skipped'.
 async function copyInto(src, dest, force) {
   if (existsSync(dest) && !force) return 'skipped'
+  // --force is the only update path; remove first so upstream-deleted files don't linger.
+  if (force && existsSync(dest)) await rm(dest, { recursive: true, force: true })
   await mkdir(path.dirname(dest), { recursive: true })
   await cp(src, dest, { recursive: true })
   return existsSync(dest) ? 'copied' : 'skipped'
@@ -134,24 +141,23 @@ async function main() {
     }
   }
 
-  // Interactive menu (only when we still need a choice and we have a TTY).
-  if (!chosen || !scope) {
+  // Interactive menu only when the workflow choice is unresolved AND we have a TTY.
+  // scope has a sane default below, so a non-TTY --workflow run never needs the menu.
+  if (!chosen) {
     if (!process.stdin.isTTY) {
-      console.error('no TTY for the menu. Pass --workflow <name> and --scope <project|user>.')
+      console.error('no TTY: pass --workflow <name> (optionally --scope project|user).')
       process.exit(1)
     }
     const p = await import('@clack/prompts')
     p.intro('rabbit-flows')
 
-    if (!chosen) {
-      const picked = await p.multiselect({
-        message: 'Pick workflows to install (their skills/agents come along):',
-        options: workflows.map((w) => ({ value: w.name, label: w.name, hint: w.description })),
-        required: true,
-      })
-      if (p.isCancel(picked)) return p.cancel('cancelled')
-      chosen = workflows.filter((w) => picked.includes(w.name))
-    }
+    const picked = await p.multiselect({
+      message: 'Pick workflows to install (their skills/agents come along):',
+      options: workflows.map((w) => ({ value: w.name, label: w.name, hint: w.description })),
+      required: true,
+    })
+    if (p.isCancel(picked)) return p.cancel('cancelled')
+    chosen = workflows.filter((w) => picked.includes(w.name))
 
     if (!scope) {
       scope = await p.select({
@@ -177,6 +183,12 @@ async function main() {
   }
   const skipped = results.filter(([s]) => s === 'skipped').length
   if (skipped) console.log(`\n${skipped} skipped (already present). Re-run with --force to overwrite.`)
+
+  console.log(
+    `\nNext: enable "Dynamic workflows" in /config (off by default on Pro),\n` +
+      `then run a workflow by name, e.g. /${chosen[0].name}.\n` +
+      `Installed: ${chosen.map((w) => w.name).join(', ')}`,
+  )
 }
 
 main().catch((e) => {

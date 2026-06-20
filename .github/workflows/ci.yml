@@ -14,14 +14,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Installer manifest + skill drift
         run: npm run check
+      - name: Workflow runtime-rule lint
+        run: python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py .claude/workflows --strict
 
   # Best-effort guard. `plugin validate` is believed to be an offline static check (no login, no API
   # key) but that is UNVERIFIED — the `check` job above is the reliable gate. Uses Anthropic's tested
   # install script, not the deprecated npm package; install.sh drops the binary in ~/.local/bin.
   validate-plugin:
     runs-on: ubuntu-latest
+    continue-on-error: true # best-effort (see comment above); the `check` job is the blocking gate
     steps:
       - uses: actions/checkout@v4
       - name: Install Claude Code
