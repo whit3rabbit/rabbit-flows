@@ -11,7 +11,7 @@ that missing path.
 
 | Path | What it is |
 |---|---|
-| `.claude/workflows/*.js` | The workflow scripts themselves: `starter`, `scaffold`, `security-audit`. Each runs via `/workflows`. Shared by cloning this repo. |
+| `.claude/workflows/*.js` | The workflow scripts themselves: `starter`, `scaffold`, `security-audit`, `docs-create`, `docs-scrape`. Each runs via `/workflows`. Shared by cloning this repo. |
 | `.claude/skills/dynamic-workflow-authoring/` | A skill that helps you **write and debug** workflow scripts. Loads automatically when you work in this repo. Its `scripts/validate.py` lints workflow files (the linter CI runs). |
 | `plugins/workflow-kit/skills/`, `.../agents/` | Specialist roles (e.g. `architect`, `secure-review`) that some workflows lean on. These ship via the marketplace plugin and the installer copies them next to the workflow that needs them. |
 | `installer/manifest.json` | The catalog: maps each workflow to the skills/agents it bundles. |
@@ -50,15 +50,20 @@ Pass structured inputs as an `args` object:
 
 ```
 /starter         What are the tradeoffs between SQLite and Postgres for a single-node app?
-/deep-research   Latest evidence on intermittent fasting and HbA1c
 /scaffold        { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }
 /security-audit  { "scope": "src", "focus": ["authz", "ssrf"] }
+/docs-create     { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site" }
+/docs-scrape     { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }
 ```
+
+`/docs-scrape` needs network egress (WebFetch) and writes under `outDir`. Start with a small
+`maxPages` to slice-test a site before a full crawl.
 
 `/scaffold` only writes files when `write: true`, and only EXECUTES the generated
 install/build/test when `verify: true` (both default true). Use `write: false` for a
 dry run, or `write: true, verify: false` to write the scaffold and inspect it before
-running anything.
+running anything. `dir` defaults to `./scaffold-out` (a fresh subdir, never your cwd);
+pass `dir` to override.
 
 ## Repo layout
 

@@ -28,6 +28,13 @@
       "description": "Author an Astro Starlight documentation site from a brief: plan pages, fan out authors, verify + assemble config.",
       "skills": ["docs-site-builder"],
       "agents": []
+    },
+    {
+      "name": "docs-scrape",
+      "file": ".claude/workflows/docs-scrape.js",
+      "description": "Ingest a documentation website into a local markdown corpus: detect platform, enumerate pages, fetch+extract, gate, assemble.",
+      "skills": ["docs-scraper"],
+      "agents": []
     }
   ]
 }
