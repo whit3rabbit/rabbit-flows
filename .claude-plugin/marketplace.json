@@ -1,0 +1,13 @@
+{
+  "name": "rabbit-flows",
+  "owner": {
+    "name": "whit3rabbit"
+  },
+  "plugins": [
+    {
+      "name": "workflow-kit",
+      "source": "./plugins/workflow-kit",
+      "description": "Guardrails, specialist skills, and subagents for authoring disciplined Claude Code workflows."
+    }
+  ]
+}

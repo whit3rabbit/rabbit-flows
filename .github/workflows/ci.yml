@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Drift guards. Pure Node, no dependencies needed — the check scripts use only builtins.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Installer manifest + skill drift
+        run: npm run check
+
+  # Validates the plugin manifest itself. Requires the Claude Code CLI; `plugin validate`
+  # is an offline static check (no login). Adjust the install line to your CI if needed.
+  validate-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Claude Code
+        run: npm install -g @anthropic-ai/claude-code
+      - name: Validate plugin manifest
+        run: claude plugin validate ./plugins/workflow-kit --strict

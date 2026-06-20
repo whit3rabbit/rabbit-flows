@@ -1,0 +1,30 @@
+{
+  "name": "@whit3rabbit/rabbit-flows",
+  "version": "0.1.0",
+  "description": "npx installer that bundles Claude Code workflows with the skills and agents they depend on.",
+  "type": "module",
+  "bin": {
+    "rabbit-flows": "bin/cli.mjs"
+  },
+  "scripts": {
+    "build:skill": "node scripts/build-skill.mjs",
+    "check": "node bin/cli.mjs --check && node scripts/build-skill.mjs --check"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0"
+  },
+  "files": [
+    "bin",
+    "installer",
+    ".claude/workflows",
+    "plugins/workflow-kit",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT"
+}

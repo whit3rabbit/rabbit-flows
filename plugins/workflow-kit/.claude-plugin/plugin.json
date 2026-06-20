@@ -1,0 +1,7 @@
+{
+  "name": "workflow-kit",
+  "description": "Guardrails, specialist skills, and subagents for authoring disciplined Claude Code workflows.",
+  "version": "0.1.0",
+  "author": { "name": "whit3rabbit" },
+  "license": "MIT"
+}
