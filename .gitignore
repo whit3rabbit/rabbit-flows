@@ -150,3 +150,6 @@ Icon
 
 # personal local memory (not shared)
 CLAUDE.local.md
+
+# st (syntext) local index cache
+.syntext/
