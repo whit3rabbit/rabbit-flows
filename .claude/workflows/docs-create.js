@@ -12,15 +12,21 @@
 //     small and independent; one strong-model pass keeps the call count low (the explicit ask) while
 //     still being a fresh-context check separate from the authors. It also pairs LLM review with an
 //     empirical `astro build`/`astro check` when the target is a buildable project (workflow-design.md).
+//   - A FRAME IA stage runs before Plan (strong model, inherits session). Good docs are an information-
+//     architecture problem before a syntax one: this pass frames audiences, the reader journey, the
+//     Diátaxis split, and the sidebar shape, so Plan can tag each page with a diataxisType + section
+//     template and authors write the RIGHT SHAPE of page (a reference isn't secretly a tutorial). It
+//     sets the trajectory, so it gets the strong model (model-routing.md). Skipped when `pages` is
+//     supplied. Its contract is baked inline below (IA_CONTRACT), same runtime-source rule as CONTRACT.
 //
-// Calls per run ~= 1 (plan) + N (one author per page) + 1 (verify & finalize).
+// Calls per run ~= 1 (frame IA) + 1 (plan) + N (one author per page) + 1 (verify & finalize).
 //
 // args: {
 //   brief:     string  (required) what the docs cover + any authoring instructions
 //   outDir:    string  (required) absolute or repo-relative dir to write the site into
 //   sources?:  string[]          files the authors should read as source material
 //   framework?: string           default 'starlight' (only framework with an inline contract)
-//   pages?:    [{path,title,kind,group,brief}]  skip planning and author exactly these
+//   pages?:    [{path,title,kind,group,brief,diataxisType?,template?}]  skip Frame IA + Plan, author exactly these
 //   refsDir?:  string            default points at this repo's docs-site-builder references
 // }
 
@@ -29,9 +35,10 @@ export const meta = {
   name: 'docs-create',
   description: 'Author an Astro Starlight documentation site from a brief: plan pages, fan out authors, verify + assemble config.',
   phases: [
-    { title: 'Plan', detail: 'one strong-model call: brief -> page list + sidebar groups' },
+    { title: 'Frame IA', detail: 'one strong-model call: brief -> audiences, journey, Diátaxis split, sidebar shape' },
+    { title: 'Plan', detail: 'one strong-model call: IA + brief -> page list, each tagged diataxisType + template' },
     { title: 'Author', detail: 'one Sonnet worker per page; each writes its file from the inline contract' },
-    { title: 'Verify & finalize', detail: 'one strong-model call: review vs contract, fix, write astro.config + decisions' },
+    { title: 'Verify & finalize', detail: 'one strong-model call: review vs contract + Diátaxis type, fix, write astro.config + decisions' },
   ],
 }
 
@@ -84,6 +91,34 @@ CODE BLOCKS (Expressive Code, built in): fence with options, e.g.
     \`\`\`js title="src/util.js" {1,3-5} ins={2} del={4}
 - title="..." adds a frame title; {1,3-5} highlights lines; ins=/del= mark added/removed lines.`
 
+// --- IA contract (distilled from docs-site-builder/references/information-architecture.md) -------
+// Framework-agnostic docs DESIGN guidance, injected into Plan + every author so pages get the right
+// SHAPE, not just valid syntax. Runtime source of truth; refresh from the reference if it changes.
+const IA_CONTRACT = `DOCS INFORMATION-ARCHITECTURE CONTRACT (authoritative; design before syntax).
+
+DIÁTAXIS — every page serves exactly ONE reader need. Never mix modes on one page.
+- tutorial    (reader is LEARNING): a guided first success. Hand-held, one happy path, no choices.
+- howto       (reader is WORKING): one specific task done. Goal-directed, assumes competence.
+- reference   (reader is LOOKING SOMETHING UP): exhaustive, accurate, scannable. No narrative/opinion.
+- explanation (reader is UNDERSTANDING): context + the "why" + tradeoffs. Discursive, no steps.
+- index/splash (structural): routes the journey — what this is, who it's for, links to each quadrant.
+
+SECTION TEMPLATE per kind (the author MUST follow the matching skeleton):
+- tutorial:    prerequisites -> numbered steps (each a visible runnable result) -> final result -> next steps.
+- howto:       goal up front -> ordered steps -> a verification step. Omit teaching.
+- reference:   consistent exhaustive entries, grouped/alphabetised, same shape each (signature, params, returns, example). No narrative.
+- explanation: context (why it exists) -> discussion -> tradeoffs/alternatives. No step-by-step.
+- index/splash: what/who/entry-points; route first-touch readers to the right quadrant.
+
+NAVIGATION: shallow over deep (<=2 sidebar levels); group by user task not internal module; a landing
+page routes the journey; order groups first-touch -> proficient.
+
+WRITING: task-oriented headings ("Deploy to production" not "Deployment"); examples first; one concept
+per page; scannable (short paragraphs, code early, lists); define jargon once.
+
+GETTING-STARTED RULE: a new reader reaches a first success within ~5 minutes. Design the journey
+backwards from that page; it is the highest-leverage page in the set.`
+
 // --- args / guards -----------------------------------------------------------------------------
 const brief = typeof args?.brief === 'string' ? args.brief : null
 const outDir = typeof args?.outDir === 'string' ? args.outDir : null
@@ -105,17 +140,35 @@ const sourcesNote = sources.length
   : '\nNo source files provided; write from the brief and general knowledge, and mark anything uncertain.'
 
 // --- schemas -----------------------------------------------------------------------------------
+const IA_SCHEMA = {
+  type: 'object', required: ['audiences', 'journey', 'diataxis', 'sidebar'], additionalProperties: false,
+  properties: {
+    audiences: { type: 'array', items: { type: 'string' }, description: 'who the docs serve + their goal' },
+    journey: { type: 'array', items: { type: 'string' }, description: 'ordered steps: first-touch -> proficient' },
+    diataxis: {
+      type: 'object', additionalProperties: false,
+      properties: {
+        tutorial: { type: 'string', description: 'count/intent of tutorial pages this set needs' },
+        howto: { type: 'string' }, reference: { type: 'string' }, explanation: { type: 'string' },
+      },
+    },
+    sidebar: { type: 'array', items: { type: 'object' }, description: 'group structure + ordering (the shape, not raw pages)' },
+  },
+}
+
 const PLAN_SCHEMA = {
   type: 'object', required: ['pages'], additionalProperties: false,
   properties: {
     pages: { type: 'array', items: {
-      type: 'object', required: ['path', 'title', 'kind', 'group', 'brief'], additionalProperties: false,
+      type: 'object', required: ['path', 'title', 'kind', 'group', 'brief', 'diataxisType', 'template'], additionalProperties: false,
       properties: {
         path: { type: 'string', description: 'repo-relative under outDir, e.g. src/content/docs/guides/intro.md(x)' },
         title: { type: 'string' },
         kind: { enum: ['index', 'splash', 'guide', 'reference'] },
         group: { type: 'string', description: 'sidebar group label, e.g. Guides / Reference' },
         brief: { type: 'string', description: 'what this page must cover' },
+        diataxisType: { enum: ['tutorial', 'howto', 'reference', 'explanation', 'index', 'splash'], description: 'the ONE reader need this page serves' },
+        template: { type: 'string', description: 'the section skeleton the author must follow for this diataxisType' },
       } } },
     sidebar: { type: 'array', items: { type: 'object' }, description: 'optional explicit astro.config sidebar' },
   },
@@ -148,16 +201,39 @@ const FINAL_SCHEMA = {
   },
 }
 
+// --- Frame IA (strong model; sets the trajectory, skipped when pages are supplied) --------------
+let ia = null
+if (!explicitPages) {
+  phase('Frame IA')
+  ia = await agent(
+    `You are framing the information architecture for a ${framework} documentation site BEFORE any pages ` +
+    `are planned. Brief:\n${brief}\n${sourcesNote}\n\n` +
+    `Apply the IA contract below. Return: audiences (and their goal), the reader journey (ordered, ` +
+    `first-touch -> proficient), the Diátaxis split (how many of tutorial/howto/reference/explanation this ` +
+    `set needs and why), and the sidebar SHAPE (group structure + ordering, not raw pages yet).\n\n` +
+    `IA CONTRACT\n${IA_CONTRACT}`,
+    { label: 'frame-ia', schema: IA_SCHEMA },
+  )
+  if (ia) log(`IA: ${ia.audiences?.length ?? 0} audience(s), ${ia.journey?.length ?? 0} journey step(s)`)
+}
+const iaNote = ia
+  ? `\nFRAMED INFORMATION ARCHITECTURE (honor this; do not re-derive it):\n${JSON.stringify(ia, null, 2)}\n`
+  : ''
+
 // --- Plan --------------------------------------------------------------------------------------
 phase('Plan')
 let pages = explicitPages
 if (!pages) {
   const plan = await agent(
-    `You are planning a ${framework} documentation site. Brief:\n${brief}\n${sourcesNote}\n\n` +
-    `Produce a focused set of pages (prefer FEWER, well-scoped pages over many thin ones). For each page give:\n` +
+    `You are planning a ${framework} documentation site. Brief:\n${brief}\n${sourcesNote}\n${iaNote}\n` +
+    `Produce a focused set of pages (prefer FEWER, well-scoped pages over many thin ones) that realizes the ` +
+    `framed IA above. For each page give:\n` +
     `- path: repo-relative under "${outDir}", e.g. src/content/docs/guides/getting-started.md (use .mdx ONLY if it needs components, .md otherwise)\n` +
     `- title, kind (index|splash|guide|reference), group (sidebar group label), brief (what it must cover).\n` +
-    `Group guides vs reference sensibly. Include exactly one landing page (kind index or splash) if the brief implies a homepage.\n\n` +
+    `- diataxisType (tutorial|howto|reference|explanation|index|splash): the ONE reader need this page serves.\n` +
+    `- template: the section skeleton for that diataxisType (from the IA contract), tailored to this page.\n` +
+    `Map groups + ordering to the framed sidebar. Include exactly one landing page (kind index or splash) if the brief implies a homepage.\n\n` +
+    `IA CONTRACT\n${IA_CONTRACT}\n\n` +
     `Authoring contract for reference:\n${CONTRACT}`,
     { label: 'plan', schema: PLAN_SCHEMA },
   )
@@ -174,10 +250,16 @@ const notes = (await parallel(pages.map((p, i) => () =>
     `the contract below is authoritative. Only Read a file under "${refsDir}" if the contract genuinely ` +
     `does not cover something you need (avoid extra reads, this run optimizes for fewer calls).\n\n` +
     `PAGE\n- file: ${outDir}/${p.path}\n- title: ${p.title}\n- kind: ${p.kind}\n- sidebar group: ${p.group}\n- must cover: ${p.brief}\n` +
+    `- Diátaxis type: ${p.diataxisType ?? '(infer from kind/brief)'}  (serve this ONE reader need; do NOT mix modes)\n` +
+    `- section template to follow: ${p.template ?? '(use the matching skeleton from the IA contract)'}\n` +
     `${sourcesNote}\n\n` +
+    `Write the RIGHT SHAPE for the Diátaxis type: a tutorial is task-ordered and outcome-first; a reference is ` +
+    `exhaustive, consistent and scannable with no narrative; a how-to is goal-then-steps-then-verify; an explanation ` +
+    `discusses context and tradeoffs without step-by-step. Follow the section template.\n\n` +
     `Rules: valid frontmatter (title required; template: splash + a hero block only for a splash page). ` +
     `Use .mdx with the correct import line if and only if you use components. Write the file with the Write tool ` +
     `(create parent dirs). Keep prose tight and technical.\n\n` +
+    `IA CONTRACT\n${IA_CONTRACT}\n\n` +
     `AUTHORING CONTRACT\n${CONTRACT}`,
     { label: `author:${p.path || i}`, phase: 'Author', model: 'sonnet', schema: NOTE_SCHEMA },
   ),
@@ -193,10 +275,15 @@ phase('Verify & finalize')
 const final = await agent(
   `You are the verification gate and finalizer for a ${framework} docs site at "${outDir}". A fan-out of ` +
   `authors just wrote these pages (their self-reported notes):\n${JSON.stringify(notes, null, 2)}\n\n` +
+  `Each page was planned with a Diátaxis type (the ONE reader need it must serve):\n` +
+  `${pages.map(p => `- ${p.path}: ${p.diataxisType ?? '(untyped)'}`).join('\n')}\n\n` +
   `Do, in order:\n` +
   `1. READ each written page file. Check it against the contract: valid frontmatter, .mdx iff components are used, ` +
   `correct component imports and prop names, valid Aside/Tabs/Steps usage, sensible links. Fix small problems in place ` +
   `with the Edit tool. If a page is broken beyond a quick fix, reject it (record path + reason).\n` +
+  `1b. IA CHECK: confirm each page actually matches its declared Diátaxis type and does not mix modes ` +
+  `(e.g. a reference page is not secretly a tutorial; a tutorial is not a wall of explanation). Fix small ` +
+  `shape mismatches in place; note any you fixed in decisions. Reject a page only if its mode is hopelessly wrong.\n` +
   `2. Ensure the content collection exists: write ${outDir}/src/content.config.ts with docsLoader()+docsSchema() if missing.\n` +
   `3. Assemble ${outDir}/astro.config.mjs: a starlight() integration whose sidebar reflects the page groups ` +
   `(${[...new Set(pages.map(p => p.group))].join(', ')}). Use slug items for the admitted pages. Derive a title from the brief. ` +
@@ -207,6 +294,7 @@ const final = await agent(
   `5. WRITE-BACK: write ${outDir}/.docs-plan.md capturing the final page list, sidebar structure, and any decisions/constraints ` +
   `(e.g. rejected pages and why) so a future run or human has the durable record.\n\n` +
   `Return admitted paths, rejected {path,reason}, pages you fixed, configWritten, buildResult, decisions, and a short summary.\n\n` +
+  `IA CONTRACT\n${IA_CONTRACT}\n\n` +
   `AUTHORING CONTRACT\n${CONTRACT}`,
   { label: 'verify-finalize', schema: FINAL_SCHEMA },
 )

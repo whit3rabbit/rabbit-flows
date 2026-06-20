@@ -43,11 +43,15 @@ preload them all):
    resulting file tree. → `references/setup.md`
 2. **Configure** — the `starlight()` integration in `astro.config.mjs`: title, social, sidebar,
    locales, components overrides, plugins. Sidebar is the fiddly part. → `references/configuration.md`
-3. **Author pages** — per-page frontmatter (title, description, template, hero, sidebar order/badge).
+3. **Frame the IA** — read this BEFORE planning the page list or authoring page shapes: which Diátaxis
+   quadrant each page is (tutorial/how-to/reference/explanation), the reader journey, and the section
+   template each page kind must follow. Documentation is an IA problem before a syntax problem.
+   → `references/information-architecture.md`
+4. **Author pages** — per-page frontmatter (title, description, template, hero, sidebar order/badge).
    → `references/frontmatter.md`
-4. **Rich content** — Markdown/MDX features Starlight adds: asides, Expressive Code blocks, plus
+5. **Rich content** — Markdown/MDX features Starlight adds: asides, Expressive Code blocks, plus
    brief i18n and theming. → `references/content-authoring.md`
-5. **Components** — built-in `.mdx` components and their exact props. → `references/components.md`
+6. **Components** — built-in `.mdx` components and their exact props. → `references/components.md`
 
 For a single narrow question (e.g. "what are the Aside variants?") skip the workflow and read just
 the one relevant reference.
