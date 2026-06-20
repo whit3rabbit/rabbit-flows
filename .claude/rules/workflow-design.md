@@ -43,15 +43,25 @@ before CI); pure fan-out only when the stages are genuinely independent.
 
 ## Runtime binding (verified; re-check if the platform changes)
 
-Workflow stages cannot load skills or named agents at runtime:
+Workflow stages cannot AUTO-LOAD skills or named agents via `agent()`. How a worker actually reaches them:
 
-- `agent(prompt, opts)` has no `skills` option. The only role knob is `agentType`, which resolves
-  ONLY agents already in the session registry (built-ins + plugin agents, namespaced `<plugin>:<name>`).
-  A file freshly copied to `.claude/agents/` does not resolve in the same session, and the bare-name
-  (npx-copy) vs `<plugin>:`-prefixed (marketplace) split means one hardcoded `agentType` can't serve
-  both install paths. Empirically: `agent({agentType:'architect'})` errors "agent type not found".
-- So a worker's full contract MUST be inline in its prompt. Bundled skills/agents (`requires-skills`,
-  manifest) are portable role docs, not invoked by the workflow. Don't ship the contract in two live
-  copies; the inline prompt is the source.
+- **Agents.** `agent(prompt, opts)` has no way to inject a definition; the only role knob is `agentType`,
+  which resolves ONLY agents already in the session registry (built-ins + plugin agents, namespaced
+  `<plugin>:<name>`). A file freshly copied to `.claude/agents/` does not resolve in the same session,
+  and the bare-name (npx-copy) vs `<plugin>:`-prefixed (marketplace) split means one hardcoded
+  `agentType` can't serve both install paths. Empirically: `agent({agentType:'architect'})` errors
+  "agent type not found".
+- **Skills.** `agent()` has NO `skills` option either. A worker CAN still invoke a skill through the
+  `Skill` tool, but ONLY if that skill is registered in the session (coordinator `skillTools` / a loaded
+  plugin) — a skill created or copied this session does NOT resolve until the session reloads (same
+  gotcha as `agentType`). So you can neither force-load a skill nor depend on a freshly-authored one
+  being callable mid-run. (Source: WORKFLOW_ANALYSIS.md, "Worker Skill Access".)
+- So a worker's full contract MUST be inline in its prompt. For fan-out that leans on a skill, distill
+  the skill's references into an inline `const` contract and inject it into every worker: one source
+  read at author time, zero per-item `Skill`/`Read` calls at run time (the cheap, deterministic path).
+  Pass a `refsDir` arg only as a deep-escalation fallback for cases the inline contract doesn't cover.
+  Bundled skills/agents (`requires-skills`, manifest) are the portable human + Skill-tool copy, not the
+  runtime source — don't keep the contract in two live copies; refresh the `const` when the skill
+  changes. Worked example: `.claude/workflows/docs-create.js`.
 - The runtime API (`agent/phase/parallel/schema/meta`) is otherwise unspecified — verify a new
   signature once by running a 1-agent probe workflow before building three workflows on it.

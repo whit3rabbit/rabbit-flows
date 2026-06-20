@@ -21,6 +21,13 @@
       "description": "Start a project from scratch: frame the brief, draft blind architecture attempts, merge to one, build a DAG skeleton, verify it, write back the decisions.",
       "skills": ["architect"],
       "agents": []
+    },
+    {
+      "name": "docs-create",
+      "file": ".claude/workflows/docs-create.js",
+      "description": "Author an Astro Starlight documentation site from a brief: plan pages, fan out authors, verify + assemble config.",
+      "skills": ["docs-site-builder"],
+      "agents": []
     }
   ]
 }
