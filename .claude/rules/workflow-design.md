@@ -40,3 +40,18 @@ before CI); pure fan-out only when the stages are genuinely independent.
 - **Coverage** (audit, migration, scan) → independent lanes, but share failures and
   constraints early so lanes don't collide on the same dead ends.
 - Default to independent-then-merge for anything expensive to reverse.
+
+## Runtime binding (verified; re-check if the platform changes)
+
+Workflow stages cannot load skills or named agents at runtime:
+
+- `agent(prompt, opts)` has no `skills` option. The only role knob is `agentType`, which resolves
+  ONLY agents already in the session registry (built-ins + plugin agents, namespaced `<plugin>:<name>`).
+  A file freshly copied to `.claude/agents/` does not resolve in the same session, and the bare-name
+  (npx-copy) vs `<plugin>:`-prefixed (marketplace) split means one hardcoded `agentType` can't serve
+  both install paths. Empirically: `agent({agentType:'architect'})` errors "agent type not found".
+- So a worker's full contract MUST be inline in its prompt. Bundled skills/agents (`requires-skills`,
+  manifest) are portable role docs, not invoked by the workflow. Don't ship the contract in two live
+  copies; the inline prompt is the source.
+- The runtime API (`agent/phase/parallel/schema/meta`) is otherwise unspecified — verify a new
+  signature once by running a 1-agent probe workflow before building three workflows on it.

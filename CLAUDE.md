@@ -4,6 +4,16 @@ This repo authors Claude Code dynamic workflows (`.claude/workflows/*.js`) and t
 subagents and skills they use. This file governs **how** workflows are built here.
 Optimize for the simplest thing that works, not the most sophisticated.
 
+## Commands
+
+```bash
+npm run build:skill   # regenerate guardrails skill from .claude/rules/ (run after editing any rule)
+npm run check         # assert no drift: guardrails skill matches rules AND installer manifest matches workflows
+npx @whit3rabbit/rabbit-flows --list   # preview the installable workflow catalog
+```
+
+Editing a file in `.claude/rules/` without `build:skill` leaves the shipped skill stale; `check` (also in CI) fails the commit.
+
 ## Prime directive
 
 Default to LESS. A conversation with subagents beats a workflow; a three-agent
