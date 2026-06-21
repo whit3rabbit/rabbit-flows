@@ -23,7 +23,18 @@ re-fetches the same pages, and wanders off-site. Use the curated source the site
 | Docusaurus | `.theme-doc-sidebar-menu`, `.menu__list` | `a.menu__link[href]` |
 | MkDocs/Material | `.md-nav--primary`, `.md-sidebar--primary` | `a.md-nav__link[href]` |
 | VitePress | `.VPSidebar`, `.VPSidebarNav` | `a.VPLink[href]`, `.link[href]` |
+| Fumadocs | `#nd-sidebar`, `aside` | `a[href]` (try `llms.txt`/`sitemap.xml` first — see below) |
+| GitBook | `aside`, `[data-testid="table-of-contents"]`; legacy `.book-summary` | `a[href]` |
+| Sphinx/RTD | `.wy-menu-vertical` (RTD), `.sphinxsidebar` (classic) | `a.reference.internal[href]` |
+| Docsify | rendered `.sidebar-nav`, OR fetch `<baseUrl>/_sidebar.md` directly | `a[href]` / markdown links in `_sidebar.md` |
 | generic | `nav`, `[role=navigation]`, `aside` | `a[href]` then filter to same-origin docs paths |
+
+**Platform-specific shortcuts that beat the sidebar:**
+- **Fumadocs** MAY serve `/llms.txt` (opt-in feature, not default — verified absent on fumadocs.dev at
+  test time). Probe `<baseUrl>/llms.txt`; if present (and `llms-full.txt` with full text even better),
+  use it — it collapses enumeration + extraction. If absent, fall back to `sitemap.xml` then nav.
+- **Docsify** has no sitemap. Fetch `<baseUrl>/_sidebar.md` and parse its markdown links — that *is* the
+  page list. Each link's `/foo` route maps to source `/foo.md` for extraction.
 
 ## Filtering
 

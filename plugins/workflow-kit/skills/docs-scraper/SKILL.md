@@ -1,6 +1,6 @@
 ---
 name: docs-scraper
-description: Ingest an existing documentation website into a local markdown corpus. Detect the docs platform (Starlight, Docusaurus, MkDocs/Material, VitePress, or generic), enumerate its pages, fetch + extract clean markdown, and assemble a navigable corpus. Use when the user wants to scrape, mirror, ingest, archive, or pull down docs from a website, or asks "save these docs locally" / "turn this docs site into markdown".
+description: Ingest an existing documentation website into a local markdown corpus. Detect the docs platform (Starlight, Docusaurus, MkDocs/Material, VitePress, Fumadocs, GitBook, Sphinx/ReadTheDocs, Docsify, or generic), enumerate its pages, fetch + extract clean markdown, and assemble a navigable corpus. Use when the user wants to scrape, mirror, ingest, archive, or pull down docs from a website, or asks "save these docs locally" / "turn this docs site into markdown".
 ---
 
 # Docs scraper
@@ -29,11 +29,16 @@ Work in this order; each step has a reference to read when you reach it:
 
 ## Platform coverage
 
-Detection signatures and extraction selectors exist for: **Starlight, Docusaurus, MkDocs/Material,
-VitePress, and a generic readability-style fallback**. Other platforms (GitBook, Sphinx/ReadTheDocs,
-Fumadocs, Docsify) are not yet first-class — use the generic fallback and say so. Docsify in
-particular is client-rendered (the HTML is a near-empty shell hydrated by JS), so a plain fetch
-returns no content; note the JS-render gotcha if you hit it.
+First-class detection signatures and extraction selectors exist for: **Starlight, Docusaurus,
+MkDocs/Material, VitePress, Fumadocs, GitBook, Sphinx/ReadTheDocs, Docsify**, plus a generic
+readability-style fallback for everything else. Two carry caveats:
+
+- **Docsify** is client-rendered (the HTML is a near-empty shell hydrated by JS). Don't extract the
+  rendered HTML — fetch `_sidebar.md` for the page list and each route's raw `/foo.md` source.
+- **GitBook** modern hosted sites are hydration-heavy and the markup shifts; confirm the chosen
+  container holds prose before trusting it, and fall back to the generic heuristic if not.
+- **Fumadocs** server-renders content (HTML has the body — extract it directly). `/llms.txt` and
+  per-page raw `.md` are opt-in, not guaranteed — probe for them and use if present, else extract HTML.
 
 ## Quick facts
 

@@ -11,6 +11,10 @@ The goal is the article body as the author wrote it — no nav, no sidebar, no f
 | **Docusaurus** | `.theme-doc-markdown.markdown`, fallback `article` | `.markdown` is the rendered body |
 | **MkDocs/Material** | `.md-content__inner.md-typeset`, fallback `.md-content article` | `.md-typeset` carries the prose styles |
 | **VitePress** | `.vp-doc`, fallback `.VPDoc .content` | `.vp-doc` wraps the rendered markdown |
+| **Fumadocs** | per-page raw `.md` source if exposed, else `#nd-page article`, fallback `article .prose` | `DocsBody` renders an `<article>`; prefer the `.md` source — it skips extraction entirely |
+| **GitBook** | legacy self-hosted: `.markdown-section .page-inner`; modern hosted: `main`, `[data-testid="page.content"]` | hydration-heavy — confirm the container holds prose, not a nav skeleton; else generic heuristic |
+| **Sphinx/RTD** | `.rst-content [role=main]` (RTD theme), fallback `div.body[role=main]` (classic/alabaster) | strip the `.headerlink` ¶ anchors and the `.wy-nav-side`/`.sphinxsidebar` rails |
+| **Docsify** | raw `.md` source at `/<route>.md` (NOT the rendered HTML), fallback `.markdown-section` | client-rendered: the HTML shell is empty — fetch the markdown source directly |
 | **generic** | readability heuristic: largest `<article>` / `<main>` / highest text-density block | last resort; verify it is the body not a card grid |
 
 ## Always strip (chrome)

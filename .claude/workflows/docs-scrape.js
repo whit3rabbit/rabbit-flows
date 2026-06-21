@@ -27,7 +27,7 @@
 //   url:      string  (required) docs root / entry URL
 //   outDir:   string  (required) where to write the corpus
 //   maxPages?: number  (default 50, hard cap 500)
-//   platform?: string             override auto-detection (starlight|docusaurus|mkdocs|vitepress|generic)
+//   platform?: string             override auto-detection (starlight|docusaurus|mkdocs|vitepress|fumadocs|gitbook|sphinx|docsify|generic)
 //   include?: string[]            URL-glob filters (keep only matching)
 //   exclude?: string[]            URL-glob filters (drop matching)
 //   format?:  'tree' | 'single'   per-page .md tree (default) or one concatenated corpus
@@ -53,10 +53,16 @@ Signatures:
 - docusaurus:         <meta generator "Docusaurus">; #__docusaurus, .theme-doc-markdown, .markdown, .navbar__inner.
 - mkdocs/material:    <meta generator "mkdocs"/"Material for MkDocs">; .md-content, .md-main, .md-nav; search_index.json.
 - vitepress:          <meta generator "VitePress">; .VPDoc, .vp-doc, #VPContent, .VPSidebar; /assets/chunks/.
+- fumadocs (Next.js): no generator; ids #nd-docs-layout, #nd-sidebar, #nd-page, #nd-toc; DocsBody -> <article>. SSR'd (HTML always has content). MAY serve /llms.txt + per-page raw .md (opt-in -> probe, don't assume).
+- gitbook:            often no generator; .gitbook-root, [data-testid], data-view/data-card-* attrs; legacy self-hosted .markdown-section/.page-inner. Modern hosted SSRs content (retrievable) but markup shifts -> confirm the container.
+- sphinx/rtd:         <meta generator "Docutils"/"Sphinx">; .rst-content, div.body[role=main], .wy-nav-content (RTD theme); searchindex.js, objects.inv, /_static/.
+- docsify:            no generator; near-empty <body> with <div id="app"> + window.$docsify script. CLIENT-RENDERED (raw HTML empty).
 - generic:            no signature matched -> return platform:'generic' with whatever evidence you found.
-CLIENT-RENDERED GOTCHA: Docsify/some GitBook/SPA ship an empty shell hydrated by JS (tiny HTML, single
-mount div, $docsify/SPA bootstrap). A plain fetch returns no content. Prefer the raw .md source URL if
-exposed (e.g. /foo -> /foo.md); else set jsRendered:true and report it rather than capturing the shell.
+CLIENT-RENDERED GOTCHA: Docsify (and some modern GitBook/SPA) ship an empty shell hydrated by JS (tiny
+HTML, single mount div, $docsify/SPA bootstrap). A plain fetch returns no content. Prefer the raw .md
+source URL if exposed (Docsify maps route /foo -> /foo.md; its page list lives in /_sidebar.md); else set
+jsRendered:true and report it rather than capturing the shell. Fumadocs is the inverse: JS framework but
+server-rendered, so HTML HAS content -> still prefer its /llms.txt + per-page .md source when present.
 Return { platform, baseUrl, jsRendered, evidence }.`
 
 // --- EXTRACTION contract (distilled from docs-scraper/references/extraction.md) -----------------
@@ -66,6 +72,10 @@ Main content container by platform:
 - docusaurus:  .theme-doc-markdown.markdown  (fallback: article)
 - mkdocs:      .md-content__inner.md-typeset  (fallback: .md-content article)
 - vitepress:   .vp-doc  (fallback: .VPDoc .content)
+- fumadocs:    prefer per-page raw .md source if exposed; else #nd-page article  (fallback: article .prose)
+- gitbook:     legacy .markdown-section .page-inner; modern hosted main / [data-testid="page.content"] (confirm it is prose, not nav).
+- sphinx/rtd:  .rst-content [role=main]  (fallback: div.body[role=main]); strip .headerlink anchors + .wy-nav-side/.sphinxsidebar.
+- docsify:     fetch raw .md source at /<route>.md, NOT the rendered HTML  (fallback: .markdown-section).
 - generic:     largest <article>/<main>/highest text-density block (verify it is body, not a card grid).
 ALWAYS STRIP: navbar, sidebar, right TOC aside, footer, breadcrumbs, edit-on-GitHub, prev/next pager,
   search box, version/locale switcher, last-updated banner, cookie notice, skip-to-content.
@@ -99,7 +109,7 @@ const globNote = (include.length || exclude.length)
 const MAP_SCHEMA = {
   type: 'object', required: ['platform', 'baseUrl', 'pages'], additionalProperties: false,
   properties: {
-    platform: { type: 'string', description: 'starlight|docusaurus|mkdocs|vitepress|generic' },
+    platform: { type: 'string', description: 'starlight|docusaurus|mkdocs|vitepress|fumadocs|gitbook|sphinx|docsify|generic' },
     baseUrl: { type: 'string' },
     jsRendered: { type: 'boolean' },
     source: { type: 'string', description: 'how pages were found: llms.txt|sitemap|nav' },
