@@ -19,7 +19,18 @@
 //   and the quality bar, where mistakes propagate). Fetch lanes run on Haiku (mechanical, parallel,
 //   verifiable). Assemble runs on Sonnet (writing files from given markdown).
 //
-// PERMISSIONS: needs network egress (WebFetch) and write access under `outDir`.
+// PERMISSIONS: needs network egress and write access under `outDir`. Fetch uses WebFetch where
+//   available; on harnesses without it (e.g. zai/GLM) the agent falls to a web-reader MCP.
+//
+// CAVEAT (deviation note per CLAUDE.md): a fetch lane is one agent making one retrieval tool call.
+//   If that tool HANGS (observed: a web-reader MCP with no timeout on zai), the workflow cannot abort
+//   it — the sandbox has no usable timer and a child stuck IN a tool call can't be killed from the
+//   script (a prompt timeout is unenforceable: the model isn't running while a tool call hangs).
+//   The fetch pipeline then barrier-waits on the wedged lane forever and never reaches Gate/Assemble.
+//   Mitigation is operational, NOT in-script: cap the tool call in the HARNESS. Claude Code reads
+//   MCP_TOOL_TIMEOUT (ms) -> a hung MCP fetch aborts, surfaces to the agent as an error, and the
+//   fail-fast prompt below turns it into status='error' so the lane completes. Also keep maxPages
+//   small to bound blast radius, and interrupt+rerun if a lane idles for minutes.
 //
 // Calls per run ~= 1 (detect&map) + N (one fetch per page, capped) + 1 (gate) + 1 (assemble).
 //
@@ -39,8 +50,8 @@ export const meta = {
   name: 'docs-scrape',
   description: 'Ingest a documentation website into a local markdown corpus: detect platform, enumerate pages, fetch+extract, gate, assemble.',
   phases: [
-    { title: 'Detect & Map', detail: 'one strong call: WebFetch entry, identify platform, enumerate pages' },
-    { title: 'Fetch & Extract', detail: 'one Haiku worker per page in a dedup + budget-capped pipeline: WebFetch -> clean markdown' },
+    { title: 'Detect & Map', detail: 'one strong call: fetch entry, identify platform, enumerate pages' },
+    { title: 'Fetch & Extract', detail: 'one Haiku worker per page in a dedup + budget-capped pipeline: fetch -> clean markdown' },
     { title: 'Gate', detail: 'one strong call: drop empty/404/dupe/nav-junk pages, flag thin ones' },
     { title: 'Assemble', detail: 'one Sonnet call: write the .md tree + INDEX.md with a gaps section' },
   ],
@@ -89,17 +100,25 @@ Return the compact note { url, title, section, status:'ok'|'empty'|'error', mark
 On failure set status and leave markdown empty.`
 
 // --- args / guards -----------------------------------------------------------------------------
-const url = typeof args === 'string' ? args : (typeof args?.url === 'string' ? args.url : null)
-const outDir = typeof args?.outDir === 'string' ? args.outDir : null
+// `args` SHOULD arrive as a real object, but some harnesses (observed: zai/GLM) hand the script the
+// JSON-STRINGIFIED form instead. Normalize: a string that parses to an object becomes that object;
+// a bare string stays the url (back-compat). One source read away from a re-patched run copy.
+let _args = args
+if (typeof _args === 'string') {
+  const t = _args.trim()
+  if (t.startsWith('{') || t.startsWith('[')) { try { _args = JSON.parse(t) } catch {} }
+}
+const url = typeof _args === 'string' ? _args : (typeof _args?.url === 'string' ? _args.url : null)
+const outDir = typeof _args?.outDir === 'string' ? _args.outDir : null
 if (!url || !outDir) {
   return { error: 'args.url and args.outDir are required', got: { url, outDir } }
 }
-const MAX_PAGES = Math.min(Math.max(1, args?.maxPages ?? 50), 500)
-const platformOverride = typeof args?.platform === 'string' ? args.platform : null
-const include = Array.isArray(args?.include) ? args.include : []
-const exclude = Array.isArray(args?.exclude) ? args.exclude : []
-const format = args?.format === 'single' ? 'single' : 'tree'
-const refsDir = args?.refsDir ?? 'plugins/workflow-kit/skills/docs-scraper/references'
+const MAX_PAGES = Math.min(Math.max(1, _args?.maxPages ?? 50), 500)
+const platformOverride = typeof _args?.platform === 'string' ? _args.platform : null
+const include = Array.isArray(_args?.include) ? _args.include : []
+const exclude = Array.isArray(_args?.exclude) ? _args.exclude : []
+const format = _args?.format === 'single' ? 'single' : 'tree'
+const refsDir = _args?.refsDir ?? 'plugins/workflow-kit/skills/docs-scraper/references'
 
 const globNote = (include.length || exclude.length)
   ? `\nURL filters (apply during enumeration): include=${JSON.stringify(include)} exclude=${JSON.stringify(exclude)}`
@@ -163,11 +182,11 @@ const normURL = u => {
 const seen = new Map()
 let slots = MAX_PAGES
 
-// --- 1. Detect & Map (strong; WebFetch entry, identify platform, enumerate pages) --------------
+// --- 1. Detect & Map (strong; fetch entry, identify platform, enumerate pages) -----------------
 phase('Detect & Map')
 const map = await agent(
   `Detect the documentation platform at ${url} and enumerate ALL its pages.\n\n` +
-  `Use WebFetch on the entry URL. Identify the platform per the DETECTION contract` +
+  `Retrieve the entry URL with whatever fetch tool you have (WebFetch, or a web-reader MCP if WebFetch is unavailable). Identify the platform per the DETECTION contract` +
   `${platformOverride ? ` (caller override: assume platform="${platformOverride}" unless evidence clearly contradicts it)` : ''}.\n` +
   `Then enumerate pages, preferring in order: <baseUrl>/llms.txt -> <baseUrl>/sitemap.xml -> sidebar-nav DOM ` +
   `extraction. Keep only same-origin links under the docs path; drop anchors/assets/external.${globNote}\n` +
@@ -197,9 +216,10 @@ const fetched = (await pipeline(
     return agent(
       `Fetch ${page.url} and extract its main content as clean markdown.\n` +
       `Platform: ${map.platform}. Section: ${page.section ?? '(none)'}.${constraintsNote}\n\n` +
-      `Use WebFetch to retrieve the page. Apply the EXTRACTION contract: isolate the platform's content ` +
+      `Retrieve the page with whatever fetch tool you have (WebFetch, or a web-reader MCP if WebFetch is unavailable). Apply the EXTRACTION contract: isolate the platform's content ` +
       `container, strip ALL chrome, convert to markdown preserving headings/code-fences/tables/admonitions. ` +
-      `Keep links as-written (do not localize). If the fetch fails, the page is a login wall, or it is a ` +
+      `Keep links as-written (do not localize). Make a SINGLE retrieval attempt: do NOT retry on slowness, ` +
+      `timeout, or error. If the fetch fails or times out, the page is a login wall, or it is a ` +
       `JS-rendered empty shell, set status='error'/'empty' with a failure note and leave markdown empty.\n\n` +
       `EXTRACTION CONTRACT\n${EXTRACTION}`,
       { label: `fetch:${host}`, phase: 'Fetch & Extract', model: 'haiku', schema: NOTE_SCHEMA },

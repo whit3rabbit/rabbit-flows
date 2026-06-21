@@ -29,6 +29,11 @@ and prop types.
 | Astro Starlight, or just "a docs site" with no framework named | this file + `references/` (below) |
 | MkDocs / Docusaurus / Fumadocs / VitePress / Docsify / mdBook | `frameworks/<name>/README.md` |
 
+For **platform identity** — which config/nav file defines each framework, and how to recognise a
+site built on it — see the shared `docs-scraper/references/platform-signatures.md` (one table, both
+skills; present when the `workflow-kit` plugin is installed whole). Each `frameworks/<name>/README.md`
+also carries the per-framework config/nav facts you need to author standalone.
+
 If the user names a framework whose `frameworks/<name>/` folder is still a skeleton: say so plainly,
 then either (a) build it with Starlight instead if they're flexible, or (b) work from current official
 docs (use the `find-docs` / context7 path) since this skill has no distilled reference for it yet.

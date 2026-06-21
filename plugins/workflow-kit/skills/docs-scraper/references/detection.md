@@ -12,16 +12,10 @@ in this order; the generator meta tag is the strongest single signal.
 
 ## Per-platform signatures
 
-| Platform | generator tag | Markup / class tells | Other |
-|---|---|---|---|
-| **Starlight** (Astro) | `content="Astro v…"` | `.sl-markdown-content`, `<starlight-…>` custom elements, `data-astro-*` attrs | `/_astro/` asset paths |
-| **Docusaurus** | `content="Docusaurus v…"` | `.theme-doc-markdown`, `.markdown`, `#__docusaurus` root, `.navbar__inner` | `/assets/js/` chunked bundles |
-| **MkDocs / Material** | `content="mkdocs-…"` / `"Material for MkDocs"` | `.md-content`, `.md-main`, `[data-md-component]`, `.md-nav` | `search/search_index.json` exists |
-| **VitePress** | `content="VitePress v…"` | `.VPDoc`, `.vp-doc`, `#VPContent`, `.VPSidebar` | `/assets/chunks/` Vite hashes |
-| **Fumadocs** (Next.js) | (none — Next app) | `#nd-docs-layout`, `#nd-sidebar`, `#nd-page`, `#nd-toc`, `DocsBody` → `<article>` | SSR'd, so HTML always has content (verified fumadocs.dev); MAY expose `/llms.txt` + per-page raw `.md` (opt-in — check, don't assume) |
-| **GitBook** | (often none) | `.gitbook-root`, `[data-testid]`, `data-view`/`data-card-*` attrs; legacy self-hosted: `.markdown-section`, `.page-inner` | modern hosted SSRs content (retrievable — verified gitbook.com/docs), but markup/`data-*` shift — confirm the container holds prose |
-| **Sphinx / ReadTheDocs** | `content="Docutils …"` / `"Sphinx"` | `.rst-content`, `div.body[role=main]`, `.wy-nav-content` (RTD theme) | `searchindex.js`, `objects.inv`, `_static/` paths |
-| **Docsify** | none | near-empty `<body>` with `<div id="app">`, `window.$docsify` script | **client-rendered: raw HTML has no content; route `/foo` maps to source `/foo.md`** |
+The per-platform identity table (generator tag, markup/class tells, asset/URL shape, content
+container, render mode) is the **shared** `references/platform-signatures.md` — one source for both
+this skill and `docs-site-builder`. Read it for the signatures, then apply the strength-ordering and
+the gotcha below.
 
 ## Client-rendered gotcha
 

@@ -19,7 +19,7 @@ The runtime copy of this guidance lives inline in `.claude/workflows/docs-scrape
 Work in this order; each step has a reference to read when you reach it:
 
 1. **Detect the platform** — generator meta tag, characteristic markup/CSS, URL shape.
-   → `references/detection.md`
+   → `references/detection.md` (signatures live in the shared `references/platform-signatures.md`)
 2. **Enumerate the pages** — prefer `llms.txt` → `sitemap.xml` → sidebar-nav DOM extraction.
    → `references/enumeration.md`
 3. **Fetch + extract** — isolate the main content container, strip chrome, convert to clean
