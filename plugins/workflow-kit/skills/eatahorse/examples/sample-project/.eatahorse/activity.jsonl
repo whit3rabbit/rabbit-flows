@@ -1,0 +1,4 @@
+{"action": "init", "at": "2026-06-21T17:40:34Z", "detail": {"goal": "Demonstrate one-bite task tracking", "project": "Sample Eatahorse Board"}}
+{"action": "add", "at": "2026-06-21T17:40:35Z", "detail": {"id": "EH-0001", "title": "Plan the first bite"}}
+{"action": "move", "at": "2026-06-21T17:40:36Z", "detail": {"id": "EH-0001", "status": "doing"}}
+{"action": "check", "at": "2026-06-21T17:40:37Z", "detail": {"group": "bites", "id": "EH-0001", "index": 1}}

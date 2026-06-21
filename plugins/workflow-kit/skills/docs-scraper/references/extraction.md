@@ -3,13 +3,19 @@
 For each page: isolate the main content container, strip the chrome, convert to clean markdown.
 The goal is the article body as the author wrote it — no nav, no sidebar, no footer.
 
+> **Engine note.** The python acquire lane (`scripts/scrape.py`) extracts with **trafilatura**
+> (readability-based, no CSS selectors) as the primary engine, and uses the per-platform selector table
+> below only as a **fallback** (when trafilatura returns empty/thin) and for the **WebFetch lane**. So
+> this table is the fallback + model-lane contract, not the primary python path. See
+> `references/acquisition.md`.
+
 ## Per-platform content container
 
 | Platform | Main content selector | Notes |
 |---|---|---|
 | **Starlight** | `.sl-markdown-content`, fallback `main article` | content sits inside the markdown wrapper, not the page `<main>` |
 | **Docusaurus** | `.theme-doc-markdown.markdown`, fallback `article` | `.markdown` is the rendered body |
-| **MkDocs/Material** | `.md-content__inner.md-typeset`, fallback `.md-content article` | `.md-typeset` carries the prose styles |
+| **MkDocs/Material** | `.md-content__inner.md-typeset`, fallback `.md-content article`, then `[role=main]` | `.md-typeset` is the Material theme; the default/RTD-style mkdocs theme has no `.md-content` — use `[role=main]` (also matches `.col-md-9`) |
 | **VitePress** | `.vp-doc`, fallback `.VPDoc .content` | `.vp-doc` wraps the rendered markdown |
 | **Fumadocs** | per-page raw `.md` source if exposed, else `#nd-page article`, fallback `article .prose` | `DocsBody` renders an `<article>`; prefer the `.md` source — it skips extraction entirely |
 | **GitBook** | legacy self-hosted: `.markdown-section .page-inner`; modern hosted: `main`, `[data-testid="page.content"]` | hydration-heavy — confirm the container holds prose, not a nav skeleton; else generic heuristic |

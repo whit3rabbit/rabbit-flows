@@ -14,18 +14,59 @@ The runtime copy of this guidance lives inline in `.claude/workflows/docs-scrape
 `DETECTION` and `EXTRACTION` consts). If you change a reference here, refresh those consts —
 `agent()` has no `skills` option, so the workflow cannot load this skill at runtime.
 
+## Acquisition ladder — cheapest first (prioritize token usage)
+
+Fetching every page through a model (load HTML into context, have the model emit markdown) is the
+expensive way and the last resort. Prefer deterministic code so the model never sees raw HTML:
+
+1. **git clone** — when the docs SOURCE is markdown in a repo (mkdocs `repo_url`, docusaurus/starlight
+   `editUrl`, an "Edit on GitHub" link, a `*.github.io` host). Shallow-clone, copy the `.md`/`.mdx`.
+   Zero conversion — the corpus is already markdown. Confident-only: skip if you can't name the repo.
+2. **python scraper** (`scripts/scrape.py`) — for any static/SSR site reachable over HTTP. Enumerates
+   via `trafilatura.sitemaps` / `llms.txt` / (MkDocs) `search_index.json`, extracts with **trafilatura**
+   (readability → markdown; bs4+markdownify fallback), writes the `.md` tree + `manifest.json`. All in
+   code; the model sees only the manifest. No per-platform CSS selectors needed for the primary path.
+3. **playwright render** (`scrape.py --render`) — same scraper, headless Chromium, for client-rendered /
+   SPA docs (Docsify, hydration-only sites). Opt-in heavy dep; reached only when python comes up empty.
+4. **WebFetch fan-out** — one model fetch per page. Last resort, when nothing above can acquire.
+   → `references/extraction.md`.
+
+→ `references/acquisition.md` (strategy selection, the `scrape.py` CLI, the manifest schema).
+
 ## Workflow
 
 Work in this order; each step has a reference to read when you reach it:
 
-1. **Detect the platform** — generator meta tag, characteristic markup/CSS, URL shape.
-   → `references/detection.md` (signatures live in the shared `references/platform-signatures.md`)
-2. **Enumerate the pages** — prefer `llms.txt` → `sitemap.xml` → sidebar-nav DOM extraction.
+1. **Recon (cheap, facts only)** — platform (generator tag, markup, URL shape); probe
+   `llms.txt`/`sitemap.xml`/`search_index.json`; `gh`-verify a backing repo + source format; enumerate
+   fallback pages. → `references/detection.md` (+ shared `references/platform-signatures.md`)
+2. **Decide the strategy (in code, not an agent)** — a deterministic rule over recon facts:
+   verified md/mdx repo → git; client-rendered → playwright; else python; webfetch only via fallback.
+   → `references/acquisition.md`
+3. **Enumerate the pages** (python/webfetch only) — prefer `llms.txt` → `sitemap.xml` → sidebar-nav DOM.
    → `references/enumeration.md`
-3. **Fetch + extract** — isolate the main content container, strip chrome, convert to clean
-   markdown preserving headings/code-fences/tables. → `references/extraction.md`
-4. **Assemble** — write a `.md` tree (or one concatenated corpus) plus `INDEX.md` mapping source
+4. **Fetch + extract** — git copies markdown directly (`--clean-mdx` for `.mdx`); python extracts with
+   trafilatura (bs4 fallback); webfetch isolates the content container. → `references/extraction.md`
+5. **Gate (conditional)** — trusted git-`.md` uses a cheap code filter; everything else passes a
+   strong-model admission gate that drops empty/404/dupe/nav-junk and flags thin pages.
+6. **Assemble** — write a `.md` tree (or one concatenated corpus) plus `INDEX.md` mapping source
    URLs to local paths, with a gaps section for anything that failed or was dropped.
+
+## Scripts (the python lane)
+
+`scripts/` holds the deterministic scraper invoked by the workflow's python/playwright acquire agent via Bash:
+
+- `scrape.py` — enumerate (trafilatura.sitemaps / llms.txt / MkDocs search_index) → extract (trafilatura
+  primary, bs4+markdownify fallback) → write `<out>/*.md` + `<out>/manifest.json`. Exit 3 = "enumeration
+  found nothing" (caller falls back). `--render` uses Playwright for client-rendered docs;
+  `--clean-mdx DIR` strips import/export + JSX-only lines (git lane, `.mdx` sources).
+  `scrape.py --selftest` runs stdlib-only checks of the pure helpers (CI-safe).
+- `requirements.txt` — `trafilatura`, `beautifulsoup4`, `markdownify`, `httpx` (isolated venv, NOT project deps).
+  `requirements-playwright.txt` — `playwright` (only installed with `setup_venv.sh --with-playwright`).
+- `setup_venv.sh [--with-playwright]` — idempotent: create `scripts/.venv`, install deps, print the venv
+  python path; with the flag, also install Playwright + Chromium for `--render`.
+
+`ultimate-sitemap-parser` is intentionally avoided (GPL-3.0); `trafilatura.sitemaps` (Apache-2.0) covers discovery.
 
 ## Platform coverage
 

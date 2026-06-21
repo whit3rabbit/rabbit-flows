@@ -76,6 +76,12 @@ Workflow stages cannot AUTO-LOAD skills or named agents via `agent()`. How a wor
   Bundled skills/agents (`requires-skills`, manifest) are the portable human + Skill-tool copy, not the
   runtime source — don't keep the contract in two live copies; refresh the `const` when the skill
   changes. Worked example: `.claude/workflows/docs-create.js`.
+- SLICE that inline contract per agent; don't inject the whole surface into every prompt. Build it from a
+  command/section dict and hand each agent only the keys its own steps call (comment the call site with why).
+  A worker that runs NO tool gets ONLY the data fragment it needs (e.g. a card-markdown layout), never the
+  command surface — that both saves tokens at fan-out scale AND removes the temptation to run a tool it was
+  told not to. Risk: under-slicing = an agent missing a command it needs; keep keys exact to the prompt.
+  Worked example: `.claude/workflows/eatahorse{,-research}.js` (the `CMD`/`cli(...)` slicer).
 - The runtime API (`agent/phase/parallel/schema/meta`) is otherwise unspecified — verify a new
   signature once by running a 1-agent probe workflow before building three workflows on it.
 

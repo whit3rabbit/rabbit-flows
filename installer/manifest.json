@@ -18,8 +18,8 @@
     {
       "name": "scaffold",
       "file": ".claude/workflows/scaffold.js",
-      "description": "Start a project from scratch: frame the brief, draft blind architecture attempts, merge to one, build a DAG skeleton, verify it, write back the decisions.",
-      "skills": ["architect"],
+      "description": "Start a project from scratch and stub+document the whole tree: discuss the brief, research deps, draft blind architecture attempts merged to one, forward-review, fan out cheap workers to build every file under a 400-line ceiling, verify, write back the decisions.",
+      "skills": ["architect", "new-project"],
       "agents": []
     },
     {
@@ -34,6 +34,20 @@
       "file": ".claude/workflows/docs-scrape.js",
       "description": "Ingest a documentation website into a local markdown corpus: detect platform, enumerate pages, fetch+extract, gate, assemble.",
       "skills": ["docs-scraper"],
+      "agents": []
+    },
+    {
+      "name": "eatahorse",
+      "file": ".claude/workflows/eatahorse.js",
+      "description": "Decompose a goal into an Eatahorse Kanban board and gate the plan; optionally work it unattended one bite at a time in a Ralph-style loop, a fresh-context completion-gated worker each iteration, then write back the decisions.",
+      "skills": ["eatahorse"],
+      "agents": []
+    },
+    {
+      "name": "eatahorse-research",
+      "file": ".claude/workflows/eatahorse-research.js",
+      "description": "Research every file in a folder using an Eatahorse board as a durable resumable ledger: enumerate, auto-pick scale by file count, seed one card per unit, then loop research rounds of parallel workers gated and synced until dry, and synthesize a cited report.",
+      "skills": ["eatahorse"],
       "agents": []
     }
   ]

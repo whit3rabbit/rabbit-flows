@@ -9,11 +9,14 @@ Optimize for the simplest thing that works, not the most sophisticated.
 ```bash
 npm run build:skill   # regenerate guardrails skill from .claude/rules/ (run after editing any rule)
 npm run check         # assert no drift: guardrails skill matches rules AND installer manifest matches workflows
-python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py .claude/workflows --strict   # lint workflow scripts (NOT scripts/validate.py); --selftest checks the linter. CI runs this.
+python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py .claude/workflows --strict   # lint workflow scripts (NOT scripts/validate.py); --selftest checks the linter. CI runs this. NOTE: its pure-literal check false-flags "(" in meta.description — keep meta strings paren-free.
 npx @whit3rabbit/rabbit-flows --list   # preview the installable workflow catalog
+python3 plugins/workflow-kit/skills/eatahorse/scripts/test_eatahorse.py   # eatahorse CLI self-checks (stdlib, no framework); run after editing eatahorse.py
 ```
 
 Editing a file in `.claude/rules/` without `build:skill` leaves the shipped skill stale; `check` (also in CI) fails the commit.
+
+When `validate.py` reports a workflow JS syntax error it points at `:1` generically; `node --check` is no help (it stops at the expected top-level-`return` "Illegal return"). The cause is usually unbalanced parens, e.g. `(await parallel(...)).filter()` needs the grouping paren or `.filter` binds to the promise.
 
 ## Prime directive
 
@@ -59,6 +62,10 @@ If you escalate a stage, note why. See `.claude/rules/model-routing.md`.
 ## Reuse & cost
 
 - Parameterize with `args`; never hardcode paths or questions.
+- A workflow `.js` runs in the background with NO user IO: it cannot ask the user anything mid-run.
+  For interactive intake (a discussion/interview), put the Q&A in a front-door SKILL that runs
+  AskUserQuestion then calls `Workflow()` with the answers as `args`. Example: `new-project` skill
+  → `scaffold` workflow. The skill name is independent of the workflow `meta.name` (separate registries).
 - Save to `.claude/workflows/` (shared) or `~/.claude/workflows/` (personal).
 - Specialist roles travel as skills/agents in the plugin (portability + Skill-tool/human use), but
   workflow stages do NOT auto-load them: `agent()` has no `skills` option, and `agentType` resolves
@@ -73,7 +80,7 @@ This repo is both a working project and a distributable marketplace.
 ```
 .
 ├── CLAUDE.md                       # this file — authoring rules for the repo
-├── WORKFLOW_ANALYSIS.md            # how the runtime actually works (VM sandbox, journal, caps, gotchas)
+├── docs/WORKFLOW_ANALYSIS.md       # how the runtime actually works (VM sandbox, journal, caps, gotchas)
 ├── .claude/
 │   ├── workflows/                  # the workflow scripts (shared by clone)
 │   ├── rules/                      # detailed rules (load as project context)
@@ -118,5 +125,5 @@ see the `dynamic-workflow-authoring` skill in `.claude/skills/` — the rules co
 
 For how the runtime *actually behaves* (VM sandbox limits, the resume journal and worker
 hash, concurrency/agent caps, `args` JSON parsing, rejected `isolation:'remote'`, the hidden
-45s retry, and other doc-vs-implementation gaps), read **`WORKFLOW_ANALYSIS.md`**. Consult it
+45s retry, and other doc-vs-implementation gaps), read **`docs/WORKFLOW_ANALYSIS.md`**. Consult it
 when a workflow behaves unexpectedly or you need a runtime detail the rules/skill don't cover.

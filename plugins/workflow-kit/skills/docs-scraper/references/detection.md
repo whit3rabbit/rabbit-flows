@@ -34,7 +34,19 @@ so a plain fetch *does* return content. Even so, prefer its `/llms.txt` (curated
 `.md` source when exposed — cleaner than HTML extraction. Treat `.md`-source preference, not JS-render
 skipping, as the Fumadocs path.
 
+## Source-repo discovery (feeds the git lane)
+
+Recon also looks for the docs SOURCE repo, because cloning authored markdown beats scraping rendered
+HTML. Signals: MkDocs `repo_url`, Docusaurus/Starlight `editUrl` / "Edit this page", an "Edit on GitHub"
+link, or a `*.github.io` host. When a GitHub repo is found, **verify it with `gh`** before trusting it:
+`gh api repos/{owner}/{repo}/contents/{docsSubdir}` for likely dirs (`docs/`, `content/docs/`,
+`src/content/docs/`, `website/docs/`). Report `repo:{repoUrl,branch,docsSubdir}` + `sourceFormat`
+(`md`/`mdx`/`rst`/`asciidoc`) ONLY when the dir is confirmed; otherwise `sourceFormat:"none"`. If `gh`
+is absent/unauthenticated or the host isn't GitHub, leave the repo unverified — the workflow then scrapes
+(python) instead of cloning. Never guess a repo. See `references/acquisition.md` for how this drives strategy.
+
 ## Output of this step
 
-`{ platform: 'starlight'|'docusaurus'|'mkdocs'|'vitepress'|'fumadocs'|'gitbook'|'sphinx'|'docsify'|'generic', baseUrl, jsRendered: bool, evidence: string }`.
-When no signature matches, return `platform: 'generic'` with the evidence you did find.
+`{ platform, baseUrl, jsRendered, hasLlms, hasSitemap, hasSearchIndex, sourceFormat, repo?, pages[] }`
+(recon facts only — the workflow script decides the strategy). When no signature matches, return
+`platform: 'generic'` with the evidence you did find.

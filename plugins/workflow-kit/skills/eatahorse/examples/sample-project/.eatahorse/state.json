@@ -1,0 +1,80 @@
+{
+  "created_at": "2026-06-21T17:40:34Z",
+  "goal": "Demonstrate one-bite task tracking",
+  "history": [
+    {
+      "action": "add",
+      "at": "2026-06-21T17:40:35Z",
+      "detail": {
+        "id": "EH-0001",
+        "title": "Plan the first bite"
+      }
+    },
+    {
+      "action": "move",
+      "at": "2026-06-21T17:40:36Z",
+      "detail": {
+        "id": "EH-0001",
+        "status": "doing"
+      }
+    },
+    {
+      "action": "check",
+      "at": "2026-06-21T17:40:37Z",
+      "detail": {
+        "group": "bites",
+        "id": "EH-0001",
+        "index": 1
+      }
+    }
+  ],
+  "next_id": 2,
+  "project": "Sample Eatahorse Board",
+  "schema": "eatahorse.state.v1",
+  "statuses": [
+    "backlog",
+    "ready",
+    "doing",
+    "blocked",
+    "done",
+    "dropped"
+  ],
+  "tasks": {
+    "EH-0001": {
+      "acceptance": [
+        {
+          "done": false,
+          "text": "Board has one ready task"
+        }
+      ],
+      "bites": [
+        {
+          "done": true,
+          "text": "Name the outcome"
+        },
+        {
+          "done": false,
+          "text": "Write the first task card"
+        }
+      ],
+      "completed_at": null,
+      "created_at": "2026-06-21T17:40:35Z",
+      "description": "",
+      "dropped_at": null,
+      "estimate": "",
+      "external_ids": {},
+      "id": "EH-0001",
+      "notes": "",
+      "owner": "",
+      "path": "tasks/doing/EH-0001-plan-the-first-bite.md",
+      "priority": "P1",
+      "source": "manual",
+      "status": "doing",
+      "tags": [],
+      "title": "Plan the first bite",
+      "updated_at": "2026-06-21T17:40:37Z"
+    }
+  },
+  "updated_at": "2026-06-21T17:40:37Z",
+  "version": 1
+}
