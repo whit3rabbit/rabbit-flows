@@ -1,0 +1,45 @@
+name: publish
+
+# Publishes to npm on version tags via Trusted Publishing (OIDC, GA 2025-07-31).
+# No NPM_TOKEN: OIDC mints a short-lived token and generates provenance automatically.
+# One-time setup on npmjs.com: configure the trusted publisher (org whit3rabbit, repo
+# rabbit-flows, workflow filename publish.yml). The very first version must be published
+# manually — OIDC cannot bootstrap a new package.
+
+on:
+  push:
+    tags:
+      - "v*" # e.g. v0.1.1
+
+permissions:
+  contents: read
+  id-token: write # required: mints the OIDC token for trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org" # writes .npmrc -> public registry
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm install -g npm@latest # OIDC needs npm >= 11.5.1
+      - run: npm ci
+
+      # Same gates as ci.yml — don't ship a release that fails drift/lint/tests.
+      - run: npm run check
+      - run: python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py .claude/workflows --strict
+      - run: npm test
+
+      # Guard: tag must match package.json version, else fail loudly before publishing.
+      - name: Verify tag matches package version
+        run: |
+          PKG=$(node -p "require('./package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          test "$PKG" = "$TAG" || { echo "tag $TAG != package.json $PKG"; exit 1; }
+
+      - run: npm publish # no --provenance, no NODE_AUTH_TOKEN (would disable OIDC)
