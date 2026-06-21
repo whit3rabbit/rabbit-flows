@@ -43,7 +43,9 @@ const NOTE_SCHEMA = {
   },
 }
 
-const question = args?.question ?? 'What does this repository do and how is it structured?'
+// Tolerate a bare string (mirrors deep-research) so `/starter <text>` works, not just `{question}`.
+const question =
+  typeof args === 'string' ? args : args?.question ?? 'What does this repository do and how is it structured?'
 
 // 1. Decompose — strong model sets the trajectory.
 phase('Decompose')
@@ -52,6 +54,7 @@ const plan = await agent(
     `Return them as a JSON array of strings.\nQuestion: ${question}`,
   { label: 'decompose', schema: { type: 'object', required: ['subs'], properties: { subs: { type: 'array', items: { type: 'string' } } } } },
 )
+if (!plan?.subs?.length) return { error: 'decompose stage returned no sub-questions', question }
 
 // 2. Workers — cheap model, parallel, compact notes only.
 phase('Workers')

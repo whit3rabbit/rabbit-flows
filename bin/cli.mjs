@@ -5,7 +5,7 @@ import { cp, mkdir, readFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SKILLS_DIR = path.join(ROOT, 'plugins', 'workflow-kit', 'skills')
@@ -61,8 +61,9 @@ async function check(workflows) {
         )
       }
     }
-    // meta is required to be the first thing in every script, so the first name: is meta.name.
-    const metaName = src.match(/name:\s*['"]([^'"]+)['"]/)?.[1]
+    // Anchor to the meta block: a header comment containing `name:`/`filename:` must not shadow meta.name.
+    const after = src.slice(src.indexOf('export const meta'))
+    const metaName = after.match(/name:\s*['"]([^'"]+)['"]/)?.[1]
     if (metaName && metaName !== w.name) {
       drift.push(`${w.name}: meta.name "${metaName}" != manifest name "${w.name}"`)
     }
@@ -84,7 +85,7 @@ function list(workflows) {
 }
 
 // Copy src->dest unless dest exists (skip, unless force). Returns 'copied'|'skipped'.
-async function copyInto(src, dest, force) {
+export async function copyInto(src, dest, force) {
   if (existsSync(dest) && !force) return 'skipped'
   // --force is the only update path; remove first so upstream-deleted files don't linger.
   if (force && existsSync(dest)) await rm(dest, { recursive: true, force: true })
@@ -191,7 +192,10 @@ async function main() {
   )
 }
 
-main().catch((e) => {
-  console.error(e?.message ?? e)
-  process.exit(1)
-})
+// Only run when invoked as a script, not when imported (e.g. by tests).
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => {
+    console.error(e?.message ?? e)
+    process.exit(1)
+  })
+}

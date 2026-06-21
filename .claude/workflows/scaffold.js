@@ -22,7 +22,8 @@
 // Permissions / execution: Build stages WRITE files under args.dir, and Verify EXECUTES generated code —
 // it runs the freshly generated manifest's install/build/test, i.e. unreviewed install scripts and deps,
 // gated only by whatever allowlist the session grants the subagents. Intended for a from-scratch personal
-// scaffold; run it where that sandbox/allowlist is acceptable. Point it at an EMPTY or new dir.
+// scaffold; run it where that sandbox/allowlist is acceptable. dir defaults to ./scaffold-out (a
+// fresh subdir, never the cwd); pass args.dir to override, and point it at an EMPTY or new dir.
 //
 // Two independent knobs control how far it goes:
 //   write:false                 -> dry run: stop after the decision, write NOTHING. Review architecture first.
@@ -131,28 +132,6 @@ const DECISION_SCHEMA = {
   },
 }
 
-// Build agents report what they wrote with the canonical note schema.
-const NOTE_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['notes'],
-  properties: {
-    notes: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['type', 'where', 'evidence'],
-        properties: {
-          type: { enum: ['finding', 'failure', 'constraint'] },
-          where: { type: 'string' },
-          evidence: { type: 'string' },
-        },
-      },
-    },
-  },
-}
-
 const VERIFY_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -175,8 +154,12 @@ const VERIFY_SCHEMA = {
   },
 }
 
-const brief = args?.brief ?? 'A small command-line tool. (Pass args.brief to describe your project.)'
-const dir = args?.dir ?? '.'
+// Tolerate a bare string (mirrors deep-research) so `/scaffold <brief>` works, not just `{brief}`.
+const brief =
+  typeof args === 'string' ? args : args?.brief ?? 'A small command-line tool. (Pass args.brief to describe your project.)'
+// Default to a fresh subdir, never the cwd: Build writes files and Verify EXECUTES them, so a
+// misparsed invocation must not clobber/run in the user's working tree. Pass args.dir to override.
+const dir = args?.dir ?? './scaffold-out'
 const attempts = Math.min(args?.attempts ?? 3, 6) // independent BLIND architecture attempts (diversity knob)
 const write = args?.write ?? true                  // false -> stop after the decision (dry run; writes nothing)
 const runVerify = args?.verify ?? true             // false -> write the scaffold but don't EXECUTE it (no install/build/test)
@@ -192,6 +175,7 @@ const frame = await agent(
     `the generated scaffold is sound.`,
   { label: 'frame', schema: FRAME_SCHEMA },
 )
+if (!frame) return { error: 'frame stage returned no result', brief, written: false }
 const frameBlock =
   `Requirements:\n- ${frame.requirements.join('\n- ')}\n\n` +
   `Hard constraints:\n- ${frame.constraints.join('\n- ')}\n\n` +
@@ -225,6 +209,7 @@ const decision = await agent(
     `Brief: ${brief}\n\n${frameBlock}\n\nProposals:\n${JSON.stringify(candidates, null, 2)}`,
   { label: 'decide', schema: DECISION_SCHEMA },
 )
+if (!decision?.chosen) return { error: 'decision stage returned no architecture', brief, written: false }
 
 // Dry run: stop before writing anything — review the architecture + commands first.
 if (!write) {
@@ -247,31 +232,32 @@ const chosenBlock = `Chosen architecture:\n${JSON.stringify(decision.chosen, nul
 await agent(
   `Create the project skeleton on disk under "${dir}" exactly per the chosen layout: the directory ` +
     `structure, the manifest (package.json / pyproject.toml / go.mod / ... for the stack), and minimal ` +
-    `source stubs that compile or parse. Implement no features yet. Return compact notes on what you wrote.\n\n` +
-    `${chosenBlock}`,
-  { label: 'skeleton', model: 'sonnet', schema: NOTE_SCHEMA },
+    `source stubs that compile or parse. Implement no features yet. SAFETY: if "${dir}" already exists ` +
+    `and is non-empty, or already contains a manifest, do NOT overwrite anything — stop and report that ` +
+    `the target is occupied instead.\n\n${chosenBlock}`,
+  { label: 'skeleton', model: 'sonnet' },
 )
 await parallel([
   () =>
     agent(
       `The skeleton exists under "${dir}". Add a minimal but real test setup wired to the project's test ` +
-        `runner, with at least one passing test against the stubs. Return compact notes.\n\n` +
+        `runner, with at least one passing test against the stubs.\n\n` +
         `${chosenBlock}\nTest command: ${decision.commands.test}`,
-      { label: 'tests', phase: 'Build', model: 'sonnet', schema: NOTE_SCHEMA },
+      { label: 'tests', phase: 'Build', model: 'sonnet' },
     ),
   () =>
     agent(
       `The manifest exists under "${dir}". Write a CI workflow (.github/workflows/ci.yml) that installs, ` +
         `builds, and tests using: install="${decision.commands.install}", build="${decision.commands.build ?? 'n/a'}", ` +
-        `test="${decision.commands.test}". Return compact notes.\n\n${chosenBlock}`,
-      { label: 'ci', phase: 'Build', model: 'haiku', schema: NOTE_SCHEMA },
+        `test="${decision.commands.test}".\n\n${chosenBlock}`,
+      { label: 'ci', phase: 'Build', model: 'haiku' },
     ),
   () =>
     agent(
       `Write a README.md under "${dir}": what the project is (from the brief), how to install/build/run/test ` +
-        `(use the commands), and the layout. Drafting only. Return compact notes.\n\n` +
+        `(use the commands), and the layout. Drafting only.\n\n` +
         `Brief: ${brief}\n${chosenBlock}\nCommands: ${JSON.stringify(decision.commands)}`,
-      { label: 'docs', phase: 'Build', model: 'haiku', schema: NOTE_SCHEMA },
+      { label: 'docs', phase: 'Build', model: 'haiku' },
     ),
 ])
 
@@ -317,7 +303,7 @@ return {
   attempts: candidates.length,
   chosen: decision.chosen.stack,
   rejected: decision.rejected.length,
-  verified: runVerify ? verify.passed : null, // null when verify:false (not executed)
-  steps: verify.results,
+  verified: runVerify ? verify?.passed ?? null : null, // null when verify:false OR verify agent returned nothing
+  steps: verify?.results ?? [],                          // never deref null: the scaffold already wrote — don't discard it
   written: true,
 }

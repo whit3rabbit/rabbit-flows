@@ -115,7 +115,8 @@ const GATE_SCHEMA = {
   },
 }
 
-const scope = args?.scope ?? '.'
+// Tolerate a bare string (mirrors deep-research) so `/security-audit <path>` works, not just `{scope}`.
+const scope = typeof args === 'string' ? args : args?.scope ?? '.'
 const focus = args?.focus // optional array of vuln classes to prioritize
 const maxLanes = Math.min(args?.maxLanes ?? 8, 16) // respect the 16-concurrent cap
 const workerModel = args?.workerModel ?? 'haiku'   // breadth-first + cheap on purpose; the gate is the quality bar
@@ -137,8 +138,9 @@ const plan = await agent(
     `Return constraints and lanes.`,
   { label: 'map', schema: MAP_SCHEMA },
 )
-const constraints = plan.constraints ?? []
-const lanes = (plan.lanes ?? []).slice(0, maxLanes)
+const constraints = plan?.constraints ?? []
+const lanes = (plan?.lanes ?? []).slice(0, maxLanes)
+if (!lanes.length) return { error: 'map stage returned no audit lanes', scope }
 
 // 2. Lanes — cheap, parallel, breadth-first. Each lane gets the shared constraints read-only and owns
 //    a disjoint scope, so lanes don't collide on the same dead ends (workflow-design.md).

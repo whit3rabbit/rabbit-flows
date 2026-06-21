@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build:skill": "node scripts/build-skill.mjs",
-    "check": "node bin/cli.mjs --check && node scripts/build-skill.mjs --check"
+    "check": "node bin/cli.mjs --check && node scripts/build-skill.mjs --check",
+    "test": "node --test"
   },
   "dependencies": {
     "@clack/prompts": "^0.7.0"
