@@ -16,6 +16,8 @@ python3 plugins/workflow-kit/skills/eatahorse/scripts/test_eatahorse.py   # eata
 
 Editing a file in `.claude/rules/` without `build:skill` leaves the shipped skill stale; `check` (also in CI) fails the commit.
 
+The `CONTRACT`/`IA_CONTRACT` consts in `.claude/workflows/docs-{create,from-code}.js` are `@generated-start/@generated-end` build artifacts from `docs-site-builder/references/` — edit freely OUTSIDE the markers, but a change INSIDE them needs `node scripts/build-docs-contracts.mjs` (no `--check`) to regenerate, then re-run `npm run check`. `npm run check` = three gates: installer manifest, `build:skill`, and `build:docs-contracts` drift.
+
 When `validate.py` reports a workflow JS syntax error it points at `:1` generically; `node --check` is no help (it stops at the expected top-level-`return` "Illegal return"). The cause is usually unbalanced parens, e.g. `(await parallel(...)).filter()` needs the grouping paren or `.filter` binds to the promise.
 
 ## Prime directive
@@ -36,6 +38,12 @@ is a bug, not a feature.
 - Don't build for accuracy gains that won't appear. On a strong model the coordination
   lift is small; the real wins are repeatability, clean context, and the verification gate.
 - Don't have agents message each other or share a mutable memory pool. See `.claude/rules/workflow-design.md`.
+
+## Rejected (don't re-litigate)
+
+- scaffold `verify` defaults **false** on purpose: it executes unreviewed generated code. Opt-in only.
+- No transactional/staging-FS/lock-file scaffold rewrite: workflow scripts have no FS access (only agents
+  write). See `docs/WORKFLOW_ANALYSIS.md`.
 
 ## The spine (every workflow, unless you note an exception)
 
@@ -156,3 +164,27 @@ document-codebase intake.
 - EH-0017/EH-0018 acceptance gaps are empirical: static analysis cannot substitute. Both need a live workflow run that produces output files on disk. Do not mark done until outDir artifacts exist.
 - EH-0018 `docs-migrate.js` exists and passes lint; the gap is runtime verification only. Do not re-implement the workflow from scratch.
 - The run stopped at iteration cap (40), not a logic failure. Resume by running the board unattended again from the current state; EH-0019 and the two blocked cards are the only open work.
+
+## docs-from-code run: gen-fixture (2026-06-22)
+
+**Codebase documented:** `/tmp/gen-fixture`
+**Docs site output:** `/tmp/genfix-docs`
+**Eatahorse board:** `.eatahorse-genfix`
+**Admitted pages:** 0 of 4 planned (no pages grounded this run; build skipped)
+**Stop reason:** all pages done (1 round); no admitted pages
+
+**CONSTRAINTS — do not re-attempt without resolving:**
+- DEFERRED: "Getting started tutorial" — requires a chosen happy-path workflow and expected observable runtime output. `bin/cli.mjs` prints only a generic next-steps message; actual workflow execution happens in the Claude Code runtime (not this repo). A human must pick the example workflow and supply expected step-by-step results before this page can be grounded.
+- DEFERRED: "Rust library / OpenAPI API reference" — source list named `Cargo.toml`, `openapi.yaml`, and `src/lib.rs`, none of which exist in the repo. No Rust crate or OpenAPI spec is present; any reference page would be fabricated. If these files are expected, a human must supply the actual source before this page can be attempted.
+
+## docs-from-code run: multilang-fixture (2026-06-22)
+
+**Codebase documented:** `/tmp/multilang-fixture`
+**Docs site output:** `/tmp/ml-docs`
+**Eatahorse board:** `.eatahorse-ml`
+**Admitted pages:** 0 of 10 planned (build skipped)
+**Stop reason:** round cap (1 round)
+
+**CONSTRAINTS — do not re-attempt without resolving:**
+- DEFERRED: "Getting started with Widget" — tutorial requires a human-authored onboarding journey (install -> first widget -> verify). The manifests and OpenAPI spec provide symbol signatures and metadata but no chosen happy path, sample install flow, or first-success narrative. A guessed quickstart would fail the grounding gate. Human brief needed: target language, intended first task, and a runnable end-to-end example.
+- No pages were admitted this run; no source was skipped for a technical reason. All 10 planned pages remain unstarted.
