@@ -4,6 +4,33 @@ Distilled from withastro/starlight docs + component source (`packages/starlight/
 
 Built-in components for `.mdx` pages (also usable in `.astro`). Not available in plain `.md`.
 
+---
+
+## Cross-framework authoring: use the CROSSWALK, not Starlight syntax
+
+This file is **Starlight-only**. If you are authoring for Docusaurus, MkDocs, VitePress, or
+another framework, do NOT use `<Aside>`, `<Card>`, `<FileTree>`, `<Steps>`, `<Tabs>`, or any
+`@astrojs/starlight` import — those are Starlight-specific and will break other frameworks.
+
+The canonical per-framework syntax lives in the `CROSSWALK` const in
+`.claude/workflows/docs-create.js` (and is injected automatically into author prompts at
+runtime). The six framework-neutral constructs it covers are:
+
+| Construct   | Intent                          | Starlight syntax (this file)                   |
+|-------------|----------------------------------|------------------------------------------------|
+| `callout`   | Information callout / admonition | `:::note` / `:::tip` / `<Aside>` in .mdx      |
+| `tabs`      | Tabbed content switcher          | `<Tabs>` + `<TabItem>` in .mdx                 |
+| `steps`     | Numbered sequential procedure    | `<Steps>` wrapping an ordered list in .mdx     |
+| `card`      | Highlighted content card block   | `<Card>` inside `<CardGrid>` in .mdx           |
+| `filetree`  | Annotated directory/file tree    | `<FileTree>` wrapping a nested list in .mdx    |
+| `code-title`| Code block with filename label   | Fenced block with `title="filename.js"`        |
+
+When authoring outside Starlight: look up your framework's column in the CROSSWALK before
+writing any of the above constructs. The CROSSWALK is the authoritative source; this table
+is the Starlight column only.
+
+---
+
 ## Import
 
 Pull several at once from one entry point:

@@ -56,6 +56,13 @@
       "description": "Document a whole codebase into a Starlight site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back.",
       "skills": ["eatahorse", "docs-site-builder", "document-codebase"],
       "agents": []
+    },
+    {
+      "name": "docs-migrate",
+      "file": ".claude/workflows/docs-migrate.js",
+      "description": "Migrate a documentation site from one framework to another: acquire source corpus, map pages via crosswalk, fan out conversion workers, gate for syntax leaks, assemble target config.",
+      "skills": ["docs-scraper", "docs-site-builder"],
+      "agents": []
     }
   ]
 }

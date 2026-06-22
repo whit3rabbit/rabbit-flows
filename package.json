@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build:skill": "node scripts/build-skill.mjs",
-    "check": "node bin/cli.mjs --check && node scripts/build-skill.mjs --check",
+    "build:docs-contracts": "node scripts/build-docs-contracts.mjs",
+    "check": "node bin/cli.mjs --check && node scripts/build-skill.mjs --check && node scripts/build-docs-contracts.mjs --check",
     "test": "node --test"
   },
   "dependencies": {

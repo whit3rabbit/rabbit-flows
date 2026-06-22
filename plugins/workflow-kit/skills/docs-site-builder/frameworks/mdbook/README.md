@@ -1,18 +1,49 @@
-# mdBook (SKELETON — not filled in yet)
+# mdBook
 
-This framework has no distilled references yet. Until it does, author from the current official
-docs (use the `find-docs` skill / context7), not from memory.
+Rust-based static-site generator for book-style documentation (v0.4.x). CommonMark Markdown;
+no components or JSX. Navigation is driven entirely by `src/SUMMARY.md`.
 
-## Quick facts (unverified stubs — confirm against current docs)
+## Workflow
 
-- Rust-based. Install: `cargo install mdbook`. New project: `mdbook init`.
-- Config: `book.toml`. Nav/structure: `src/SUMMARY.md` (the table of contents drives the book).
-- Content: Markdown under `src/`. Serve: `mdbook serve`. Build: `mdbook build`.
-- Docs: https://rust-lang.github.io/mdBook/
+Work in this order; read the reference when you reach that step.
 
-## To fill this in
+1. **Scaffold** — `cargo install mdbook`, `mdbook init`, project structure. → `references/setup.md`
+2. **Configure** — `book.toml`: book metadata, output.html options (theme, edit URL, MathJax,
+   search), preprocessors, output backends. → `references/configuration.md`
+3. **Author pages and structure** — `src/SUMMARY.md` defines all chapters and navigation;
+   no frontmatter system. Chapter ordering, prefix/suffix chapters, draft entries (`[Title]()`),
+   separators (`---`). → `references/frontmatter.md`
+4. **Rich content** — file includes (`{{#include}}`), Rust playground code blocks, MathJax
+   (double-backslash syntax), admonitions via `mdbook-admonish`, Mermaid via `mdbook-mermaid`.
+   → `references/content-authoring.md`
+5. **Theme and extensions** — override theme files (`theme/index.hbs`, CSS, JS), Handlebars
+   variables, CSS custom properties, external preprocessors. → `references/components.md`
 
-Mirror the Starlight set (see `../../SKILL.md`):
-1. Clone https://github.com/rust-lang/mdBook.
-2. Distill setup / `book.toml` / `SUMMARY.md` structure / preprocessors into compact `references/*.md`.
-3. Rewrite this README as: scaffold → configure → author → content → components, pointing at them.
+For a single narrow question (e.g. "how do I include a file range?") read just the one
+relevant reference.
+
+## Quick facts
+
+- Install: `cargo install mdbook` (Rust toolchain required) or download binary from GitHub releases
+- New project: `mdbook init my-book` — creates `book.toml` + `src/SUMMARY.md`
+- Config file: `book.toml` at project root
+- Content: Markdown files under `src/` — ALL chapters must be listed in `src/SUMMARY.md`
+- Dev: `mdbook serve` (live-reload at http://localhost:3000) | Build: `mdbook build`
+- Navigation: `SUMMARY.md` only — files not listed there are not built
+- No frontmatter system: page title comes from the first `#` heading or the SUMMARY.md entry label
+- File includes: `{{#include relative/path.md}}` or `{{#include src/lib.rs:10:25}}` (line range)
+  or `{{#include src/lib.rs:anchor_name}}` (named anchors via `// ANCHOR: name`)
+- Math: enable `mathjax-support = true` in `[output.html]`; syntax is `\\(inline\\)` and `\\[block\\]`
+- Admonitions: opt-in via `cargo install mdbook-admonish && mdbook-admonish install`
+- Validate: `mdbook build` catches chapters referenced in SUMMARY.md that don't exist
+
+## Authoring guidance
+
+- `SUMMARY.md` is the single source of truth for navigation. Edit it first before creating files;
+  or set `create-missing = true` in `[build]` to auto-create missing chapter files.
+- mdBook has no component system. Rich UI (admonitions, Mermaid, tabs) requires external preprocessors
+  installed via cargo. Add them to `book.toml` before using their syntax.
+- Theme customization: run `mdbook init --theme` to copy theme files to `theme/`; then add
+  `additional-css` or `additional-js` in `[output.html]` for targeted overrides without replacing
+  the full theme.
+- For Rust projects: `mdbook test` runs Rust doc-tests embedded in code blocks.

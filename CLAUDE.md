@@ -128,3 +128,31 @@ For how the runtime *actually behaves* (VM sandbox limits, the resume journal an
 hash, concurrency/agent caps, `args` JSON parsing, rejected `isolation:'remote'`, the hidden
 45s retry, and other doc-vs-implementation gaps), read **`docs/WORKFLOW_ANALYSIS.md`**. Consult it
 when a workflow behaves unexpectedly or you need a runtime detail the rules/skill don't cover.
+
+## Eatahorse run: docs-factory (2026-06-21, 40 iterations)
+
+**Goal:** Turn docs-site-builder from Starlight-only into a multi-framework docs factory: FRAMEWORKS
+registry, per-framework adapters, validators, component crosswalk, quality gate, contract-generation
+automation, generated-docs lanes, docs-migrate workflow, i18n/versioning/basePath args, and upgraded
+document-codebase intake.
+
+**Completed (EH-0001 to EH-0008):**
+- FRAMEWORKS registry defined; Starlight seeded as reference entry.
+- `isStarlight` branch replaced in `docs-create.js` and `docs-from-code.js` with registry dispatch.
+- First-wave adapters: Docusaurus, MkDocs+Material/Zensical, VitePress, Fumadocs, mdBook, Docsify.
+- Second-wave adapters: Sphinx, Nextra, Mintlify, Docsy, Scalar, Redocly.
+- Framework-native validators with build-error-fed repair loops.
+- Framework-neutral component crosswalk (non-Starlight pages no longer leak Starlight syntax).
+- Docs quality gate (Diataxis, link/asset resolution, no Starlight-only syntax, source-backed reference pages) running before build.
+- Contract-generation automation (`npm run build:docs-contracts`) wired into `npm run check`; drift between skill references and inline workflow contracts now fails CI.
+
+**Remaining:**
+- EH-0019 (doing): links-and-assets handling plus i18n, versioning, basePath args across docs workflows. Two of three acceptance criteria unmet: basePath config injection and broken-link resolution in the quality gate need a real run to verify.
+- EH-0017 (blocked): Generated-docs lanes in docs-from-code (OpenAPI, TypeDoc, Sphinx/mkdocstrings/pdoc, rustdoc, go doc, CLI --help). Detection and worker bites done; acceptance item 2 unverified: no run artifacts on disk, so the OpenAPI/TypeDoc reference-page output has never been observed.
+- EH-0018 (blocked): docs-migrate workflow. Static checks (npm run check, validate.py --strict) pass. Acceptance item 3 is the blocker: the from=mkdocs to=starlight run has never executed. The assemble stage writes `outDir/MIGRATION.md` and acquisition writes `outDir/.source-corpus` on every run; neither exists anywhere in the repo, which is the proof the run never ran. Admonition conversion (`!!! note` to `:::note`) cannot be confirmed without run output.
+- EH-0020 (backlog): Upgrade document-codebase intake to named framework choices (starlight, docusaurus, mkdocs, vitepress, ...) and add scaffoldMode question. Pure SKILL.md edit, no workflow change, no manifest impact.
+
+**Constraints for next run (skip these dead ends):**
+- EH-0017/EH-0018 acceptance gaps are empirical: static analysis cannot substitute. Both need a live workflow run that produces output files on disk. Do not mark done until outDir artifacts exist.
+- EH-0018 `docs-migrate.js` exists and passes lint; the gap is runtime verification only. Do not re-implement the workflow from scratch.
+- The run stopped at iteration cap (40), not a logic failure. Resume by running the board unattended again from the current state; EH-0019 and the two blocked cards are the only open work.
