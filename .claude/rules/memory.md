@@ -8,6 +8,8 @@ Workflow script variables evaporate when the run ends; only the memory files per
 This is the bridge the platform doesn't give you. Build it every time the run learns
 something worth keeping.
 
+Artifacts: workflow run outputs (`.eatahorse*`, `docs-site/`, `scaffold-out/`, `.security-audit/`, `.docs-plan.md`, `.claude/projects/`) can be safely git ignored unless the user wants them tracked.
+
 ## What goes in CLAUDE.md
 
 - Commands (build / run / test) — the single highest-value thing for a future session.

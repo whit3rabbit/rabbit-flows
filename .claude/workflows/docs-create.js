@@ -33,7 +33,7 @@
 // requires-skills: docs-site-builder
 export const meta = {
   name: 'docs-create',
-  description: 'Author an Astro Starlight documentation site from a brief: plan pages, fan out authors, verify + assemble config.',
+  description: 'Author a documentation site from a brief: plan pages, fan out authors, verify and assemble config. Starlight is first-class; other frameworks are authored from current docs.',
   phases: [
     { title: 'Frame IA', detail: 'one strong-model call: brief -> audiences, journey, Diátaxis split, sidebar shape' },
     { title: 'Plan', detail: 'one strong-model call: IA + brief -> page list, each tagged diataxisType + template' },
@@ -74,18 +74,18 @@ astro.config.mjs
     group:        { label: 'Guides', items: [ ... ], collapsed?: true }
     page by slug: { slug: 'guides/getting-started' }
     explicit link:{ label: 'Home', link: '/' }
-    autogenerate: { label: 'Reference', autogenerate: { directory: 'reference' } }
+    autogenerate: { label: 'Reference', items: [{ autogenerate: { directory: 'reference' } }] }  // v0.39+: wrap in items; bare { autogenerate } (no label) is also valid standalone
     badge:        { slug: '...', badge: { text: 'New', variant: 'tip' } }
 
 COMPONENTS (MDX only): import { Aside, Badge, Card, CardGrid, FileTree, Icon, LinkButton, LinkCard, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
-- Aside:   <Aside type="note|tip|caution|danger" title?="...">...</Aside>  (markdown form: :::note / :::tip[Custom title])
+- Aside:   <Aside type="note|tip|caution|danger" title?="..." icon?="...">...</Aside>  (markdown form: :::note / :::tip[Custom title])
 - Tabs:    <Tabs syncKey?="pkg"><TabItem label="npm" icon?="seti:npm">...</TabItem>...</Tabs>  (label required)
 - Steps:   <Steps> wraps an ordered markdown list (1. 2. 3.); each step may hold code blocks.
 - Card:    <Card title="..." icon?="rocket">...</Card>;  <CardGrid stagger?>...</CardGrid> wraps Cards.
 - LinkCard:<LinkCard title="..." href="..." description?="..." />
 - LinkButton: <LinkButton href="..." variant?="primary|secondary|minimal" icon?="..." iconPlacement?="start|end" />
 - FileTree:<FileTree> wraps a markdown nested list of files/dirs.
-- Badge:   <Badge text="..." variant?="note|tip|caution|danger|success" size?="small|medium|large" />
+- Badge:   <Badge text="..." variant?="note|tip|caution|danger|success|default" size?="small|medium|large" />
 
 CODE BLOCKS (Expressive Code, built in): fence with options, e.g.
     \`\`\`js title="src/util.js" {1,3-5} ins={2} del={4}
@@ -123,16 +123,26 @@ backwards from that page; it is the highest-leverage page in the set.`
 const brief = typeof args?.brief === 'string' ? args.brief : null
 const outDir = typeof args?.outDir === 'string' ? args.outDir : null
 const framework = args?.framework ?? 'starlight'
+const isStarlight = framework === 'starlight'
 const sources = Array.isArray(args?.sources) ? args.sources : []
 const explicitPages = Array.isArray(args?.pages) ? args.pages.filter(Boolean) : null
-const refsDir = args?.refsDir ?? 'plugins/workflow-kit/skills/docs-site-builder/references'
+// Starlight refs are distilled; other frameworks point at their (skeleton) folder, not the Starlight refs.
+const refsDir = args?.refsDir ?? (isStarlight
+  ? 'plugins/workflow-kit/skills/docs-site-builder/references'
+  : `plugins/workflow-kit/skills/docs-site-builder/frameworks/${framework}`)
 
 if (!brief || !outDir) {
   return { error: 'args.brief and args.outDir are required', got: { brief, outDir } }
 }
-if (framework !== 'starlight') {
-  // Only Starlight has an inline contract. Other frameworks are skeletons in the skill.
-  log(`framework="${framework}" has no inline contract; authors will fall back to the skill skeleton + current docs. Starlight is the supported path.`)
+
+// Only Starlight has an inline authoring contract. For other frameworks, authors work from the
+// current official docs (find-docs / context7) rather than a distilled-but-wrong-syntax contract.
+const authoringContract = isStarlight ? CONTRACT
+  : `AUTHORING NOTE: there is NO inline syntax contract for "${framework}". Do NOT emit Starlight syntax. ` +
+    `Author from the CURRENT official ${framework} documentation (use the find-docs skill / context7). ` +
+    `Never invent config keys, frontmatter, or component syntax from memory. Mark anything you are unsure of.`
+if (!isStarlight) {
+  log(`framework="${framework}" has no inline contract; authors will work from current ${framework} docs. Starlight is the first-class path.`)
 }
 
 const sourcesNote = sources.length
@@ -246,9 +256,12 @@ log(`planned ${pages.length} page(s): ${pages.map(p => p.path).join(', ')}`)
 phase('Author')
 const notes = (await parallel(pages.map((p, i) => () =>
   agent(
-    `Write ONE ${framework} documentation page and save it to disk. Do not re-derive Starlight syntax: ` +
-    `the contract below is authoritative. Only Read a file under "${refsDir}" if the contract genuinely ` +
-    `does not cover something you need (avoid extra reads, this run optimizes for fewer calls).\n\n` +
+    `Write ONE ${framework} documentation page and save it to disk. ` +
+    (isStarlight
+      ? `Do not re-derive Starlight syntax: the contract below is authoritative. Only Read a file under "${refsDir}" ` +
+        `if the contract genuinely does not cover something you need (avoid extra reads, this run optimizes for fewer calls).`
+      : `Author from the current official ${framework} docs (find-docs / context7); do not invent config or component ` +
+        `syntax. "${refsDir}" is a skeleton, not a syntax source.`) + `\n\n` +
     `PAGE\n- file: ${outDir}/${p.path}\n- title: ${p.title}\n- kind: ${p.kind}\n- sidebar group: ${p.group}\n- must cover: ${p.brief}\n` +
     `- Diátaxis type: ${p.diataxisType ?? '(infer from kind/brief)'}  (serve this ONE reader need; do NOT mix modes)\n` +
     `- section template to follow: ${p.template ?? '(use the matching skeleton from the IA contract)'}\n` +
@@ -260,7 +273,7 @@ const notes = (await parallel(pages.map((p, i) => () =>
     `Use .mdx with the correct import line if and only if you use components. Write the file with the Write tool ` +
     `(create parent dirs). Keep prose tight and technical.\n\n` +
     `IA CONTRACT\n${IA_CONTRACT}\n\n` +
-    `AUTHORING CONTRACT\n${CONTRACT}`,
+    `AUTHORING CONTRACT\n${authoringContract}`,
     { label: `author:${p.path || i}`, phase: 'Author', model: 'sonnet', schema: NOTE_SCHEMA },
   ),
 ))).filter(Boolean)
@@ -278,24 +291,31 @@ const final = await agent(
   `Each page was planned with a Diátaxis type (the ONE reader need it must serve):\n` +
   `${pages.map(p => `- ${p.path}: ${p.diataxisType ?? '(untyped)'}`).join('\n')}\n\n` +
   `Do, in order:\n` +
-  `1. READ each written page file. Check it against the contract: valid frontmatter, .mdx iff components are used, ` +
-  `correct component imports and prop names, valid Aside/Tabs/Steps usage, sensible links. Fix small problems in place ` +
-  `with the Edit tool. If a page is broken beyond a quick fix, reject it (record path + reason).\n` +
+  `1. READ each written page file. Check it against the contract: valid frontmatter, ` +
+  (isStarlight ? `.mdx iff components are used, correct component imports and prop names, valid Aside/Tabs/Steps usage, `
+              : `correct ${framework} config/component syntax (verify against current ${framework} docs, not memory), `) +
+  `sensible links. Fix small problems in place with the Edit tool. If a page is broken beyond a quick fix, reject it (record path + reason).\n` +
   `1b. IA CHECK: confirm each page actually matches its declared Diátaxis type and does not mix modes ` +
   `(e.g. a reference page is not secretly a tutorial; a tutorial is not a wall of explanation). Fix small ` +
   `shape mismatches in place; note any you fixed in decisions. Reject a page only if its mode is hopelessly wrong.\n` +
-  `2. Ensure the content collection exists: write ${outDir}/src/content.config.ts with docsLoader()+docsSchema() if missing.\n` +
-  `3. Assemble ${outDir}/astro.config.mjs: a starlight() integration whose sidebar reflects the page groups ` +
-  `(${[...new Set(pages.map(p => p.group))].join(', ')}). Use slug items for the admitted pages. Derive a title from the brief. ` +
-  `If an astro.config already exists, update its sidebar/title rather than clobbering unrelated config.\n` +
-  `4. EMPIRICAL CHECK: if "${outDir}" is a buildable Astro project (has package.json with astro + node_modules), run ` +
-  `\`npx astro check\` (or \`npx astro build\`) from there and summarize pass/fail in buildResult. If it is not buildable ` +
-  `(no install), set buildResult to "skipped: not a buildable project" — do NOT run npm install.\n` +
+  (isStarlight
+    ? `2. Ensure the content collection exists: write ${outDir}/src/content.config.ts with docsLoader()+docsSchema() if missing.\n` +
+      `3. Assemble ${outDir}/astro.config.mjs: a starlight() integration whose sidebar reflects the page groups ` +
+      `(${[...new Set(pages.map(p => p.group))].join(', ')}). Use slug items for the admitted pages. Derive a title from the brief. ` +
+      `If an astro.config already exists, update its sidebar/title rather than clobbering unrelated config.\n` +
+      `4. EMPIRICAL CHECK: if "${outDir}" is a buildable Astro project (has package.json with astro + node_modules), run ` +
+      `\`npx astro check\` (or \`npx astro build\`) from there and summarize pass/fail in buildResult. If it is not buildable ` +
+      `(no install), set buildResult to "skipped: not a buildable project" — do NOT run npm install.\n`
+    : `2. Write or repair the ${framework} primary config (nav/sidebar reflecting the page groups: ` +
+      `${[...new Set(pages.map(p => p.group))].join(', ')}; title derived from the brief). Use current ${framework} config syntax; ` +
+      `if a config already exists, update nav/title rather than clobbering unrelated config.\n` +
+      `3. (no Astro content collection step for ${framework}.)\n` +
+      `4. EMPIRICAL CHECK: the ${framework} build is out of scope here; set buildResult to "skipped: ${framework} build not run".\n`) +
   `5. WRITE-BACK: write ${outDir}/.docs-plan.md capturing the final page list, sidebar structure, and any decisions/constraints ` +
   `(e.g. rejected pages and why) so a future run or human has the durable record.\n\n` +
   `Return admitted paths, rejected {path,reason}, pages you fixed, configWritten, buildResult, decisions, and a short summary.\n\n` +
   `IA CONTRACT\n${IA_CONTRACT}\n\n` +
-  `AUTHORING CONTRACT\n${CONTRACT}`,
+  `AUTHORING CONTRACT\n${authoringContract}`,
   { label: 'verify-finalize', schema: FINAL_SCHEMA },
 )
 

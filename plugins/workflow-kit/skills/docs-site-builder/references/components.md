@@ -138,6 +138,7 @@ Prominent linked card for navigation. Renders an `<a>`; extra anchor attributes 
 
 Props:
 - `title: string` — **required** (renders as HTML).
+- `href: string | URL` — **required** (the navigation target).
 - `description?: string` — supporting text (renders as HTML).
 
 ```mdx

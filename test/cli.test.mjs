@@ -2,11 +2,14 @@
 // node:test + node:assert, no framework. Run via `npm test` (node --test).
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { copyInto } from '../bin/cli.mjs'
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
 test('copyInto: copy / skip / force-overwrite / force-prune', async () => {
   const scratch = await mkdtemp(path.join(tmpdir(), 'rabbit-flows-test-'))
@@ -40,4 +43,32 @@ test('copyInto: copy / skip / force-overwrite / force-prune', async () => {
   } finally {
     await rm(scratch, { recursive: true, force: true })
   }
+})
+
+test('eatahorse skill hooks resolve inside the installed skill root', async () => {
+  const skillRoot = path.join(ROOT, 'plugins', 'workflow-kit', 'skills', 'eatahorse')
+  const skillMd = await readFile(path.join(skillRoot, 'SKILL.md'), 'utf8')
+  const hookArgs = [...skillMd.matchAll(/args:\s*\["([^"]*eatahorse_hook\.py)"\]/g)].map((m) => m[1])
+
+  assert.equal(hookArgs.length, 3)
+  for (const hookArg of hookArgs) {
+    const resolved = hookArg.replace('${CLAUDE_PLUGIN_ROOT}', skillRoot)
+    assert.ok(existsSync(resolved), `${hookArg} should resolve to a bundled hook script`)
+  }
+})
+
+test('every shipped skill documents git-ignorable artifacts', async () => {
+  const skillsRoot = path.join(ROOT, 'plugins', 'workflow-kit', 'skills')
+  const entries = await readdir(skillsRoot, { withFileTypes: true })
+  const missing = []
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const skillPath = path.join(skillsRoot, entry.name, 'SKILL.md')
+    if (!existsSync(skillPath)) continue
+    const skillMd = await readFile(skillPath, 'utf8')
+    if (!/^Artifacts:/m.test(skillMd)) missing.push(entry.name)
+  }
+
+  assert.deepEqual(missing, [])
 })

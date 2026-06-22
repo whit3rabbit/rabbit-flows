@@ -14,6 +14,8 @@ The runtime copy of this guidance lives inline in `.claude/workflows/docs-scrape
 `DETECTION` and `EXTRACTION` consts). If you change a reference here, refresh those consts —
 `agent()` has no `skills` option, so the workflow cannot load this skill at runtime.
 
+Artifacts: scraped corpora (`outDir`, including `manifest.json`, `INDEX.md`, and `corpus.md`) can be safely git ignored unless the user wants the local mirror tracked.
+
 ## Acquisition ladder — cheapest first (prioritize token usage)
 
 Fetching every page through a model (load HTML into context, have the model emit markdown) is the

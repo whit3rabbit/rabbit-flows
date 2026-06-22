@@ -22,6 +22,8 @@ of you so you author against the actual API instead of guessing. The reference f
 from the official source (Starlight v0.40.0), so prefer them over memory for exact option names
 and prop types.
 
+Artifacts: generated docs sites such as `docs-site/` and per-site `.docs-plan.md` can be safely git ignored unless the user wants the site source tracked.
+
 ## Pick the framework
 
 | User wants | Go to |

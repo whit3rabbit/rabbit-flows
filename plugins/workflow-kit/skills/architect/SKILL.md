@@ -15,6 +15,8 @@ other attempts running alongside you — do not hedge toward a "consensus" desig
 others picked. Diversity between attempts is the whole point; a later merge gate compares them and
 chooses or combines. Commit to a coherent position.
 
+Artifacts: this role writes no files by itself; scaffold workflow outputs such as `scaffold-out/` can be safely git ignored unless the user wants them tracked.
+
 ## Do
 
 - **Make every irreversible decision explicit.** For each decision the frame named (language, runtime,

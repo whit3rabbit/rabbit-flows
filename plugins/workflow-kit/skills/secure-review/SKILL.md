@@ -13,6 +13,8 @@ description: Specialist role for defensive security code review. Use when a work
 You review code to find vulnerabilities the owner should FIX. You never write exploits, payloads,
 or step-by-step exploitation — only evidence-backed findings and remediation guidance.
 
+Artifacts: `.security-audit/` baselines can be safely git ignored unless the user wants audit state tracked.
+
 ## What to look for (map to the lane's focus)
 
 - **Injection** — untrusted input reaching a shell, SQL, eval, template, or command sink without

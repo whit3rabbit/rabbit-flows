@@ -110,6 +110,7 @@ Where new things go:
 
 - New workflow → `.claude/workflows/<name>.js` (save via `/workflows` → `s`); parameterize with `args`.
   Then register it in `installer/manifest.json` (file + `skills`/`agents` deps) so `npx` can bundle it; `npm run check` asserts no drift.
+  The workflow's `// requires-skills:` header must set-match manifest `skills[]` exactly (front-door skills included, e.g. `docs-from-code` lists `eatahorse, docs-site-builder, document-codebase`) or `check` fails.
 - Reusable specialist role (secure-review, source-eval, verify-findings) → a skill in the plugin, called by a worker phase.
 - Subagent role with a fixed model → `plugins/workflow-kit/agents/<role>.md` (`model:` in frontmatter).
 - New rule of thumb → `.claude/rules/`. The guardrails skill is generated from these by `npm run build:skill`; edit the rules, not the skill.

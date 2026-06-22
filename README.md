@@ -1,17 +1,61 @@
 # rabbit-flows
 
-Claude Code dynamic workflows, and an `npx` installer that bundles each workflow with the
-skills and agents it depends on.
+Workflows that help you through tedious tasks using Claude Code dynamic workflows. Prioritizes using less tokens when possible but with optimized speed to get the job done.
 
-The platform shares workflows by repo clone and skills/agents by plugin marketplace, but
-gives you no way to install *a workflow and its dependencies together*. This installer is
+Includes an `npx` installer that bundles each workflow with the skills and agents it depends on.
+
+The platform shares workflows by repo clone and skills/agents by plugin marketplace, but gives you no way to install *a workflow and its dependencies together*. This installer is
 that missing path.
+
+## How to Install
+
+```bash
+```
+
+## Catalog
+
+### Workflows (`/name`, run via `/workflows`)
+
+| Workflow | What it does | Example |
+|---|---|---|
+| `starter` | Reference spine: decompose a question, fan out workers, gate their notes, synthesize a cited answer. | `/starter What are the tradeoffs between SQLite and Postgres for a single-node app?` |
+| `scaffold` | Start a project from scratch and stub+document the whole tree under a per-file line ceiling. | `/scaffold { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }` |
+| `security-audit` | Defensive audit: map the attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation. | `/security-audit { "scope": "src", "focus": ["authz", "ssrf"] }` |
+| `docs-create` | Author a Starlight docs site from a brief: plan pages, fan out authors, verify and assemble config. | `/docs-create { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site" }` |
+| `docs-from-code` | Document an existing codebase into a Starlight site via a durable Eatahorse board, each page grounded in source. | `/docs-from-code { "root": "src", "outDir": "./docs-site" }` |
+| `docs-scrape` | Ingest an external documentation website into a local markdown corpus. | `/docs-scrape { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }` |
+| `eatahorse` | Decompose a goal into an Eatahorse Kanban board and optionally work it unattended one bite at a time. | `/eatahorse { "goal": "Add OAuth login", "execute": true }` |
+| `eatahorse-research` | Research every file in a folder using the board as a durable, resumable ledger. | `/eatahorse-research { "root": "src", "question": "What does each module do?" }` |
+
+### Front-door skills (conversational intake → launch a workflow)
+
+| Skill | What it does | Example |
+|---|---|---|
+| `new-project` | Gathers a brief through a short discussion, then launches `scaffold` with the answers. | "Start a new Rust CLI todo app from scratch." |
+| `document-codebase` | Gathers options, then launches `docs-from-code` (or drives the same board conversationally when workflows are off). | "Document this codebase into a docs site." |
+
+### Specialist skills (roles bundled into a workflow; also usable directly)
+
+| Skill | What it does | Example |
+|---|---|---|
+| `architect` | Proposes one software architecture from a brief, blind to other attempts, for a merge gate to judge. | "Propose an architecture for a multi-tenant billing service." |
+| `secure-review` | Defensive code review that emits evidence-backed findings without exploit code. | "Review `src/auth` for injection and authz bugs." |
+| `docs-site-builder` | Authoring reference for building and configuring Astro Starlight docs sites. | "Set up a Starlight docs site for this project." |
+| `docs-scraper` | Detects a docs platform and extracts clean markdown for mirroring a site. | "Save these docs locally as markdown." |
+| `eatahorse` | Lightweight one-bite-at-a-time Kanban boards (`.eatahorse` JSON + markdown cards). | "Track this work as a Kanban board." |
+
+### Authoring skills (help you build workflows; load in this repo)
+
+| Skill | What it does | Example |
+|---|---|---|
+| `dynamic-workflow-authoring` | Helps write, debug, and save workflow scripts; bundles the `validate.py` linter. | "Write a workflow that audits every file in parallel." |
+| `workflow-guardrails` | Discipline for whether a task needs a workflow and how many agents/models to spend; travels to installs as a skill. | "Should this task be a workflow or just subagents?" |
 
 ## Where things live
 
 | Path | What it is |
 |---|---|
-| `.claude/workflows/*.js` | The workflow scripts themselves: `starter`, `scaffold`, `security-audit`, `docs-create`, `docs-scrape`. Each runs via `/workflows`. Shared by cloning this repo. |
+| `.claude/workflows/*.js` | The workflow scripts themselves (see [Catalog](#catalog) above). Each runs via `/workflows`. Shared by cloning this repo. |
 | `.claude/skills/dynamic-workflow-authoring/` | A skill that helps you **write and debug** workflow scripts. Loads automatically when you work in this repo. Its `scripts/validate.py` lints workflow files (the linter CI runs). |
 | `plugins/workflow-kit/skills/`, `.../agents/` | Specialist roles (e.g. `architect`, `secure-review`) that some workflows lean on. These ship via the marketplace plugin and the installer copies them next to the workflow that needs them. |
 | `installer/manifest.json` | The catalog: maps each workflow to the skills/agents it bundles. |

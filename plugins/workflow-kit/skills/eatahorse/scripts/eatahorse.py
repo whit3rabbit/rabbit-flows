@@ -276,6 +276,10 @@ def extract_text_section(body: str, heading_prefix: str) -> str:
 def parse_task_markdown(path: Path, board: Path) -> Optional[Dict[str, Any]]:
     text = path.read_text(encoding="utf-8")
     meta, body = parse_frontmatter(text)
+    # The tool's own trailing footer sits below the last section (## Notes). extract_section's
+    # lookahead runs to EOF, so without this it gets captured as note text and re-duplicated
+    # on every sync. Strip only our known footer; leave any user comment mid-notes intact.
+    body = re.sub(r"\n*<!--\s*Eatahorse:.*?-->\s*$", "", body, flags=re.S)
     task_id = str(meta.get("id") or "").strip()
     if not task_id:
         match = re.match(r"(?P<id>EH-\d{4,})", path.name, re.I)
@@ -330,7 +334,10 @@ def parse_task_markdown(path: Path, board: Path) -> Optional[Dict[str, Any]]:
 def checkbox_lines(items: Iterable[Dict[str, Any]], fallback: str) -> str:
     items = list(items or [])
     if not items:
-        return f"- [ ] {fallback}"
+        # Empty fallback => render nothing, so a terminal-status card with no checklist
+        # round-trips back to an empty list on sync instead of re-gaining a placeholder bite
+        # that would revert it out of done. See task_markdown for the terminal-status gate.
+        return f"- [ ] {fallback}" if fallback else ""
     lines = []
     for item in items:
         mark = "x" if item.get("done") else " "
@@ -347,6 +354,12 @@ def task_markdown(task: Dict[str, Any], notes: Optional[str] = None) -> str:
     estimate = task.get("estimate") or "unsized"
     description = (task.get("description") or "").strip() or "_None._"
     completed = task.get("completed_at") or ""
+    # Terminal cards (done/dropped) suppress the "define a bite/acceptance" placeholder: it is
+    # wrong advice for a finished card, and a placeholder would round-trip into a real unchecked
+    # bite on the next sync and revert the card out of done. Empty fallback => empty section.
+    terminal = task.get("status") in {"done", "dropped"}
+    bite_fallback = "" if terminal else "Define the next small bite"
+    acceptance_fallback = "" if terminal else "Define done for this task"
 
     parts = [
         frontmatter(task),
@@ -365,10 +378,10 @@ def task_markdown(task: Dict[str, Any], notes: Optional[str] = None) -> str:
             description,
             "",
             "## One-bite-at-a-time plan",
-            checkbox_lines(task.get("bites", []), "Define the next small bite"),
+            checkbox_lines(task.get("bites", []), bite_fallback),
             "",
             "## Acceptance checks",
-            checkbox_lines(task.get("acceptance", []), "Define done for this task"),
+            checkbox_lines(task.get("acceptance", []), acceptance_fallback),
             "",
             "## Notes",
             notes.strip() if notes and notes.strip() else "",
@@ -429,10 +442,12 @@ def apply_completion_rules(task: Dict[str, Any]) -> bool:
         task["status"] = "done"
         task["completed_at"] = task.get("completed_at") or utc_now()
         changed = True
-    elif status == "done" and not should_auto_complete(task):
+    elif status == "done" and (task.get("acceptance") or task.get("bites")) and not should_auto_complete(task):
         # Two-way derivation: a done card whose acceptance is no longer fully met reverts to doing.
         # Status is a function of acceptance, so manual `move done` or an added/unchecked acceptance
         # item cannot leave a card "done" that isn't. completed_at is nulled by the cleanup below.
+        # A card with no acceptance AND no bites has nothing to derive from, so an explicit
+        # `move done` / `complete` is honored rather than reverted.
         task["status"] = "doing"
         changed = True
     if task.get("status") == "done" and not task.get("completed_at"):

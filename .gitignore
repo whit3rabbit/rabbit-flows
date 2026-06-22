@@ -145,6 +145,16 @@ Icon
 # Avoid committing temporary files or local cache
 .tmp_schema_validate/
 
+# Dynamic workflow run artifacts
+.eatahorse/
+.eatahorse-*/
+eatahorse-research.md
+docs-site/
+scaffold-out/
+.security-audit/
+**/.docs-plan.md
+.claude/projects/
+
 # skill-creator eval scratch (scorer + run artifacts)
 .claude/skills/*-workspace/
 **/skills/*-workspace/

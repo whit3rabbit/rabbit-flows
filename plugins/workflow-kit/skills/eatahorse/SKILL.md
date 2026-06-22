@@ -8,25 +8,27 @@ hooks:
     - hooks:
         - type: command
           command: "python3"
-          args: ["${CLAUDE_PLUGIN_ROOT}/skills/eatahorse/scripts/eatahorse_hook.py"]
+          args: ["${CLAUDE_PLUGIN_ROOT}/scripts/eatahorse_hook.py"]
           timeout: 10
   TaskCompleted:
     - hooks:
         - type: command
           command: "python3"
-          args: ["${CLAUDE_PLUGIN_ROOT}/skills/eatahorse/scripts/eatahorse_hook.py"]
+          args: ["${CLAUDE_PLUGIN_ROOT}/scripts/eatahorse_hook.py"]
           timeout: 10
   Stop:
     - hooks:
         - type: command
           command: "python3"
-          args: ["${CLAUDE_PLUGIN_ROOT}/skills/eatahorse/scripts/eatahorse_hook.py"]
+          args: ["${CLAUDE_PLUGIN_ROOT}/scripts/eatahorse_hook.py"]
           timeout: 10
 ---
 
 # Eatahorse
 
 Use this skill when a user wants to break work into small, trackable tasks: “How do you eat a horse? One bite at a time.” Eatahorse creates a lightweight Kanban board backed by markdown task cards and a JSON ledger. It is deliberately smaller than OpenSpec-style workflows: no formal proposals, no spec lifecycle, no approval gates unless the user asks for them.
+
+Artifacts: `.eatahorse/`, `.eatahorse-*`, and `eatahorse-research.md` can be safely git ignored unless the user wants the board or research report tracked.
 
 ## Core behavior
 
@@ -127,8 +129,8 @@ Disabling auto-sync: set `EATAHORSE_NO_AUTOSYNC=1` to skip the remaining `Stop`/
 (`TaskCreated`/`TaskCompleted` still run). Use this if a long unattended run might overlap a session-end
 sync.
 
-Path notes: the hook commands in this file's frontmatter use `${CLAUDE_PLUGIN_ROOT}` so they
-resolve when the skill is installed as part of the plugin. SKILL-frontmatter hooks are
+Path notes: the hook commands in this file's frontmatter use `${CLAUDE_PLUGIN_ROOT}` as the
+installed skill root. SKILL-frontmatter hooks are
 best-effort; the **supported, reliable wiring is project-level `settings.json`**. To enable
 auto-sync without depending on skill-frontmatter hooks, copy `scripts/eatahorse_hook.py` into the
 target project's `.claude/hooks/` and merge `resources/claude-code-settings.example.json` into the

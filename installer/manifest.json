@@ -49,6 +49,13 @@
       "description": "Research every file in a folder using an Eatahorse board as a durable resumable ledger: enumerate, auto-pick scale by file count, seed one card per unit, then loop research rounds of parallel workers gated and synced until dry, and synthesize a cited report.",
       "skills": ["eatahorse"],
       "agents": []
+    },
+    {
+      "name": "docs-from-code",
+      "file": ".claude/workflows/docs-from-code.js",
+      "description": "Document a whole codebase into a Starlight site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back.",
+      "skills": ["eatahorse", "docs-site-builder", "document-codebase"],
+      "agents": []
     }
   ]
 }

@@ -103,6 +103,61 @@ def test_next_excludes_blocked():
         assert eh.next_task(board) is None, "blocked-only board has no next task"
 
 
+def test_notes_roundtrip_no_footer_pollution():
+    # Footer bug: extract_section's lookahead ran to EOF on the last section (## Notes) and
+    # swallowed the trailing <!-- Eatahorse --> footer into notes; task_markdown then re-emitted
+    # that AND appended a fresh footer, so notes + footer grew on every sync.
+    with tempfile.TemporaryDirectory() as d:
+        board = Path(d) / ".eatahorse"
+        eh.init_board(board, "Test")
+        task = eh.create_task(board, "Card", bites=["b"], acceptance=["a"], status="doing")
+        path = eh.canonical_task_path(board, task)
+        # simulate an agent/human writing a real note under ## Notes
+        text = path.read_text(encoding="utf-8").replace(
+            "## Notes\n", "## Notes\nauth.py: validates token\n", 1)
+        path.write_text(text, encoding="utf-8")
+        eh.sync_board(board, quiet=True)
+        eh.sync_board(board, quiet=True)
+        t = eh.load_state(board)["tasks"][task["id"]]
+        assert t["notes"] == "auth.py: validates token", f"notes polluted: {t['notes']!r}"
+        assert "<!-- Eatahorse" not in t["notes"], "footer leaked into notes"
+        rendered = eh.canonical_task_path(board, t).read_text(encoding="utf-8")
+        assert rendered.count("<!-- Eatahorse:") == 1, "footer duplicated in rendered card"
+
+
+def test_notes_empty_roundtrips_blank():
+    # The footer strip must not turn a genuinely empty Notes section into footer text.
+    with tempfile.TemporaryDirectory() as d:
+        board = Path(d) / ".eatahorse"
+        eh.init_board(board, "Test")
+        task = eh.create_task(board, "Card", bites=["b"], status="doing")
+        eh.sync_board(board, quiet=True)
+        eh.sync_board(board, quiet=True)
+        assert eh.load_state(board)["tasks"][task["id"]]["notes"] == "", "empty notes must stay empty"
+
+
+def test_move_done_empty_card_sticks():
+    # An all-empty card (no bites, no acceptance) is reachable by syncing a hand-authored card.
+    # `move done` must stick and survive a re-sync: terminal cards render no placeholder bite,
+    # so the empty checklist round-trips to [] instead of re-gaining a bite that reverts it.
+    with tempfile.TemporaryDirectory() as d:
+        board = Path(d) / ".eatahorse"
+        eh.init_board(board, "Test")
+        card = board / "tasks" / "ready" / "EH-0050-empty.md"
+        card.parent.mkdir(parents=True, exist_ok=True)
+        card.write_text(
+            '---\nid: "EH-0050"\ntitle: "Empty card"\nstatus: "ready"\n---\n'
+            "# EH-0050: Empty card\n\n## One-bite-at-a-time plan\n\n## Acceptance checks\n\n## Notes\n\n",
+            encoding="utf-8",
+        )
+        eh.sync_board(board, quiet=True)
+        assert eh.move_task(board, "EH-0050", "done")["status"] == "done", \
+            "move done on an empty card must stick"
+        eh.sync_board(board, quiet=True)
+        assert eh.load_state(board)["tasks"]["EH-0050"]["status"] == "done", \
+            "empty done card must stay done across re-sync"
+
+
 def main():
     tests = [
         test_bite_done_open_flag,
@@ -112,6 +167,9 @@ def main():
         test_move_done_unmet_reverts,
         test_reopen_verb,
         test_next_excludes_blocked,
+        test_notes_roundtrip_no_footer_pollution,
+        test_notes_empty_roundtrips_blank,
+        test_move_done_empty_card_sticks,
     ]
     for t in tests:
         t()

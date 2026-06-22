@@ -9,6 +9,8 @@ This skill is the conversational front door to the `scaffold` workflow. The work
 background with no way to ask the user anything mid-run, so the discussion happens HERE first; the
 answers are passed to the workflow as `args`.
 
+Artifacts: `scaffold-out/` can be safely git ignored unless the user wants the generated project tracked.
+
 ## Steps
 
 1. **Get the brief.** Take it from the invocation (`/scaffold <brief>`) if present. If missing or one
