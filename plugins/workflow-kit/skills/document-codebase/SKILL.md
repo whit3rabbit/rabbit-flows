@@ -23,7 +23,20 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
 
    AskUserQuestion batch:
    - **outDir**: where to write the site (default `./docs-site`).
-   - **framework**: starlight (default, first-class) · other (authored from current official docs).
+   - **framework**: AskUserQuestion allows only 2-4 options, but the registry supports 13 frameworks
+     (table below). Offer the four most common as selectable options, with the last being an "Other"
+     escape hatch that takes a free-text name:
+       - `Starlight` (default — the only filled inline contract)
+       - `Docusaurus`
+       - `MkDocs`
+       - `Other — name any supported framework` → then ask plainly which one and pass that name
+         **verbatim** as `framework`. Valid names are the registry ids in the table below; any
+         other string falls through to the work-from-current-docs path.
+   - **scaffoldMode**: how much of the site to produce (3 options):
+       - `content-only` (default — write content + config; build check only if already buildable)
+       - `add-to-existing` (PATCH an existing config/sidebar instead of assembling from scratch)
+       - `full-project` (scaffold a complete buildable project, install, then run the build check —
+         Starlight only; ignored for unfilled frameworks)
    - **includeTutorials**: no (default — reference + module overviews only; tutorials need intent the
      source rarely states and would fail the grounding gate) · yes (also author tutorials, expect more
      gate churn).
@@ -32,12 +45,34 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
 
    Plain asks (free-text, skippable): **brief** (focus/scope note), **include/exclude** globs.
 
+   **Supported `framework` values (registry-backed).** Pass any of these ids verbatim. Only Starlight
+   ships a baked inline authoring contract; every other id authors from its reference files / current
+   official docs (the work-from-current-docs path), and `full-project` scaffolding is Starlight-only:
+
+   | framework id | support tier |
+   |---|---|
+   | `starlight` | filled adapter (baked inline contract; default; supports full-project) |
+   | `docusaurus` | work-from-current-docs |
+   | `mkdocs` | work-from-current-docs |
+   | `vitepress` | work-from-current-docs |
+   | `fumadocs` | work-from-current-docs |
+   | `mdbook` | work-from-current-docs |
+   | `docsify` | work-from-current-docs |
+   | `sphinx` | work-from-current-docs |
+   | `nextra` | work-from-current-docs |
+   | `mintlify` | work-from-current-docs |
+   | `docsy` | work-from-current-docs |
+   | `scalar` | work-from-current-docs |
+   | `redocly` | work-from-current-docs |
+
 3a. **Tier 1 — automated.** Preview the `args` (at least `root`, `outDir`, `framework`,
-   `includeTutorials`), then call the `Workflow` tool:
+   `scaffoldMode`, `includeTutorials`), then call the `Workflow` tool:
 
    ```
    Workflow({ name: "docs-from-code", args: {
-     root, outDir, framework, brief, includeTutorials,
+     root, outDir, framework, scaffoldMode, brief, includeTutorials,
+     // framework: a registry id from the table above (verbatim); unknown ids -> work-from-current-docs.
+     // scaffoldMode: content-only (default) | add-to-existing | full-project (Starlight only).
      // optional knobs the user may set:
      // include, exclude (globs), board (default .eatahorse-docs),
      // workerModel (default sonnet), maxRounds (default 3),
@@ -70,8 +105,8 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
 
 ## Defaults (when the user skips a field)
 
-root=`.` · outDir=`./docs-site` · framework=starlight · includeTutorials=false · board=`.eatahorse-docs` ·
-workerModel=sonnet · maxRounds=3 · filesPerPage=12.
+root=`.` · outDir=`./docs-site` · framework=starlight · scaffoldMode=content-only · includeTutorials=false ·
+board=`.eatahorse-docs` · workerModel=sonnet · maxRounds=3 · filesPerPage=12.
 
 ## Notes
 
