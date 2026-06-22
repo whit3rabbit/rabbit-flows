@@ -25,27 +25,34 @@ Artifacts: `scaffold-out/` can be safely git ignored unless the user wants the g
    - **interface**: cli · tui · gui · library · service
    - **language**: (offer the obvious candidates for the brief; "you pick" is a valid answer)
    - **targetOS**: macOS · Linux · Windows · cross-platform (multi-select)
-   - **frontend / backend**: does it involve a frontend, a backend, both, or neither
+   - **frontend / backend**: does it involve a frontend, a backend, both, or neither. Map the answer
+     to two real booleans in `args` (never pass the raw enum string): frontend →
+     `frontend:true, backend:false`; backend → `frontend:false, backend:true`; both → both `true`;
+     neither → both `false`.
 
    AskUserQuestion batch B:
    - **license**: MIT · Apache-2.0 · GPL-3.0 · proprietary/none
-   - **publish**: will this be published (npm/PyPI/crates/etc.) — yes/no
+   - **publish**: will this be published (npm/PyPI/crates/etc.) — yes/no. Pass as a real boolean
+     (`publish:true`/`publish:false`), not the string "yes"/"no".
    - **apiSurface**: does it expose a public API/SDK — yes (brief description) / no
-   - **execute**: after writing files, run the generated install/build/test (verify) — or only
-     write files and leave commands for review? Maps to `verify`. The verify step EXECUTES freshly
-     generated code with unreviewed dependencies, so DEFAULT to "write only" (`verify:false`) when the
-     stack is unfamiliar, high-stakes, or security-sensitive; "run" (`verify:true`) otherwise.
+   - **execute**: after writing files, only write them (default), or also run the generated
+     install/build/test? Maps to `verify`. The verify step EXECUTES freshly generated code with
+     unreviewed dependencies, so the DEFAULT is write-only (`verify:false`). Only pass `verify:true`
+     if the user explicitly opts into running it, and never for an unfamiliar/high-stakes/security-
+     sensitive stack.
 
    Plain asks (free-text, skippable):
    - **deps**: preferred or avoided dependencies
    - **priorArt**: any existing tool it is inspired by or should resemble
    - any apiSurface detail if the user answered "yes" above
 
-3. **Preview, then launch.** First show the user a compact preview of the `args` you are about to
-   pass (at least `brief`, `dir`, `language`, `interface`, `write`, `verify`) so an accidental write
-   or a wrong `dir` is caught before a filesystem-writing run starts — `verify:true` will EXECUTE
-   generated code. Then call the `Workflow` tool with `name: "scaffold"` and an `args` object built
-   from the answers. Pass only what was gathered; omit the rest (the workflow defaults them).
+3. **Preview, then STOP for confirmation, then launch.** Show the user a compact preview of the
+   `args` you are about to pass (at least `brief`, `dir`, `language`, `interface`, `write`, `verify`)
+   so an accidental write or a wrong `dir` is caught before a filesystem-writing run starts —
+   `verify:true` will EXECUTE generated code. Then STOP and wait for an explicit "yes" from the user.
+   Do NOT call `Workflow` in the same turn as the preview. Only after the user confirms, call the
+   `Workflow` tool with `name: "scaffold"` and an `args` object built from the answers. Pass only what
+   was gathered; omit the rest (the workflow defaults them).
 
    ```
    Workflow({ name: "scaffold", args: {
@@ -71,7 +78,7 @@ Artifacts: `scaffold-out/` can be safely git ignored unless the user wants the g
 
 interface=unspecified · language="best fit" · targetOS=cross-platform · license=unspecified ·
 publish=false · apiSurface=none · frontend/backend inferred from interface (gui→frontend,
-service→backend) · attempts=2 · debate=false · maxFileLines=400 · write=true · verify=true ·
+service→backend) · attempts=2 · debate=false · maxFileLines=400 · write=true · verify=false ·
 polish=false · dir=./scaffold-out.
 
 ## Notes

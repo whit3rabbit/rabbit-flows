@@ -285,12 +285,29 @@ const brief =
 // Default to a fresh subdir, never the cwd: Build writes files and Verify EXECUTES them, so a
 // misparsed invocation must not clobber/run in the user's working tree. Pass args.dir to override.
 const dir = args?.dir ?? './scaffold-out'
-// Coerce loose arg shapes: string "false"/"true" (e.g. from a shell or a sloppy caller) must not read
-// as truthy, and a non-integer/zero/negative attempts must not silently produce 0 proposals.
-const bool = (v, d) => (typeof v === 'boolean' ? v : v === 'true' ? true : v === 'false' ? false : d)
+// Coerce loose arg shapes: string "false"/"true"/"no"/"yes" (e.g. from a shell or a sloppy caller) must
+// not read as truthy, and a non-integer/zero/negative attempts must not silently produce 0 proposals.
+const bool = (v, d) =>
+  typeof v === 'boolean' ? v : v === 'true' || v === 'yes' ? true : v === 'false' || v === 'no' ? false : d
+// Pure-script dir guard, BEFORE any agent runs: Build writes files and Verify EXECUTES them, so a dir
+// of the cwd ("."), home ("~"), a traversal (".."), or an absolute path must never become the target.
+// The skeleton's occupancy check is the second layer; this is the first. allowAbsoluteDir opts in.
+const dirBare = String(dir).trim().replace(/\/+$/, '')
+if (
+  dirBare === '' || dirBare === '.' || dirBare === '~' ||
+  dirBare.includes('..') || dirBare.startsWith('~') ||
+  (dirBare.startsWith('/') && !bool(args?.allowAbsoluteDir, false))
+) {
+  return {
+    error: 'refusing to scaffold into an unsafe dir',
+    dir,
+    hint: 'pass a fresh relative subdir like ./scaffold-out (or allowAbsoluteDir:true for an absolute path)',
+    written: false,
+  }
+}
 const attempts = Math.min(Math.max(Math.trunc(Number(args?.attempts)) || 2, 1), 6) // independent BLIND architecture attempts (diversity knob; bump for contested briefs)
 const write = bool(args?.write, true)              // false -> stop after the decision (dry run; writes nothing)
-const runVerify = bool(args?.verify, true)         // false -> write the scaffold but don't EXECUTE it
+const runVerify = bool(args?.verify, false)        // SAFE DEFAULT: write the scaffold but don't EXECUTE it; verify is opt-in (runs unreviewed generated code)
 const debate = bool(args?.debate, false)           // true -> one blind rebuttal round before Decide (off: token-lazy)
 const polish = bool(args?.polish, false)           // true -> add a Sonnet once-over after build (off: token-lazy)
 const maxLines = Math.min(Math.max(Math.trunc(Number(args?.maxFileLines)) || 400, 80), 1000) // per-file maintainability ceiling, threaded everywhere
@@ -302,9 +319,12 @@ const language = args?.language ?? 'pick the best fit'
 const license = args?.license ?? 'unspecified'
 const priorArt = args?.priorArt ?? 'none stated'
 const apiSurface = args?.apiSurface ?? 'none stated'
-const willPublish = args?.publish ?? false
-const wantFrontend = args?.frontend ?? (interface_ === 'gui')
-const wantBackend = args?.backend ?? (interface_ === 'service')
+// Route through bool() so a string "no"/"yes" from a sloppy caller can't read as truthy ("no" -> yes).
+// The front-door skill splits its frontend/backend/both/neither enum into these two booleans; this is
+// the defensive net for ad-hoc callers. Unrecognized values fall back to the interface-inferred default.
+const willPublish = bool(args?.publish, false)
+const wantFrontend = bool(args?.frontend, interface_ === 'gui')
+const wantBackend = bool(args?.backend, interface_ === 'service')
 const preferDeps = args?.deps ?? 'no preference stated'
 
 const discussionBlock =
@@ -365,8 +385,8 @@ const researchThunks = researchChunks.map((chunk, i) => () =>
     `Research these candidate libraries for a new ${interface_} project targeting ${targetOS} ` +
       `(language: ${language}). For EACH, report the current stable version, any known security ` +
       `advisories/CVEs, maintenance signal (recent activity / maturity), compatibility with the target ` +
-      `runtime/OS, and the canonical docs URL. Use the find-docs / context7 skill and web search; if a ` +
-      `fact can't be confirmed, say "unknown" rather than guessing.\n\n` +
+      `runtime/OS, and the canonical docs URL. Use find-docs / context7 or web search IF AVAILABLE; if a ` +
+      `fact can't be confirmed (or no such tool is available), say "unknown" rather than guessing.\n\n` +
       `Libraries: ${chunk.length ? chunk.join(', ') : '(none named — return an empty libraries array)'}`,
     { label: `research:${i}`, phase: 'Research', model: 'haiku', schema: RESEARCH_SCHEMA },
   ),
@@ -476,7 +496,8 @@ const tasklist = await agent(
     `plan, and emit a file-by-file build plan for the scaffold. RULES: one task = one file; every file's ` +
     `estLines MUST be under ${maxLines} — if a module would exceed it, split it into multiple files. Cover ` +
     `the whole tree the layout implies (source modules + their stubs), not just the entry point. For each ` +
-    `file give path (under "${dir}"), role, the public symbols to stub AS EXACT SIGNATURES (name + typed ` +
+    `file give path (RELATIVE to "${dir}", e.g. "src/main.rs" — do NOT include "${dir}" itself or a leading ` +
+    `"./"), role, the public symbols to stub AS EXACT SIGNATURES (name + typed ` +
     "params + return type, e.g. `getUser(id: string): Promise<User>`) so importing files transcribe rather " +
     `than guess, an estLines estimate, and dependsOn (other paths it imports). List the adjustments you ` +
     `ACCEPTED.\n\n${chosenBlock}\n\n` +
@@ -488,9 +509,18 @@ if (!files.length) return { error: 'tasklist stage returned no files to build', 
 // Pure-script admission of the plan's PATHS before any parallel worker claims one: a traversal/absolute
 // path would write outside ${dir}, a duplicate would put two workers on the same file (a real write race
 // the "distinct path per worker" assumption relies on). Cheaper and more reliable than asking an agent.
+const dirPrefix = String(dir).replace(/^\.\//, '').replace(/\/+$/, '') + '/'
 const badPaths = files
   .map((f) => f.path)
-  .filter((p) => p.startsWith('/') || p.includes('..') || p.endsWith('/') || !/^[A-Za-z0-9._/@+-]+$/.test(p))
+  .filter(
+    (p) =>
+      p.startsWith('/') ||
+      p.startsWith('./') ||
+      p.startsWith(dirPrefix) || // path must be relative to dir, not include dir itself
+      p.includes('..') ||
+      p.endsWith('/') ||
+      !/^[A-Za-z0-9._/@+-]+$/.test(p),
+  )
 const dupePaths = files.map((f) => f.path).filter((p, i, all) => all.indexOf(p) !== i)
 if (badPaths.length || dupePaths.length) {
   return { error: 'invalid tasklist paths', badPaths, dupePaths: [...new Set(dupePaths)], brief, dir, written: false }
@@ -527,7 +557,8 @@ if (skeleton?.status !== 'created') {
 // Barrier 1: one worker per file, each owns a DISTINCT path (validated above) -> no write race.
 const fileStubThunks = files.map((f) => () =>
   agent(
-    `The skeleton exists under "${dir}". Create EXACTLY this one file and nothing else: "${f.path}".\n` +
+    `The skeleton exists under "${dir}". Create EXACTLY this one file and nothing else, at this path ` +
+      `RELATIVE to "${dir}" (i.e. "${dir}/${f.path}"): "${f.path}".\n` +
       `Role: ${f.role}\nPublic symbols to stub (use these EXACT signatures): ${(f.publicSymbols ?? []).join(', ') || '(as the role implies)'}\n` +
       `Imports it depends on: ${(f.dependsOn ?? []).join(', ') || '(none)'}\n` +
       `Exact signatures of the symbols in those imports — transcribe, do NOT invent names:\n${
@@ -617,7 +648,8 @@ let verify
 if (runVerify) {
   phase('Verify')
   verify = await agent(
-    `Run the success check against the scaffold in "${dir}" and report results. Run, in order, capturing ` +
+    `Run the success check against the scaffold in "${dir}". FIRST cd into "${dir}"; run ONLY the commands ` +
+      `listed below and nothing outside that directory. Report results. Run, in order, capturing ` +
       `each outcome: install ("${decision.commands.install}"), build ("${decision.commands.build ?? ''}"), ` +
       `test ("${decision.commands.test}"). Run ONLY steps with a non-empty command; mark any blank step ` +
       `"skip" and do NOT invent a command for it. Success criteria: ${frame.successCheck}. Set passed=true ` +
