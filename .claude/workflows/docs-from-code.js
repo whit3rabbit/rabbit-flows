@@ -62,8 +62,8 @@ export const meta = {
     'Document a whole codebase into a Starlight site using an Eatahorse board as a durable resumable ledger: enumerate source, detect generator lanes, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back.',
   phases: [
     { title: 'Enumerate' },
-    { title: 'Detect', detail: 'detect repo signals and map to applicable generator lanes: OpenAPI, TypeDoc, Sphinx/pdoc, rustdoc, go doc, CLI --help' },
-    { title: 'Generate', detail: 'fan out one worker per active lane: run generator or capture --help, write reference pages to disk with source provenance' },
+    { title: 'Detect', detail: 'classify the gitignore-respecting tracked file set against language rules: 12 languages plus OpenAPI and CLI --help cross-cutting lanes' },
+    { title: 'Generate', detail: 'fan out one worker per active lane: run generator or extract public API from source, write reference pages, report undocumented public symbols' },
     { title: 'Plan' },
     { title: 'Seed' },
     { title: 'Author' },
@@ -1224,6 +1224,35 @@ const authoringContract = fwEntry.contract
      `Never invent config keys, frontmatter, or component syntax from memory. Mark anything you are unsure of.`
 if (!fwEntry.contract) log(`framework="${framework}" has no inline contract; authors work from current ${framework} docs. Starlight is the first-class path.`)
 
+// --- LANG_RULES — table-driven, language-general lane detection + generation ---------------------
+// One entry per language; the Detect stage classifies the gitignore-respecting tracked file set
+// against `signals` (manifest/config files) + `ext` (source extensions), and the Generate stage
+// injects `docComment` / `publicApi` / `generator` into ONE generic data-driven lane contract (no
+// per-language bespoke block). `generator: null` means there is no doc tool — author from a source parse.
+// Sliced per agent: each lane worker is handed only its own language's rule, never the whole table.
+// The two cross-cutting lanes (openapi spec-derived, cli-help entrypoint capture) are NOT languages and
+// stay out of this table — they keep their bespoke LANE_CONTRACTS in the Generate stage.
+const LANG_RULES = {
+  typescript: { signals: ['tsconfig.json'], ext: ['.ts', '.tsx', '.mts', '.cts'], docComment: 'JSDoc /** */ above declarations', publicApi: '`export`ed symbols not marked @internal', generator: 'npx typedoc --json', pageGroup: 'TypeScript Reference' },
+  javascript: { signals: ['package.json'], ext: ['.js', '.mjs', '.cjs', '.jsx'], docComment: 'JSDoc /** */', publicApi: '`export` / `module.exports`', generator: null, pageGroup: 'JavaScript Reference' },
+  python: { signals: ['pyproject.toml', 'setup.py', 'setup.cfg', 'conf.py'], ext: ['.py'], docComment: 'triple-quoted docstrings (module/class/function)', publicApi: 'names in `__all__`, else names without a leading underscore', generator: 'python -m pdoc', pageGroup: 'Python Reference' },
+  rust: { signals: ['Cargo.toml'], ext: ['.rs'], docComment: '/// outer and //! inner doc comments', publicApi: 'items marked `pub`', generator: 'cargo doc --no-deps', pageGroup: 'Rust API Reference' },
+  go: { signals: ['go.mod'], ext: ['.go'], docComment: '// lines immediately above a declaration', publicApi: 'exported identifiers (Capitalized)', generator: 'go doc -all ./...', pageGroup: 'Go Reference' },
+  java: { signals: ['pom.xml', 'build.gradle'], ext: ['.java'], docComment: 'Javadoc /** */', publicApi: '`public` types/members', generator: 'javadoc', pageGroup: 'Java Reference' },
+  csharp: { signals: ['*.csproj', '*.sln'], ext: ['.cs'], docComment: 'XML doc comments ///', publicApi: '`public` types/members', generator: 'docfx', pageGroup: 'C# Reference' },
+  ruby: { signals: ['Gemfile', '*.gemspec'], ext: ['.rb'], docComment: 'YARD # comment blocks above defs', publicApi: 'public methods (before a `private`)', generator: 'yard', pageGroup: 'Ruby Reference' },
+  php: { signals: ['composer.json'], ext: ['.php'], docComment: 'phpDoc /** */', publicApi: '`public` (or unmodified) methods/functions', generator: 'phpDocumentor', pageGroup: 'PHP Reference' },
+  cpp: { signals: ['CMakeLists.txt', 'Doxyfile'], ext: ['.h', '.hpp', '.hh', '.cpp', '.cc', '.cxx'], docComment: 'Doxygen /** */, ///, or //!', publicApi: 'declarations in public headers / after `public:`', generator: 'doxygen', pageGroup: 'C++ Reference' },
+  kotlin: { signals: ['build.gradle.kts', 'settings.gradle.kts'], ext: ['.kt'], docComment: 'KDoc /** */', publicApi: '`public` (the default visibility)', generator: 'dokka', pageGroup: 'Kotlin Reference' },
+  swift: { signals: ['Package.swift'], ext: ['.swift'], docComment: 'DocC /// or /** */', publicApi: '`public` / `open`', generator: 'swift doc', pageGroup: 'Swift Reference' },
+}
+// Cross-cutting (non-language) lanes, kept out of LANG_RULES; detection signals only.
+const XCUT_RULES = {
+  openapi: { signalGlobs: ['openapi.json', 'openapi.yaml', 'openapi.yml', 'swagger.json', 'swagger.yaml', 'swagger.yml', '*api*.yaml', '*api*.json'], generator: 'OpenAPI/Swagger spec; reference pages from spec paths and schemas', pageGroup: 'API Reference' },
+  'cli-help': { entrypoints: ['package.json "bin"', 'main.py', 'cli.py', '__main__.py', 'cmd/*', 'main.rs', 'bin/*'], generator: 'CLI --help capture; reference pages from help text', pageGroup: 'CLI Reference' },
+}
+const LANG_IDS = Object.keys(LANG_RULES)
+
 // --- schemas -----------------------------------------------------------------------------------
 const ENUM_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['files', 'total', 'truncated'],
@@ -1339,6 +1368,27 @@ const GENERATE_SCHEMA = {
         },
       },
     },
+    coverage: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['documented', 'undocumented'],
+      description: 'doc-coverage for this lane: public symbols WITH vs WITHOUT a doc comment. Optional; language lanes should report it.',
+      properties: {
+        documented: { type: 'integer', description: 'count of public symbols that DO have a doc comment' },
+        undocumented: {
+          type: 'array',
+          description: 'public symbols that LACK a doc comment',
+          items: {
+            type: 'object', required: ['symbol', 'file', 'kind'], additionalProperties: false,
+            properties: {
+              symbol: { type: 'string', description: 'the public symbol name, e.g. parseConfig' },
+              file: { type: 'string', description: 'repo-relative source file the symbol is declared in' },
+              kind: { type: 'string', description: 'symbol kind: function, class, method, type, const, etc.' },
+            },
+          },
+        },
+      },
+    },
   },
 }
 
@@ -1356,10 +1406,10 @@ const DETECT_SCHEMA = {
         required: ['id', 'applicable', 'signal', 'generator', 'pageGroup'],
         additionalProperties: false,
         properties: {
-          id: { type: 'string', description: 'lane identifier, e.g. openapi, typedoc, sphinx, rustdoc, go-doc, cli-help' },
-          applicable: { type: 'boolean', description: 'true when the signal file(s) were found' },
+          id: { type: 'string', description: 'lane id: a language id (typescript, javascript, python, rust, go, java, csharp, ruby, php, cpp, kotlin, swift) or a cross-cutting id (openapi, cli-help)' },
+          applicable: { type: 'boolean', description: 'true when the signal file(s) OR 1+ source files of the language ext were found in the tracked set' },
           signal: { type: 'string', description: 'the file or pattern that triggered detection, or empty string' },
-          generator: { type: 'string', description: 'tooling command or approach, e.g. "openapi-generator / swagger codegen"' },
+          generator: { type: 'string', description: 'tooling command or approach for this lane' },
           pageGroup: { type: 'string', description: 'suggested sidebar group label for generated reference pages' },
           notes: { type: 'string', description: 'any relevant details, e.g. multiple spec files found, or generator not installed' },
         },
@@ -1398,8 +1448,10 @@ const CARD_MD =
 // 1. Enumerate — haiku, mechanical. List the SOURCE files to document. Script can't touch the FS.
 phase('Enumerate')
 const enumed = await agent(
-  `List the source files to document under "${root}". Prefer \`git ls-files\` when "${root}" is a git repo, ` +
-    `else \`find\`. SKIP .git, node_modules, dist/build, vendored, lockfiles, binary/media, and SKIP the docs ` +
+  `List the source files to document under "${root}". ALWAYS operate ON "${root}", never the current working ` +
+    `directory: use \`git -C "${root}" ls-files\` when "${root}" is a git repo, else \`find "${root}" -type f\`. ` +
+    `(Do NOT run a bare \`git ls-files\` — that lists the CWD, which may be a different repo.) ` +
+    `SKIP .git, node_modules, dist/build, vendored, lockfiles, binary/media, and SKIP the docs ` +
     `output dir "${outDir}" and the board dir "${board}" (do not document generated output). ` +
     `${include ? `INCLUDE only paths matching: ${include}. ` : ''}${exclude ? `EXCLUDE paths matching: ${exclude}. ` : ''}` +
     `Return repo-relative paths. Cap the list at ${ENUM_CAP}; if more exist set truncated=true and report the true total.`,
@@ -1414,21 +1466,44 @@ if (enumed.truncated) log(`enumerate: capped at ${files.length} of ${enumed.tota
 //    knows which reference sections can be generated from tooling (backed by real tool output) vs authored
 //    from prose alone.
 phase('Detect')
+// Build the table-driven, gitignore-honoring detection prompt from LANG_RULES + XCUT_RULES.
+// The classification is driven off the ALREADY-ENUMERATED `files` (which came from
+// `git -C root ls-files`, so gitignored paths — node_modules, vendor, build output — are already
+// excluded). The agent may ALSO run `git -C root ls-files` directly to re-confirm, but NEVER a raw
+// recursive `find` that would walk ignored dirs. A language lane is applicable if any of its signal
+// files OR 1+ source files of its ext appear in the tracked set.
+const langTableRows = LANG_IDS.map((id) => {
+  const r = LANG_RULES[id]
+  return `| ${id} | ${r.signals.join(', ')} | ${r.ext.join(', ')} | ${r.generator ?? '(none — source-parse)'} |`
+}).join('\n')
+const xcutRows =
+  `| openapi | ${XCUT_RULES.openapi.signalGlobs.join(', ')} (an *api*.yaml/json counts ONLY if its root has \`openapi:\`/\`swagger:\`) | ${XCUT_RULES.openapi.generator} |\n` +
+  `| cli-help | entrypoints: ${XCUT_RULES['cli-help'].entrypoints.join(', ')} | ${XCUT_RULES['cli-help'].generator} |`
 const detection = await agent(
-  `You are a documentation-tooling detector. Given the list of source files below, identify which reference-doc generator lanes apply to this repo.\n\n` +
-  `Source files (${files.length}):\n${JSON.stringify(files)}\n\n` +
-  `For each candidate lane, check whether the repo contains the signal file(s). READ the signal file(s) to confirm content when found:\n\n` +
-  `| Lane ID | Signal files to look for | Generator |\n` +
-  `|---------|-------------------------|-----------|\n` +
-  `| openapi | openapi.json, openapi.yaml, openapi.yml, swagger.json, swagger.yaml, swagger.yml, any *api*.yaml or *api*.json with "openapi:" or "swagger:" at root | OpenAPI/Swagger spec; reference pages from spec paths and schemas |\n` +
-  `| typedoc | tsconfig.json (TypeScript project) | TypeDoc; reference pages from exported TS types and JSDoc |\n` +
-  `| sphinx | docs/conf.py, conf.py, or pyproject.toml/setup.cfg/setup.py with Sphinx dep | Sphinx / mkdocstrings / pdoc; reference pages from Python module docstrings |\n` +
-  `| rustdoc | Cargo.toml | rustdoc; reference pages from Rust doc comments (///) |\n` +
-  `| go-doc | go.mod | go doc; reference pages from Go package docs |\n` +
-  `| cli-help | any file named main.py, cli.py, __main__.py, main.go, cmd/*, main.rs, bin/*.js, bin/*.ts, or CLI entrypoints hinted by package.json "bin" field | CLI --help capture; reference pages from help text |\n\n` +
-  `For each applicable lane (signal found), READ the signal file to confirm it is real (not a false-positive match) and note relevant details.\n` +
-  `Return all six lanes with applicable=true/false. For applicable lanes, set signal to the matched file path and notes to any relevant detail.\n` +
-  `Also return signals: the flat list of all signal files actually found.`,
+  `You are a documentation-tooling detector. Identify which reference-doc generator lanes apply to the repo at "${root}".\n\n` +
+  `GITIGNORE DISCIPLINE: classify the TRACKED file set only. The list below comes from \`git -C "${root}" ls-files\`, ` +
+  `so gitignored paths (node_modules, vendor/, dist/build) are ALREADY excluded — do NOT run a raw recursive ` +
+  `\`find\` that would walk ignored directories. If you want to re-confirm signals, run \`git -C "${root}" ls-files\` ` +
+  `directly (still gitignore-respecting); never a bare \`find "${root}"\`.\n\n` +
+  `Tracked source files (${files.length}):\n${JSON.stringify(files)}\n\n` +
+  `LANGUAGE LANES — a lane is applicable if ANY of its signal files OR 1+ source files of its extension(s) appear ` +
+  `in the tracked set:\n\n` +
+  `| Lane ID | Signal files | Source extensions | Generator |\n` +
+  `|---------|--------------|-------------------|-----------|\n` +
+  `${langTableRows}\n\n` +
+  `DISAMBIGUATION: javascript and typescript share package.json. A repo with tsconfig.json is a typescript lane; ` +
+  `treat it as javascript ONLY if there is a package.json and NO tsconfig.json. Signal globs like \`*.csproj\`/\`*.gemspec\` ` +
+  `match by suffix anywhere in the tracked set.\n\n` +
+  `CROSS-CUTTING LANES (not languages):\n\n` +
+  `| Lane ID | Signal | Generator |\n` +
+  `|---------|--------|-----------|\n` +
+  `${xcutRows}\n\n` +
+  `For each applicable lane, READ the signal file (or a representative source file) to confirm it is real, set ` +
+  `signal to the matched path, and pageGroup to a sensible sidebar group. For an openapi candidate, READ the ` +
+  `matched *api*.yaml/json and keep it ONLY if its root has \`openapi:\` or \`swagger:\`.\n` +
+  `Return EVERY lane (all ${LANG_IDS.length} languages + openapi + cli-help) with applicable=true/false, so the ` +
+  `Plan agent knows what was checked. Also return signals: the flat list of all signal/source files that triggered ` +
+  `an applicable lane.`,
   { label: 'detect', model: 'haiku', schema: DETECT_SCHEMA },
 )
 const activeLanes = (detection?.lanes ?? []).filter((l) => l.applicable)
@@ -1447,20 +1522,28 @@ if (activeLanes.length) {
 //     planner knows to include a conventionally authored reference page instead.
 //
 //     Per-lane worker contracts (inline; workflow stages cannot auto-load skills):
-//     - openapi: read the spec file, extract paths+schemas+descriptions, write endpoint reference pages.
-//     - typedoc: run `npx typedoc --json` (or parse tsconfig for exported types), write type reference.
-//     - sphinx/pdoc: run `python -m pdoc --output-dir` or read docstrings, write module reference.
-//     - rustdoc: run `cargo doc --no-deps` (or read doc comments from source), write crate reference.
-//     - go-doc: run `go doc -all ./...` per package, write package reference.
-//     - cli-help: run the CLI with --help (and sub-commands), write command reference.
+//     - openapi (cross-cutting, bespoke): read the spec file, extract paths+schemas+descriptions, write endpoint pages.
+//     - cli-help (cross-cutting, bespoke): run the CLI with --help (and sub-commands), write command reference.
+//     - all 12 LANGUAGE lanes (typescript, python, rust, go, java, csharp, ...): ONE generic, DATA-DRIVEN
+//       contract — the matched LANG_RULES entry's docComment / publicApi / generator are injected into the
+//       prompt, so a single contract documents any language (run the generator if available, else READ the
+//       source files of the language's extensions and extract publicApi symbols with their docComment).
 //
-//     Model: haiku for simple captures (cli-help, go-doc); sonnet for spec parsing (openapi, typedoc,
-//     sphinx, rustdoc) where the output demands more judgment. (model-routing.md: cheapest that fits.)
+//     Doc-coverage: every LANGUAGE lane also reports public symbols that LACK a doc comment, returned in
+//     coverage:{documented, undocumented[]}. The Generate phase aggregates undocumented symbols across lanes
+//     and writes ONE documentation-gaps reference page after the parallel fan-out (see below).
+//
+//     Sliced per agent: each language worker gets ONLY its own language's rules, not the whole table.
+//     Model: haiku for simple captures / source-parse extraction (cli-help, go, and language lanes whose
+//     generator is null or a plain doc tool); sonnet for spec parsing (openapi, typescript/typedoc, python,
+//     rust) where the output demands more judgment. (model-routing.md: cheapest that fits.)
 //     No CLI (eatahorse) access: workers only write page files + return structured metadata.
 phase('Generate')
 let generatedPages = []    // pages produced by lane workers; merged into Plan as pre-authored entries
+let docGaps = []           // aggregated undocumented public symbols across all language lanes (doc-coverage)
 if (activeLanes.length && !explicitPages) {
-  // Per-lane prompt fragments (sliced: each worker receives only its own contract).
+  // Bespoke per-lane contracts for the CROSS-CUTTING (non-language) lanes only. Language lanes use the
+  // generic data-driven contract built from LANG_RULES below (sliced per agent).
   const LANE_CONTRACTS = {
     openapi: `
 OPENAPI LANE WORKER CONTRACT:
@@ -1474,54 +1557,6 @@ OPENAPI LANE WORKER CONTRACT:
    Content MUST come from the spec — copy summaries/descriptions verbatim, list parameters with types, show example request/response from the spec's examples field if present.
    Tag each page with a comment: <!-- generated: openapi lane, signal: <signal_file> -->
 5. Return the list of pages written (path, title, group="API Reference", brief, scope=[signal_file]).
-`,
-    typedoc: `
-TYPEDOC LANE WORKER CONTRACT:
-1. Attempt: run \`npx typedoc --json typedoc-out.json\` (or \`npx typedoc --out /tmp/typedoc-html\`) from "${root}".
-   If typedoc is not installed or fails, fall back to: READ tsconfig.json to find entry points, then READ
-   each entry-point .ts/.tsx file and extract exported types, interfaces, functions, and their JSDoc comments.
-2. Produce 1-3 reference page(s) under "${outDir}/src/content/docs/reference/":
-   - One page per major export group (class, interface, function namespace) if the API is large; one combined page otherwise.
-3. Content MUST come from the actual exports/JSDoc found — no invented signatures.
-   Tag each page: <!-- generated: typedoc lane, signal: tsconfig.json -->
-4. Return the list of pages written (path, title, group="API Reference", brief, scope=[tsconfig.json + entry files read]).
-`,
-    sphinx: `
-SPHINX / PDOC LANE WORKER CONTRACT:
-1. Attempt: run \`python -m pdoc --output-dir /tmp/pdoc-out <module>\` where <module> is the top-level package name
-   (infer from pyproject.toml / setup.cfg / setup.py). If pdoc is not available, try \`python -m pydoc -w <module>\`.
-   On failure, fall back to: READ the signal file (conf.py or pyproject.toml) for the documented package name,
-   then READ each .py file under the package and extract docstrings (module, class, function level).
-2. Produce reference page(s) under "${outDir}/src/content/docs/reference/":
-   - One page per top-level module/subpackage. Merge trivial single-function modules.
-3. Content MUST come from the actual docstrings/pydoc output found.
-   Tag each page: <!-- generated: sphinx/pdoc lane, signal: <signal_file> -->
-4. Return the list of pages written (path, title, group="Python Reference", brief, scope=[signal_file + .py files read]).
-`,
-    rustdoc: `
-RUSTDOC LANE WORKER CONTRACT:
-1. Attempt: run \`cargo doc --no-deps --quiet 2>&1\` from "${root}" (or the Cargo.toml directory).
-   If successful, run \`cargo doc --no-deps --document-private-items --message-format=json 2>/dev/null\` or read
-   the generated JSON output under target/doc/ if available.
-   On failure, fall back to: READ Cargo.toml for crate name + description, then READ each .rs source file under
-   src/ and extract doc comments (/// and //! lines) for public items.
-2. Produce reference page(s) under "${outDir}/src/content/docs/reference/":
-   - A crate overview page (from lib.rs or crate-level //! comments).
-   - One page per public module if the crate has multiple modules with doc content.
-3. Content MUST come from the actual doc comments / cargo doc output found — list pub structs/enums/fns with their signatures and doc text.
-   Tag each page: <!-- generated: rustdoc lane, signal: Cargo.toml -->
-4. Return pages written (path, title, group="Rust API Reference", brief, scope=[Cargo.toml + .rs files read]).
-`,
-    'go-doc': `
-GO DOC LANE WORKER CONTRACT:
-1. Attempt: run \`go doc -all ./...\` from "${root}" (or go.mod directory). If go is not available, fall back to:
-   READ go.mod for the module name, then READ each .go file under the module and extract exported identifiers
-   with their doc comments (lines starting with // before a func/type/var/const declaration).
-2. Produce reference page(s) under "${outDir}/src/content/docs/reference/":
-   - One page per Go package. Merge packages with <3 exported symbols.
-3. Content MUST come from the actual go doc output / doc comments found — list exported types, funcs, consts with signatures and docs.
-   Tag each page: <!-- generated: go-doc lane, signal: go.mod -->
-4. Return pages written (path, title, group="Go Reference", brief, scope=[go.mod + .go files read]).
 `,
     'cli-help': `
 CLI HELP LANE WORKER CONTRACT:
@@ -1540,15 +1575,44 @@ CLI HELP LANE WORKER CONTRACT:
 `,
   }
 
+  // Build the GENERIC, DATA-DRIVEN language-lane contract from a matched LANG_RULES entry. ONE template
+  // documents any of the 12 languages: run the generator if available, else READ the source files of the
+  // language's extensions and extract `publicApi` symbols with their `docComment`. The worker is sliced per
+  // agent — it sees only THIS language's rule, never the whole table.
+  const langContract = (id, rule) => `
+LANGUAGE LANE WORKER CONTRACT (lane: ${id}). You document ONE language using ONLY its own rules:
+  - Doc-comment convention: ${rule.docComment}
+  - Public API surface:     ${rule.publicApi}
+  - Generator tool:         ${rule.generator ?? '(none — there is no doc generator; extract directly from source)'}
+  - Source extensions:      ${rule.ext.join(', ')}
+Steps:
+1. ${rule.generator
+      ? `Attempt the generator from "${root}": \`${rule.generator}\`. If it is not installed or fails, FALL BACK to a source parse (step 2).`
+      : `There is no doc generator for this language — go straight to the source parse (step 2).`}
+2. SOURCE PARSE (the grounded path): READ the tracked source files with extensions ${rule.ext.join(', ')}, identify the
+   PUBLIC API (${rule.publicApi}), and for each public symbol collect its doc comment (${rule.docComment}).
+3. Write 1-3 reference page(s) under "${outDir}/src/content/docs/reference/", grouped by module/namespace; merge trivial
+   single-symbol modules. List each public symbol with its signature and its doc text. NEVER invent a signature.
+   Tag each page: <!-- generated: ${id} lane, signal: ${'${signal}'} -->
+4. DOC-COVERAGE: also report public symbols that LACK a doc comment. Return coverage:{documented:<count with a doc comment>,
+   undocumented:[{symbol, file, kind}]} listing every public symbol that has NO doc comment.
+5. Return the pages written (path, title, group="${rule.pageGroup}", brief, scope=[the source files you read]).
+`
+
   const laneResults = await parallel(
     activeLanes.map((lane) => () => {
-      const contract = LANE_CONTRACTS[lane.id] ?? `
+      const rule = LANG_RULES[lane.id]        // sliced: only this lane's rule is injected
+      const contract = LANE_CONTRACTS[lane.id]
+        ?? (rule ? langContract(lane.id, rule).replace('${signal}', lane.signal) : `
 GENERIC GENERATOR LANE WORKER CONTRACT (lane: ${lane.id}):
 Signal file: ${lane.signal}. Generator approach: ${lane.generator}.
 Read the signal file, extract any API/command/schema documentation it describes, and write 1-2 reference
 pages under "${outDir}/src/content/docs/reference/". Content MUST come from the signal file — no invented API.
 Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
-`
+`)
+      // Model: sonnet where parsing demands judgment (openapi spec, the 4 richer language parses);
+      // haiku for plain captures + the remaining language source-parses (mechanical extraction).
+      const sonnetLanes = ['openapi', 'typescript', 'python', 'rust', 'java', 'csharp']
       return agent(
         `You are a reference-documentation generator for the "${lane.id}" lane.\n` +
         `Repository root: "${root}"\n` +
@@ -1565,7 +1629,7 @@ Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
         `- If the generator tool is not installed and the fallback source read also fails (empty/unreadable), set succeeded=false with a clear failureReason.\n` +
         `- On any error: still return a valid JSON result with succeeded=false, pages=[], failureReason explaining why.\n` +
         `Return your result as JSON matching the schema.`,
-        { label: `generate:${lane.id}`, phase: 'Generate', model: ['openapi', 'typedoc', 'sphinx', 'rustdoc'].includes(lane.id) ? 'sonnet' : 'haiku', schema: GENERATE_SCHEMA },
+        { label: `generate:${lane.id}`, phase: 'Generate', model: sonnetLanes.includes(lane.id) ? 'sonnet' : 'haiku', schema: GENERATE_SCHEMA },
       )
     }),
   )
@@ -1581,13 +1645,56 @@ Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
           diataxisType: 'reference',
           template: 'consistent, exhaustive entries grouped or alphabetised, scannable; no narrative, no opinion',
           _generated: true,    // flag: skip prose-authoring loop, go straight to quality gate
+          _laneId: result.laneId,   // which lane produced this page (for the failedLanes check in Plan)
         })),
       )
     } else {
       log(`generate:${result.laneId}: failed (${result.failureReason ?? 'unknown'}); planner will add a prose-authored fallback`)
     }
+    // Doc-coverage: aggregate undocumented public symbols regardless of page-write success.
+    for (const u of result.coverage?.undocumented ?? []) {
+      if (u?.symbol && u?.file) docGaps.push({ ...u, lane: result.laneId })
+    }
   }
   if (generatedPages.length) log(`generate: ${generatedPages.length} pre-authored reference page(s) from lane workers`)
+  if (docGaps.length) log(`doc-coverage: ${docGaps.length} undocumented public symbol(s) across lanes`)
+
+  // DOC-COVERAGE PAGE: if any public symbol lacks a doc comment, write ONE reference page listing the gaps
+  // grouped by file. The page joins generatedPages as a pre-authored entry so it flows through Seed + the
+  // quality gate like any other generated reference page. Zero gaps -> skip the page (still reported as 0).
+  if (docGaps.length) {
+    const gapsPath = `src/content/docs/reference/documentation-gaps.md`   // plain markdown reference; no components needed
+    // Group by file for a stable, scannable layout.
+    const byFile = {}
+    for (const g of docGaps) (byFile[g.file] ??= []).push(g)
+    const gapBody =
+      `---\ntitle: Documentation gaps\ndescription: Public API symbols that lack a doc comment.\n---\n` +
+      `<!-- generated: doc-coverage, ${docGaps.length} undocumented public symbol(s) -->\n\n` +
+      `These public API symbols were found WITHOUT a doc comment during reference generation. Documenting ` +
+      `them (in the source) closes the gap.\n\n` +
+      Object.keys(byFile).sort().map((file) =>
+        `## \`${file}\`\n\n` +
+        byFile[file].map((g) => `- \`${g.symbol}\` (${g.kind})`).join('\n')
+      ).join('\n\n') + '\n'
+    const wrote = await agent(
+      `Write EXACTLY this documentation-gaps reference page to "${outDir}/${gapsPath}" using the Write tool ` +
+      `(create parent dirs with Bash if needed). Write the content VERBATIM — do not add, reword, or invent. ` +
+      `Then return {written:true}. Content:\n\n${gapBody}`,
+      { label: 'doc-coverage-page', phase: 'Generate', model: 'haiku',
+        schema: { type: 'object', required: ['written'], additionalProperties: false, properties: { written: { type: 'boolean' } } } },
+    )
+    if (wrote?.written) {
+      generatedPages.push({
+        path: gapsPath, title: 'Documentation gaps', group: 'Documentation gaps',
+        brief: `${docGaps.length} public symbol(s) without a doc comment, grouped by file`,
+        scope: [...new Set(docGaps.map((g) => g.file))].slice(0, 12),
+        kind: 'reference', diataxisType: 'reference',
+        template: 'consistent, exhaustive entries grouped or alphabetised, scannable; no narrative, no opinion',
+        _generated: true,
+      })
+      log(`doc-coverage: wrote ${gapsPath} (${docGaps.length} gap(s))`)
+    }
+  }
 }
 
 // 3. Plan — strong model (inherits session; this is the decompose stage where a mistake propagates). One
@@ -1601,7 +1708,8 @@ if (!pages) {
   // if none apply, the block is omitted entirely (no token cost).
   // Generated pages are listed so the planner knows NOT to re-plan those pages from prose.
   const generatedPathSet = new Set(generatedPages.map((p) => p.path))
-  const failedLanes = activeLanes.filter((l) => !generatedPages.some((p) => p._generated && p.scope?.includes(l.signal)))
+  const lanesWithPages = new Set(generatedPages.map((p) => p._laneId).filter(Boolean))
+  const failedLanes = activeLanes.filter((l) => !lanesWithPages.has(l.id))
   const lanesBlock = activeLanes.length
     ? `GENERATOR LANES DETECTED (${activeLanes.length}):\n` +
       (generatedPages.length
@@ -1885,7 +1993,9 @@ await agent(
   `Append a short dated section to the project's CLAUDE.md (create if absent; MERGE, do not clobber). Record: ` +
     `the codebase documented ("${root}"), the docs site location ("${outDir}"), how many pages were admitted ` +
     `(${admittedPages.length} of ${pages.length} planned this run${carryOver ? `, ${carryOver} left in backlog for a rerun` : ''}), ` +
-    `the board ("${board}"), and — as CONSTRAINTS so a rerun does not re-walk them — the DEFERRED pages that ` +
+    `the board ("${board}"), the doc-coverage gap count (${docGaps.length} public symbol(s) found without a doc ` +
+    `comment${docGaps.length ? `; see ${outDir}/src/content/docs/reference/documentation-gaps.md` : ''}), and — as ` +
+    `CONSTRAINTS so a rerun does not re-walk them — the DEFERRED pages that ` +
     `need a human brief and any source skipped. Keep it short; do not document the obvious file tree.\n\n` +
     `Deferred (needs human brief): ${JSON.stringify(deferred)}\n` +
     `stopReason="${stopReason}"; rounds=${round}; admitted page paths: ${JSON.stringify(admittedPages.map((p) => p.path))}\n` +
@@ -1903,6 +2013,7 @@ return {
   generated: generatedPages.length,
   admitted: admittedPages.length,
   deferred: deferred.length,
+  undocumentedCount: docGaps.length,
   touched: touched.size,
   carryOver,
   rounds: round,
