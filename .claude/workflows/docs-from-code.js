@@ -46,7 +46,11 @@
 //     config where supported (Astro base, Docusaurus baseUrl, etc.); skipped with a log note elsewhere,
 //   i18n ({defaultLocale, locales[]}, optional) — multi-locale config; mapped to each framework's i18n block,
 //   versioning ({current, versions?[]}, optional) — version label; mapped where supported (Docusaurus, Sphinx,
-//     MkDocs/mike); noted and skipped for frameworks without built-in versioning.
+//     MkDocs/mike); noted and skipped for frameworks without built-in versioning,
+//   site (string, optional) — full production URL, e.g. 'https://docs.example.com'; set as Astro `site:` in
+//     defineConfig (Starlight auto-adds @astrojs/sitemap, which needs it; also fixes canonical URLs),
+//   verify (bool, default false) — opt-in end-to-end build gate: ensure package.json, npm install, npm run
+//     build; surfaces failure as ok:false. Off by default since it pulls deps and builds generated config.
 //
 // requires-skills: eatahorse, docs-site-builder, document-codebase, document
 //   (Bundling only. The eatahorse CLI surface is distilled INLINE as CMD/cli() and sliced per-agent; the
@@ -71,6 +75,7 @@ export const meta = {
     { title: 'Assemble' },
     { title: 'Resolve links/assets', detail: 'one Haiku batch call: copy referenced local assets to assetDir, rewrite src/href to framework-correct routes' },
     { title: 'Quality gate', detail: 'one Opus call: per-page Diataxis adherence, link/asset resolution, crosswalk no-leak; drops failures before config assembly' },
+    { title: 'Verify', detail: 'opt-in verify=true: ensure package.json, npm install, npm run build; surfaces failure as ok:false' },
     { title: 'Write-back' },
   ],
 }
@@ -161,8 +166,33 @@ export const collections = {
 };
 \`\`\`
 
-\`docsLoader()\` uses the Content Layer API (Astro v5+). For an older project that can't
-migrate collections yet, the \`legacy.collectionsBackwardsCompat\` flag preserves v4 behavior.
+\`docsLoader()\` uses the Content Layer API. \`@astrojs/starlight\` v0.40.0 peers \`astro@^6.4.5\`
+(NOT astro v5 — installing against astro ^5 fails with an ERESOLVE peer conflict). For an older
+project that can't migrate collections yet, the \`legacy.collectionsBackwardsCompat\` flag preserves
+v4 behavior.
+
+### Pinned dependencies (a buildable \`package.json\`)
+
+When scaffolding a standalone, buildable site, write a \`package.json\` with these pinned deps and
+scripts. \`sharp\` is required by Astro's default image service at build time.
+
+\`\`\`json
+{
+  "name": "docs",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.40.0",
+    "astro": "^6.4.5",
+    "sharp": "^0.33.0"
+  }
+}
+\`\`\`
 
 ### 4. Add content
 
@@ -4671,10 +4701,15 @@ const FRAMEWORKS = {
     //   add-to-existing: same as content-only but SKIP writing astro.config if one already exists.
     //   full-project: scaffold a complete buildable project (package.json + npm install) then run astro check.
     assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
-      const { basePath, i18n, versioning } = opts
+      const { basePath, i18n, versioning, site } = opts
       // basePath -> Astro top-level `base` option in defineConfig (e.g. base: '/docs').
       const baseNote = basePath
         ? `   Set base: '${basePath}' in the defineConfig() call (outside starlight()); this makes Astro prefix all routes with the subpath.\n`
+        : ''
+      // site -> Astro top-level `site` option. Starlight auto-adds @astrojs/sitemap, which requires it;
+      // also sets canonical URLs. Without it the build warns and skips the sitemap (non-fatal).
+      const siteNote = site
+        ? `   Set site: '${site}' in the defineConfig() call (top-level, alongside integrations); required for the sitemap Starlight generates and for canonical URLs.\n`
         : ''
       // i18n -> Starlight locales config (defaultLocale + locales map).
       const i18nNote = i18n
@@ -4696,7 +4731,7 @@ const FRAMEWORKS = {
           : `3. Assemble ${outDir}/astro.config.mjs: a starlight() integration whose sidebar reflects the page groups ` +
             `(${groups}). Use slug items for the admitted pages. Derive a title from the brief. ` +
             `If an astro.config already exists, update its sidebar/title rather than clobbering unrelated config.\n`) +
-        baseNote + i18nNote + versioningNote
+        baseNote + siteNote + i18nNote + versioningNote
       )
     },
     // validate: per-framework empirical build gate. buildCmd returns the shell command to run;
@@ -5477,6 +5512,12 @@ const include = args?.include ?? ''
 const exclude = args?.exclude ?? ''
 const explicitPages = Array.isArray(args?.pages) ? args.pages.filter(Boolean) : null
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
+// verify: opt-in end-to-end build gate. Default false on purpose — it pulls deps and runs a build of
+// generated config (mirrors the scaffold verify=false rejected-relitigation note). See plan.
+const verify = args?.verify === true
+// site: full production URL (e.g. 'https://docs.example.com'). Threaded into Starlight's defineConfig
+// `site:` (Starlight auto-adds @astrojs/sitemap, which needs it; also fixes canonical URLs). Null = absent.
+const site = typeof args?.site === 'string' && args.site.trim() ? args.site.trim() : null
 
 // basePath: subpath the site is served under (e.g. '/docs'). Passed to assemblePrompt for frameworks that
 // have a config key for it (Astro base, Docusaurus baseUrl, etc.). Null = not specified.
@@ -5502,6 +5543,18 @@ if (i18n) log(`i18n enabled: defaultLocale="${i18n.defaultLocale}", locales=[${i
 if (versioning) log(`versioning enabled: current="${versioning.current}"${versioning.versions.length ? `, versions=[${versioning.versions.join(', ')}]` : ''}`)
 
 if (!outDir) return { error: 'args.outDir is required (dir to write the docs site into)', got: { root, outDir } }
+
+// Page paths MUST be contentRoot-relative (e.g. "src/content/docs/x.md"), one convention across the
+// planner and the generator lanes. Lane workers sometimes echo the outDir-prefixed path they wrote
+// ("docs/src/content/docs/x.md"); left unnormalized that divergence silently breaks gather-admitted
+// (string match), the quality gate (reads `${outDir}/${path}` -> "docs/docs/..."), and config assembly.
+// Normalize at every ingestion point. See plan: "Core defect".
+const _relOutDir = String(outDir).replace(/^\.\//, '').replace(/\/+$/, '')
+const normPagePath = (pp) => {
+  let s = String(pp ?? '').replace(/^\.\//, '')
+  if (_relOutDir && s.startsWith(_relOutDir + '/')) s = s.slice(_relOutDir.length + 1)
+  return s
+}
 
 const ENUM_CAP = 5000        // hard cap on source files enumerated in one run
 const LIVE_CAP = 40          // max pages authored per ROUND; the rest stay in backlog and carry forward
@@ -5935,6 +5988,7 @@ Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
       generatedPages = generatedPages.concat(
         result.pages.map((p) => ({
           ...p,
+          path: normPagePath(p.path),   // lane workers may echo the outDir-prefixed path; force contentRoot-relative
           kind: 'reference',
           diataxisType: 'reference',
           template: 'consistent, exhaustive entries grouped or alphabetised, scannable; no narrative, no opinion',
@@ -6052,6 +6106,13 @@ if (!pages) {
     if (newGenerated.length) log(`merged ${newGenerated.length} generated page(s) not covered by the plan`)
   }
 }
+// Force ONE path convention across planner, explicit, and generated pages before anything keys off
+// p.path (Seed titles, gather-admitted, the gate's `${outDir}/${path}` read). Normalize each page object
+// EXACTLY ONCE: generated pages were already normalized at merge above, and normPagePath is NOT a fixed
+// point when outDir equals a leading path segment (e.g. outDir="src", page "src/src/..."), so applying it
+// twice could over-strip. The identity set skips the already-normalized generated objects.
+const _alreadyNormalized = new Set(generatedPages)
+for (const p of pages) if (p && !_alreadyNormalized.has(p)) p.path = normPagePath(p.path)
 if (!pages.length) return { root, outDir, error: 'planning produced no pages', written: false }
 const pageByPath = new Map(pages.map((p) => [p.path, p]))
 const generatedPathSet = new Set(generatedPages.map((p) => p.path))
@@ -6200,8 +6261,10 @@ const admittedTitles =
       { label: 'gather-admitted', model: 'haiku', schema: DONE_TITLES_SCHEMA },
     )
   )?.titles ?? []
-const admittedSet = new Set(admittedTitles)
-let admittedPages = pages.filter((p) => admittedSet.has(p.path))
+// Match on the normalized relative path so a board title written under a different convention
+// (e.g. an outDir-prefixed title) still maps to its page instead of silently dropping out.
+const admittedSet = new Set(admittedTitles.map((t) => normPagePath(t)))
+let admittedPages = pages.filter((p) => admittedSet.has(normPagePath(p.path)))
 log(`admitted ${admittedPages.length}/${pages.length} grounded page(s)`)
 
 // --- Link/asset resolution (scripted Haiku step; runs before quality gate) --------------------
@@ -6251,10 +6314,13 @@ if (admittedPages.length) {
     { label: 'docs-quality-gate', phase: 'Quality gate', model: 'opus', schema: DOCS_GATE_SCHEMA },
   )
   if (docsGate) {
-    const gateAdmitted = new Set(docsGate.admitted ?? admittedPages.map((p) => p.path))
+    // The gate is shown pages as `${outDir}/${p.path}` and echoes verdict paths with that prefix, while
+    // p.path is contentRoot-relative — normalize BOTH sides or the filter drops every page (the bug that
+    // made admitted collapse to 0 even when the gate passed pages). Mirror gather-admitted.
+    const gateAdmitted = new Set((docsGate.admitted ?? admittedPages.map((p) => p.path)).map((t) => normPagePath(t)))
     const gateDropped = docsGate.dropped ?? []
     if (gateDropped.length) log(`quality gate dropped ${gateDropped.length} page(s): ${gateDropped.join(', ')}`)
-    admittedPages = admittedPages.filter((p) => gateAdmitted.has(p.path))
+    admittedPages = admittedPages.filter((p) => gateAdmitted.has(normPagePath(p.path)))
     log(`quality gate: ${admittedPages.length} page(s) admitted for config assembly`)
   }
 }
@@ -6279,7 +6345,7 @@ const final = admittedPages.length
       `You are the finalizer for a ${framework} docs site at "${outDir}". These pages were authored and passed ` +
         `the grounding gate (admitted):\n${JSON.stringify(admittedPages.map((p) => ({ path: p.path, group: p.group, diataxisType: p.diataxisType })), null, 2)}\n\n` +
         `Do, in order:\n` +
-        fwEntry.assemblePrompt(outDir, assembleGroups, scaffoldMode, { basePath, i18n, versioning }) +
+        fwEntry.assemblePrompt(outDir, assembleGroups, scaffoldMode, { basePath, i18n, versioning, site }) +
         `4. Light IA pass: confirm each admitted page matches its declared Diátaxis type; fix tiny shape ` +
         `mismatches in place with Edit, note them in decisions. (Deep grounding already happened upstream.)\n` +
         `5. Write ${outDir}/.docs-plan.md: the admitted page list + sidebar structure + decisions + the deferred ` +
@@ -6291,6 +6357,48 @@ const final = admittedPages.length
       { label: 'assemble', model: 'sonnet', schema: FINAL_SCHEMA },
     )
   : { configWritten: false, buildResult: 'skipped: no admitted pages', summary: 'no pages were grounded this run' }
+
+// 6c. Opt-in build verifier (verify=true) — strengthen the assemble step's "only if already buildable" check
+//     into a real end-to-end install+build. Default OFF: it pulls deps and builds generated config (same
+//     opt-in stance as the scaffold workflow's verify=false). Catches stale dep pins (ERESOLVE) and config
+//     syntax that the LLM gates miss. Only meaningful when config was actually written.
+let verified = null
+let verifyResult = null
+// Require a CONFIRMED config write (=== true), not "not-false": if the finalizer agent died, `final` is
+// null and `final?.configWritten !== false` would be true, sending the verifier to build a site whose
+// config was never assembled — failing for a reason unrelated to deps and masking the finalizer death.
+if (verify && admittedPages.length && final?.configWritten === true) {
+  phase('Verify')
+  verifyResult = await agent(
+    `You are the build verifier for the ${framework} docs site at "${outDir}". Make it build end-to-end:\n` +
+      `1. Ensure "${outDir}/package.json" exists with the pinned dependencies AND scripts (dev/build/preview) ` +
+      `from the authoring contract. Create it if missing; if it exists, only add what is missing — do NOT clobber.\n` +
+      `2. Run \`npm install --prefix "${outDir}"\`. If it fails with a peer/ERESOLVE conflict, REPORT the exact ` +
+      `conflict in buildResult — do NOT retry with --force or --legacy-peer-deps (that hides a real version bug).\n` +
+      `3. Build: \`npm run build --prefix "${outDir}"\`.\n` +
+      `4. Return verified=true ONLY if BOTH install and build succeed. On any failure set verified=false and put ` +
+      `the first ~15 lines of the actual error in buildResult. Never edit page content to force a green build.\n\n` +
+      `AUTHORING CONTRACT\n${authoringContract}`,
+    { label: 'verify', model: 'sonnet', schema: { type: 'object', properties: { verified: { type: 'boolean' }, buildResult: { type: 'string' } }, required: ['verified', 'buildResult'] } },
+  )
+  // Distinguish a genuine build failure (verifyResult.verified === false) from a dead verify agent
+  // (verifyResult === null): the latter is UNKNOWN, not "failed" — don't fail the whole run on a
+  // transient agent death, and don't let buildResult contradict a forced-false verdict.
+  verified = verifyResult ? (verifyResult.verified ?? false) : null
+  if (verifyResult == null) log('verify: agent returned nothing — build status UNKNOWN (not a failure)')
+  else log(verified ? 'verify: build OK' : `verify: build FAILED — ${verifyResult?.buildResult ?? 'no detail'}`)
+}
+
+// Loud failure: pages were planned/authored but none reached config assembly. The run wrote no usable
+// config; it MUST NOT read as success. (Pre-fix, this returned written:true silently.)
+const noConfigDespitePages = pages.length > 0 && admittedPages.length === 0
+if (noConfigDespitePages)
+  log(`ERROR: ${pages.length} page(s) planned but 0 admitted — NO config written, site is not buildable. ` +
+      `Check the quality gate verdicts and page-path conventions.`)
+const ok = !noConfigDespitePages && verified !== false
+const runError = noConfigDespitePages ? 'no pages admitted — config not written'
+  : verified === false ? 'build verification failed'
+  : null
 
 // 7. Write-back — sonnet. Persist a short CLAUDE.md section + deferred/skipped constraints so a rerun and a
 //    human know what was covered and what still needs a brief.
@@ -6330,7 +6438,10 @@ return {
   detectedLanes: activeLanes.map((l) => l.id),
   generatedLanes: generatedPages.length ? [...new Set(generatedPages.flatMap((p) => p.scope ?? []))].slice(0, 10) : [],
   configWritten: final?.configWritten ?? false,
-  buildResult: final?.buildResult,
+  buildResult: verifyResult?.buildResult ?? final?.buildResult,
+  verified,
   planPath: final?.planPath,
   written: true,
+  ok,
+  error: runError,
 }

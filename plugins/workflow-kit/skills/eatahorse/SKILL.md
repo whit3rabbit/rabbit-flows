@@ -1,6 +1,6 @@
 ---
 name: eatahorse
-description: Maintains lightweight one-bite-at-a-time Kanban boards using .eatahorse JSON state and markdown task cards. Use for planning, tracking, todos, Kanban, and bite-sized work.
+description: Maintains lightweight one-bite-at-a-time Kanban boards using .eatahorse JSON state and markdown task cards. Use for planning, tracking, todos, Kanban, and bite-sized work. Also the front door that decomposes a goal into a board and, opt-in, works it unattended via the eatahorse workflow; it gathers and validates the workflow args before launching.
 dependencies:
   - python>=3.9
 hooks:
@@ -148,22 +148,47 @@ verifier against real evidence (it runs the proving command or inspects the file
 acceptance is not genuinely met the verifier `reopen`s the card to `doing` with the gap noted, so a
 "done" card can bounce back.
 
-Front-door steps (this skill is the conversational entry; the workflow runs in the background with
-no user IO, so gather these here first):
+Front-door steps (this skill is the conversational entry AND validator; the workflow runs in the
+background with no user IO, so gather and validate these here first):
 
-1. Confirm the **goal** (one sentence: what success means).
+1. Confirm the **goal** (one sentence: what success means). Reject an empty goal — the workflow has
+   nothing to decompose without one.
 2. Use `AskUserQuestion` to confirm the **execute** toggle — `false` (default) plans and organizes
    the board only; `true` makes **unattended edits** to the project. Default to `false` unless the
    user clearly opted into autonomous execution.
-3. Launch: `Workflow({ name: "eatahorse", args: { goal, execute, board } })`. `board` defaults to a
-   goal-derived dir (`.eatahorse-<slug>`), **not** the shared `.eatahorse`, so a new goal can't collide
-   with a prior board; omit args you did not gather — the workflow defaults them.
+3. Gather any optional knobs the user raises (omit the rest — the workflow defaults them):
+
+   | arg | default | meaning | valid range |
+   |---|---|---|---|
+   | `goal` | (required) | what to decompose; also accepts a bare string (`/eatahorse <goal>`) | non-empty |
+   | `execute` | `false` | `true` runs the unattended Ralph loop (real edits); `false` plans + gates only | bool |
+   | `board` | `.eatahorse-<slug of goal>` | board dir; point at an existing one to RESUME | path |
+   | `maxIterations` | `40` | hard loop cap in bite-iterations (backstop, independent of tokens) | int 1..200 (clamped) |
+   | `maxTokens` | none | per-run OUTPUT-token ceiling; stops the loop once spent crosses it. Independent of the platform "+500k" turn directive, which args cannot set | int, MUST be > `budgetFloor` |
+   | `budgetFloor` | `50000` | stop opening new iterations below this many remaining tokens | int >= 0 |
+   | `workerModel` | `sonnet` | model for the execute-loop workers | model id |
+   | `scriptPath` | bundled copy | path to `eatahorse.py` | path |
+
+   **Validate before launching (real footguns):**
+   - `maxIterations` / `budgetFloor` must be non-negative ints; `maxIterations` over 200 is silently clamped.
+   - If BOTH `maxTokens` and `budgetFloor` are set, require `maxTokens > budgetFloor`. The loop guard is
+     `tokensLeft() > budgetFloor`, so a `maxTokens` at or below `budgetFloor` makes it false on iteration 1
+     and ZERO bites run (the execute run silently no-ops). With the default `budgetFloor` of 50000, warn if
+     `maxTokens` is below ~60000.
+   - `maxTokens` / `budgetFloor` only bound the EXECUTE loop. With `execute:false` they do nothing — say so
+     rather than setting them on a plan-only run.
+4. Preview + gate: show the user the exact `args` you will pass (at minimum `goal`, `board`, `execute`,
+   and any token/iteration caps). If `execute:true`, STOP and wait for an explicit "yes" — it makes
+   unattended edits to the project; do NOT call `Workflow` in the same turn as the preview. A plan-only
+   `execute:false` run may launch directly.
+5. Launch: `Workflow({ name: "eatahorse", args: { goal, execute, board, maxIterations, maxTokens, budgetFloor, workerModel } })`.
+   Omit args you did not gather — the workflow defaults them.
    - **Resume:** point `board` at an existing board that still has active cards → the workflow skips
      decompose/seed/plan-gate and works the cards already there (use this to continue an interrupted run).
    - **Collision guard:** if `board` points at a board that exists but has 0 active cards (complete, or a
      different project), the run **bails loud** instead of silently re-seeding or no-opping. Pass a fresh
      `board` (convention: `.eatahorse-<topic>`) or remove the stale one.
-4. Hand back the workflow's board summary (counts, what's blocked, the written CLAUDE.md note).
+6. Hand back the workflow's board summary (counts, what's blocked, the written CLAUDE.md note).
 
 The skill name (`eatahorse`) and the workflow `meta.name` (`eatahorse`) live in separate
 registries; reusing the name is fine.
@@ -171,7 +196,9 @@ registries; reusing the name is fine.
 To research a whole folder/corpus file by file (not a goal to execute), use the
 `eatahorse-research` workflow instead: it enumerates the files, auto-picks scale by count, seeds one
 card per file/directory, and loops parallel research rounds against the board until done — the board
-makes the run resumable and lets it scale past the per-run agent cap.
+makes the run resumable and lets it scale past the per-run agent cap. It takes the same `maxTokens`
+and `budgetFloor` token caps (and `maxRounds`, default 3, as its loop cap in place of `maxIterations`);
+the same `maxTokens > budgetFloor` validation applies.
 
 ## Operating rules for Claude
 

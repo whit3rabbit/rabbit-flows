@@ -39,6 +39,10 @@
 //   board          board dir (default ".eatahorse" in the project root)
 //   scriptPath     path to eatahorse.py (default the bundled skill copy; worker falls back to `find`)
 //   maxIterations  hard loop cap (default 40) — backstop independent of budget
+//   maxTokens      per-run OUTPUT-token ceiling (default none). Stops opening iterations once spent
+//                  crosses it. Independent of the platform "+500k" turn directive (args can't set that);
+//                  when both are set the more restrictive wins.
+//   budgetFloor    stop opening iterations below this many remaining tokens (default 50000)
 //   workerModel    model for the execute loop workers (default "sonnet")
 //
 // requires-skills: eatahorse
@@ -159,6 +163,14 @@ const board = args?.board ?? '.eatahorse-' + slugify(goal)
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
 const maxIterations = Math.min(args?.maxIterations ?? 40, 200)
 const workerModel = args?.workerModel ?? 'sonnet'
+// Per-run OUTPUT-token ceiling, independent of the platform "+500k" turn directive (which args cannot
+// set). null = no extra ceiling; the platform budget still applies. budgetFloor was the hardcoded floor.
+const maxTokens = args?.maxTokens ?? null
+const budgetFloor = args?.budgetFloor ?? 50_000
+// Tokens left = min(platform budget remaining, our own maxTokens ceiling remaining). budget.remaining()
+// is Infinity when no platform target is set; our ceiling bounds it. Most restrictive wins.
+const tokensLeft = () =>
+  Math.min(budget.remaining(), maxTokens ? Math.max(0, maxTokens - budget.spent()) : Infinity)
 
 // Inline CLI contract (runtime source of truth — workers can't auto-load the eatahorse skill).
 // Sliced per-agent: each prompt gets cli(...) with ONLY the commands its own steps call, not the whole
@@ -199,6 +211,19 @@ const probe = await agent(
   { label: 'probe', model: 'haiku', schema: PROBE_SCHEMA },
 )
 const resume = !!probe && probe.exists && probe.active > 0
+
+// The probe is the ONLY guard against re-seeding an occupied board. A null probe (the agent died) is a
+// hard signal, NOT "assume empty": falling through to the fresh path would re-run `add` for every card
+// and duplicate them onto whatever board already exists. It also keeps every later probe.* read safe.
+if (!probe) {
+  return {
+    goal,
+    board,
+    error: 'Probe agent returned nothing; cannot determine whether a board already exists at the dir. ' +
+      'Re-run, or pass a known-fresh args.board.',
+    written: false,
+  }
+}
 
 // Existing board with nothing active = the collision trap (complete or foreign board). Fail LOUD instead
 // of sweeping into the loop and reporting "board cleared" as if the run succeeded.
@@ -316,7 +341,6 @@ if (!execute) {
 //    owns the reopen + re-counts, so the loop always trusts a freshly measured activeRemaining).
 //    Termination: board clear (active==0) OR stall (no progress N times) OR iteration cap OR budget floor.
 const STALL_CAP = 3
-const BUDGET_FLOOR = 50_000 // stop opening new iterations if fewer than this many output tokens remain
 let active = (gate?.activeRemaining ?? probe.active) ?? 1
 let stall = 0
 let iter = 0
@@ -329,7 +353,7 @@ while (
   active > 0 &&
   stall < STALL_CAP &&
   iter < maxIterations &&
-  (!budget.total || budget.remaining() > BUDGET_FLOOR)
+  tokensLeft() > budgetFloor
 ) {
   iter++
   const step = await agent(

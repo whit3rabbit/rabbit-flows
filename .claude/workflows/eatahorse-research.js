@@ -32,7 +32,9 @@
 //   It does not modify the researched source files. Still runs under the session allowlist.
 //
 // Knobs (args): root (or bare string), question, include/exclude globs, board, workerModel (default haiku),
-//   maxRounds (default 3), out (report path), scriptPath (eatahorse.py).
+//   maxRounds (default 3), maxTokens (per-run OUTPUT-token ceiling, default none — independent of the
+//   platform "+500k" turn directive; more restrictive of the two wins), budgetFloor (stop opening rounds
+//   below this many remaining tokens, default 50000), out (report path), scriptPath (eatahorse.py).
 //
 // requires-skills: eatahorse
 //   (Bundling only. The eatahorse CLI surface is distilled INLINE as CMD/cli() and sliced per-agent into the
@@ -147,11 +149,18 @@ const workerModel = args?.workerModel ?? 'haiku'
 const maxRounds = Math.min(args?.maxRounds ?? 3, 10)
 const out = args?.out ?? 'eatahorse-research.md'
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
+// Per-run OUTPUT-token ceiling, independent of the platform "+500k" turn directive (which args cannot
+// set). null = no extra ceiling; the platform budget still applies. budgetFloor was the hardcoded floor.
+const maxTokens = args?.maxTokens ?? null
+const budgetFloor = args?.budgetFloor ?? 50_000
+// Tokens left = min(platform budget remaining, our own maxTokens ceiling remaining). budget.remaining()
+// is Infinity when no platform target is set; our ceiling bounds it. Most restrictive wins.
+const tokensLeft = () =>
+  Math.min(budget.remaining(), maxTokens ? Math.max(0, maxTokens - budget.spent()) : Infinity)
 
 const LIVE_CAP = 400        // max files researched per ROUND; the rest stay in backlog and carry forward
 const RUN_TOUCH_CAP = 700   // ponytail: per-RUN ceiling on distinct files researched; keeps workers+sync+gate+gather under the 1000-agent lifetime cap. rerun continues from backlog. raise if a run must cover more in one pass.
 const ENUM_CAP = 5000       // hard cap on files we enumerate in one run
-const BUDGET_FLOOR = 50_000 // stop opening new rounds below this many remaining output tokens
 const MAX_ATTEMPTS = 2      // drop a unit after this many research rounds so a permanently-failing one (binary/unreadable) isn't re-run every round
 
 // Sliced per-agent: cli(...) gives each board-touching prompt ONLY the commands its steps call. The
@@ -236,7 +245,7 @@ const keepRetryable = (titles) => {
 }
 
 phase('Research')
-while (pending.length && round < maxRounds && (!budget.total || budget.remaining() > BUDGET_FLOOR)) {
+while (pending.length && round < maxRounds && tokensLeft() > budgetFloor) {
   // Per-round load cap. Already-touched files (gate-reopened or failed) re-research freely; only FRESH
   // backlog files grow `touched`, bounded by RUN_TOUCH_CAP. The whole round is capped at LIVE_CAP.
   const retryable = keepRetryable(pending)

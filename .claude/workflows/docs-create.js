@@ -48,6 +48,8 @@
 //                  Mapped to each framework's i18n/locales config block where supported; skipped with a note where not.
 //   versioning?:   {current: string, versions?: string[]}  set the docs version label and, where supported
 //                  (Docusaurus, MkDocs/mike, Sphinx), the versioned build config. Skipped with a note elsewhere.
+//   site?:         string            full production URL, e.g. 'https://docs.example.com'. Set as Astro `site:`
+//                  in defineConfig (Starlight auto-adds @astrojs/sitemap, which needs it); skipped elsewhere.
 // }
 
 // requires-skills: docs-site-builder, document
@@ -150,8 +152,33 @@ export const collections = {
 };
 \`\`\`
 
-\`docsLoader()\` uses the Content Layer API (Astro v5+). For an older project that can't
-migrate collections yet, the \`legacy.collectionsBackwardsCompat\` flag preserves v4 behavior.
+\`docsLoader()\` uses the Content Layer API. \`@astrojs/starlight\` v0.40.0 peers \`astro@^6.4.5\`
+(NOT astro v5 — installing against astro ^5 fails with an ERESOLVE peer conflict). For an older
+project that can't migrate collections yet, the \`legacy.collectionsBackwardsCompat\` flag preserves
+v4 behavior.
+
+### Pinned dependencies (a buildable \`package.json\`)
+
+When scaffolding a standalone, buildable site, write a \`package.json\` with these pinned deps and
+scripts. \`sharp\` is required by Astro's default image service at build time.
+
+\`\`\`json
+{
+  "name": "docs",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.40.0",
+    "astro": "^6.4.5",
+    "sharp": "^0.33.0"
+  }
+}
+\`\`\`
 
 ### 4. Add content
 
@@ -4661,10 +4688,15 @@ const FRAMEWORKS = {
     //   add-to-existing: same as content-only but SKIP writing astro.config if one already exists.
     //   full-project: scaffold a complete buildable project (package.json + npm install) then run astro check.
     assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
-      const { basePath, i18n, versioning } = opts
+      const { basePath, i18n, versioning, site } = opts
       // basePath -> Astro top-level `base` option in defineConfig (e.g. base: '/docs').
       const baseNote = basePath
         ? `   Set base: '${basePath}' in the defineConfig() call (outside starlight()); this makes Astro prefix all routes with the subpath.\n`
+        : ''
+      // site -> Astro top-level `site` option. Starlight auto-adds @astrojs/sitemap, which requires it;
+      // also sets canonical URLs. Without it the build warns and skips the sitemap (non-fatal).
+      const siteNote = site
+        ? `   Set site: '${site}' in the defineConfig() call (top-level, alongside integrations); required for the sitemap Starlight generates and for canonical URLs.\n`
         : ''
       // i18n -> Starlight locales config (defaultLocale + locales map).
       const i18nNote = i18n
@@ -4686,7 +4718,7 @@ const FRAMEWORKS = {
           : `3. Assemble ${outDir}/astro.config.mjs: a starlight() integration whose sidebar reflects the page groups ` +
             `(${groups}). Use slug items for the admitted pages. Derive a title from the brief. ` +
             `If an astro.config already exists, update its sidebar/title rather than clobbering unrelated config.\n`) +
-        baseNote + i18nNote + versioningNote
+        baseNote + siteNote + i18nNote + versioningNote
       )
     },
     // validate: per-framework empirical build gate. buildCmd returns the shell command to run;
@@ -5572,6 +5604,15 @@ async function runBuildRepairLoop(fw, outDir, scaffoldMode, authoringContract, f
 // --- args / guards -----------------------------------------------------------------------------
 const brief = typeof args?.brief === 'string' ? args.brief : null
 const outDir = typeof args?.outDir === 'string' ? args.outDir : null
+// The quality gate is shown pages as `${outDir}/${path}` and may echo verdict paths WITH that prefix,
+// while page paths are stored outDir-relative. Normalize both sides of the admitted/dropped match or the
+// gate silently drops every page. Mirrors docs-from-code's normPagePath.
+const _relOutDir = String(outDir ?? '').replace(/^\.\//, '').replace(/\/+$/, '')
+const normPagePath = (pp) => {
+  let s = String(pp ?? '').replace(/^\.\//, '')
+  if (_relOutDir && s.startsWith(_relOutDir + '/')) s = s.slice(_relOutDir.length + 1)
+  return s
+}
 const framework = args?.framework ?? 'starlight'
 // Resolve the registry entry; unknown frameworks fall back to the _unfilled sentinel.
 const fwEntry = FRAMEWORKS[framework] ?? FRAMEWORKS._unfilled
@@ -5604,7 +5645,12 @@ const versioning = (
   typeof args.versioning.current === 'string' && args.versioning.current
 ) ? { current: args.versioning.current, versions: Array.isArray(args.versioning.versions) ? args.versioning.versions : [] } : null
 
+// site: full production URL (e.g. 'https://docs.example.com'). Set as Astro `site:` in defineConfig
+// (Starlight auto-adds @astrojs/sitemap, which needs it; also fixes canonical URLs). Null = not specified.
+const site = typeof args?.site === 'string' && args.site.trim() ? args.site.trim() : null
+
 if (basePath) log(`basePath="${basePath}" will be injected into framework config where supported`)
+if (site) log(`site="${site}" will be set as the production URL in framework config where supported`)
 if (i18n) log(`i18n enabled: defaultLocale="${i18n.defaultLocale}", locales=[${i18n.locales.join(', ')}]`)
 if (versioning) log(`versioning enabled: current="${versioning.current}"${versioning.versions.length ? `, versions=[${versioning.versions.join(', ')}]` : ''}`)
 
@@ -5848,16 +5894,16 @@ const gate = await agent(
 )
 
 // Compute admitted set: pages that passed the quality gate. Fall back to all written if gate returned null.
-const gateAdmittedPaths = new Set(gate?.admitted ?? writtenPaths)
+const gateAdmittedPaths = new Set((gate?.admitted ?? writtenPaths).map(p => normPagePath(p)))
 const gateDroppedPaths = gate?.dropped ?? []
-const admittedNotes = written.filter(n => gateAdmittedPaths.has(n.path))
+const admittedNotes = written.filter(n => gateAdmittedPaths.has(normPagePath(n.path)))
 log(`quality gate: ${admittedNotes.length}/${written.length} admitted${gateDroppedPaths.length ? `; dropped: ${gateDroppedPaths.join(', ')}` : ''}`)
 if (!admittedNotes.length) {
   return { error: 'quality gate dropped all pages', gateResult: gate }
 }
 
 // Admitted page objects (for config assembly groups).
-const admittedPages = pages.filter(p => gateAdmittedPaths.has(p.path))
+const admittedPages = pages.filter(p => gateAdmittedPaths.has(normPagePath(p.path)))
 
 // --- Verify & finalize (single fresh-context strong pass + write-back; build is scripted below) -
 // Step 4 (empirical build gate) is deliberately omitted from the verify agent prompt: the scripted
@@ -5880,7 +5926,7 @@ const final = await agent(
                     : `correct ${framework} config/component syntax (verify against current ${framework} docs, not memory), `) +
   `Fix small problems in place with the Edit tool. If a page is broken beyond a quick fix, reject it (record path + reason).\n` +
   `(Diataxis adherence was already checked by the quality gate -- skip that check here.)\n` +
-  fwEntry.assemblePrompt(outDir, [...new Set(admittedPages.map(p => p.group))].join(', '), scaffoldMode, { basePath, i18n, versioning }) +
+  fwEntry.assemblePrompt(outDir, [...new Set(admittedPages.map(p => p.group))].join(', '), scaffoldMode, { basePath, i18n, versioning, site }) +
   `4. WRITE-BACK: write ${outDir}/.docs-plan.md capturing the final page list, sidebar structure, and any decisions/constraints ` +
   `(e.g. rejected/dropped pages and why) so a future run or human has the durable record.\n\n` +
   `NOTE: The empirical build check (running the framework build command and repairing errors) is handled ` +

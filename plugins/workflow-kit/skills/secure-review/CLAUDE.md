@@ -16,4 +16,7 @@ tree-sitter backend (precise multi-language spans + call edges) into a cached `.
 deps, and recon.py runs fine without it. Subcommands: `index/extract/callers/const/shard/summary/map` (`map` = compressed internal module graph
 — imports + cross-file calls, external libs collapsed, bounded hops from focus files).
 Entry-point detection is heuristic (a signal, not gospel). Edit it? Re-run
-`python3 scripts/test_recon.py` (stdlib, degraded mode — no venv needed).
+`python3 scripts/test_recon.py` (stdlib, degraded mode), AND under the venv
+(`bash scripts/setup_venv.sh && scripts/.venv/bin/python scripts/test_recon.py`):
+several tests are tree-sitter-gated and SKIP without the venv, so the precise-backend
+call-graph/import path (where regressions hide) is only exercised there.

@@ -12,7 +12,7 @@ npm run check         # assert no drift: guardrails skill matches rules AND inst
 python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py .claude/workflows --strict   # lint workflow scripts (NOT scripts/validate.py); --selftest checks the linter. CI runs this. NOTE: its pure-literal check false-flags "(" in meta.description — keep meta strings paren-free.
 npx @whit3rabbit/rabbit-flows --list   # preview the installable workflow catalog
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_eatahorse.py   # eatahorse CLI self-checks (stdlib, no framework); run after editing eatahorse.py
-python3 plugins/workflow-kit/skills/secure-review/scripts/test_recon.py   # security-audit recon self-checks (stdlib, degraded mode); run after editing recon.py
+python3 plugins/workflow-kit/skills/secure-review/scripts/test_recon.py   # security-audit recon self-checks (stdlib, degraded mode); run after editing recon.py. ALSO run under the venv: `bash plugins/workflow-kit/skills/secure-review/scripts/setup_venv.sh && plugins/workflow-kit/skills/secure-review/scripts/.venv/bin/python plugins/workflow-kit/skills/secure-review/scripts/test_recon.py` — several tests are tree-sitter-gated and SKIP in stdlib; the call-graph/import regressions live on the precise backend, so a green stdlib run alone is blind to them.
 ```
 
 Editing a file in `.claude/rules/` without `build:skill` leaves the shipped skill stale; `check` (also in CI) fails the commit.
@@ -148,3 +148,43 @@ and git history, not here.
   checks (`npm run check`, `validate.py --strict`) pass but do NOT substitute for a live run. Don't
   mark done until `outDir` artifacts (`MIGRATION.md`, `.source-corpus`, reference pages) exist on disk.
 - `docs-migrate.js` exists and lints — gap is runtime verification only. Don't re-implement it.
+
+## docs-from-code run: 2026-06-22
+
+**Codebase documented:** `.` (rabbit-flows repo root)
+**Docs site:** `./docs`
+**Board:** `.eatahorse-docs`
+**Pages:** 11 grounded pages written to `./docs/src/content/docs/`; site recovered to buildable (hand-wrote `astro.config.mjs`, `package.json`, `src/content.config.ts`, `tsconfig.json`; `npm run build` green). The run's `admitted:0`/`configWritten:false` was a bug (two path-convention mismatches in gather-admitted + the quality-gate filter), FIXED 2026-06-23 along with a loud-fail and an opt-in `verify` build gate; ignore the original "0 admitted" write-back.
+**Doc-coverage gaps:** 125 public symbols without a doc comment; see `./docs/src/content/docs/reference/documentation-gaps.md`
+
+CONSTRAINTS (do not re-walk these without a human brief):
+
+- **Deferred, needs human brief, "Quickstart: install and run your first workflow":** a 5-minute getting-started tutorial requires a chosen demo workflow, the exact install/enable steps, and the expected on-screen result. Onboarding intent not present in source; a guessed tutorial fails the grounding gate.
+- **Deferred, needs human brief, "Tutorial: author your own dynamic workflow":** the pedagogical path (what to build first, the worked example, the sample task) is editorial intent. `dynamic-workflow-authoring` skill and `starter.js` provide raw material, but the teaching sequence must be specified by a human.
+
+## security-audit hardening: 2026-06-23
+
+**Goal:** implement the 12-item hardening plan at `.claude/plans/i-reviewed-your-workflow-skill-witty-wand.md`
+**Board:** `.eatahorse-secaudit` (12/12 cards done; board cleared; 25 iterations)
+**Files changed:** `.claude/workflows/security-audit.js`, `plugins/workflow-kit/skills/secure-review/scripts/recon.py`, `plugins/workflow-kit/skills/secure-review/scripts/test_recon.py`
+
+**Completed (all 12 cards, P0 -> P1 -> P2):**
+
+- **EH-0001 (P0)** Fixed diff-mode shell bug: `auditDir` derived from `reconOut`, `mkdir -p` added, trailing `.` removed from redirect target in diffStep.
+- **EH-0002 (P0)** Split diff-mode index into `reconReachOut` (full-repo, used for callers/reachability) and `reconAuditOut` (changed-files, used for lane sharding/fileCount). Paths mode: both equal `reconOut`.
+- **EH-0003 (P0)** Gate INVALID rule softened: incomplete call graph alone is not a rejection ground; rejection requires a specific contradicting code fact. Lean-valid clause appended to gate prompt.
+- **EH-0004 (P0)** Fixed `calls_in()` nested-function call attribution: seed stack with own-body children, skip nested `FN_TYPES` scopes. Test added.
+- **EH-0005 (P0, was riskiest)** Qualifier-aware `_resolve_call_target`: captures qualifier at extraction for both Python AST and tree-sitter backends; gates resolution by qualifier (only unqualified cross-file, self./this. same-file, or proven-internal qualifiers resolve). Drops qualified-external without bare-name fallback. Test added.
+- **EH-0006 (P0)** Import regexes now run against comment-stripped source when tree-sitter backend was not used; when tree-sitter ran, imports are taken from AST import nodes. Eliminates false filegraph edges from commented-out requires.
+- **EH-0007 (P1)** `VERDICT_SCHEMA` extended with `crux`, `confidence`, `checks` (array of `{kind, command_or_file, result}`). Gate prompt requires concrete recon facts; report prompt cites crux/checks per finding.
+- **EH-0008 (P1)** `walk_files` returns `(included, skipped:[{path,reason}])` with reasons: symlink/unsupported/gitignored/too_large. Counts threaded into `build_index` summary and surfaced via `cmd_index`/`cmd_summary`. Report prompt states skipped files by reason. Test added.
+- **EH-0009 (P1)** Config/IaC include-but-don't-parse tier: `CONFIG_EXTENSIONS` (.yml, .yaml, .json, .toml, .ini, .env, .tf, .tfvars, .hcl, .xml, .properties, .conf, .cfg, .sql, .graphql, .proto) + `SPECIAL_FILENAMES` (Dockerfile, docker-compose.*, Makefile, CMakeLists.txt). `parse_file` gives them `backend='config'`, 0 functions; they land in `files[]` and get sharded for secrets/IaC review. Test added.
+- **EH-0010 (P1)** `cmd_extract` fallback window: `--context-lines N` (default ~60) prints a line-centered window with `# fallback window, not exact function` marker when no enclosing span is found. Mirrored into `reconBlock` in security-audit.js. Test added.
+- **EH-0011 (P2, was riskiest workflow change)** Multi-round deep gate, opt-in: args `gateRounds` (default 1, cap 5) and `deepGateSeverities` (default `['critical','high']`). After first gate, VALID findings at those severities get 2 blind independent reviewers; on disagreement, one Opus arbiter arbitrates using only structured inputs. Cheap-first deviation documented in workflow header comment.
+- **EH-0012 (P2)** Per-run artifacts finalize agent (Haiku, `writeArtifacts` default true): writes `{auditDir}/runs/<ts>/` with recon.json-ref, lanes.json, candidates.json, verdicts.json, confirmed.json, coverage.md (skipped-by-reason), report.md.
+
+CONSTRAINTS (verified, do not re-implement):
+- `reconBlock` (security-audit.js) is the runtime source for recon command surface; every new flag must be mirrored there.
+- Acceptance gate for any future edit: `test_recon.py` green, `validate.py --strict` on `.claude/workflows`, `npm run check`.
+- Live smoke (paths mode + diff mode) is empirical only; static gates passing does not substitute for a real run.
+- EH-0005 qualifier representation ripples through all call-graph consumers; regression-test `calls_in` before and after any further recon.py edits near `_resolve_call_target`.

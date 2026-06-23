@@ -76,8 +76,33 @@ export const collections = {
 };
 ```
 
-`docsLoader()` uses the Content Layer API (Astro v5+). For an older project that can't
-migrate collections yet, the `legacy.collectionsBackwardsCompat` flag preserves v4 behavior.
+`docsLoader()` uses the Content Layer API. `@astrojs/starlight` v0.40.0 peers `astro@^6.4.5`
+(NOT astro v5 — installing against astro ^5 fails with an ERESOLVE peer conflict). For an older
+project that can't migrate collections yet, the `legacy.collectionsBackwardsCompat` flag preserves
+v4 behavior.
+
+### Pinned dependencies (a buildable `package.json`)
+
+When scaffolding a standalone, buildable site, write a `package.json` with these pinned deps and
+scripts. `sharp` is required by Astro's default image service at build time.
+
+```json
+{
+  "name": "docs",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "check": "astro check"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.40.0",
+    "astro": "^6.4.5",
+    "sharp": "^0.33.0"
+  }
+}
+```
 
 ### 4. Add content
 

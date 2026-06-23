@@ -77,6 +77,17 @@ SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "bu
              ".next", "target", "vendor", ".idea", ".vscode", "coverage", ".mypy_cache",
              ".pytest_cache", ".eatahorse", ".security-audit"}
 
+# Config/IaC: include for secret/permission scanning but do NOT parse for functions.
+# These land in files[] with backend='config' and zero functions so audit lanes can grep them.
+CONFIG_EXTENSIONS: set = {
+    ".yml", ".yaml", ".json", ".toml", ".ini", ".env", ".tf", ".tfvars", ".hcl",
+    ".xml", ".properties", ".conf", ".cfg", ".sql", ".graphql", ".proto",
+}
+# Extension-less filenames that are always config/IaC regardless of suffix.
+SPECIAL_FILENAMES: set = {
+    "Dockerfile", "docker-compose.yml", "docker-compose.yaml", "Makefile", "CMakeLists.txt",
+}
+
 # Keywords that look like calls (`if(`, `for(`, ...) but are not — excluded from the call graph.
 _NOT_CALLS = {"if", "for", "while", "switch", "catch", "return", "sizeof", "case", "do",
               "else", "func", "function", "def", "class", "new", "await", "yield", "typeof",
@@ -234,7 +245,16 @@ def _call_name(func) -> Optional[str]:
     if isinstance(func, ast.Name):
         return func.id
     if isinstance(func, ast.Attribute):
-        return func.attr
+        # Emit "qualifier.attr" so the resolver can distinguish os.path.join from a bare join.
+        # Walk up the attribute chain to get the full dotted head (e.g. os.path.join).
+        parts = [func.attr]
+        node = func.value
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+        return ".".join(reversed(parts))
     return None
 
 
@@ -318,10 +338,19 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
             if "call" in n.type or "invocation" in n.type:
                 fn = n.child_by_field_name("function") or (n.children[0] if n.children else None)
                 if fn is not None:
-                    m = re.search(r"[A-Za-z_]\w*\s*$", text(fn)) or re.search(r"[A-Za-z_]\w*", text(fn))
+                    raw = text(fn).strip()
+                    # Keep the full dotted-qualifier head (e.g. "os.path.join", "fs.readFileSync")
+                    # so _resolve_call_target can gate on the qualifier and avoid binding
+                    # qualified-external calls to an unrelated in-repo symbol of the same bare name.
+                    # Match a leading dotted-identifier chain; trailing parens/brackets are not part of
+                    # the name. Strip any leading `await`/`new` keyword that the callee text may include.
+                    raw = re.sub(r"^\s*(?:await|new)\s+", "", raw)
+                    m = re.match(r"([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", raw)
                     if m:
-                        nm = m.group(0).strip()
-                        if nm and nm not in _NOT_CALLS:
+                        nm = m.group(1)
+                        # tail of dotted name must not be a control-flow keyword
+                        tail = nm.rsplit(".", 1)[-1]
+                        if tail and tail not in _NOT_CALLS:
                             out.append(nm)
             stack.extend(n.children)
         return sorted(set(out))
@@ -343,7 +372,147 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
 
     _detect_constants_regex(fi, src)
     _detect_entrypoints(fi, src.splitlines())
+
+    # Derive imports from tree-sitter AST nodes: only real (non-commented) import/require nodes
+    # are visited, so a commented-out `require("./foo")` never becomes a filegraph edge.
+    # The regex fallback (_imports_exports) is used only when tree-sitter did NOT parse the file.
+    ts_imports, ts_exports = _ts_imports_exports(tree, data, language, text)
+    fi.imports = ts_imports
+    fi.exports = ts_exports
+
     return fi
+
+
+def _ts_imports_exports(tree, data: bytes, language: str, text_fn) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Extract imports and exports from a tree-sitter AST, visiting only live (non-comment) nodes.
+
+    JS/TS only — every other language returns ([], []) and the caller falls back to the regex
+    extractor (see parse_file). Walks the whole tree (skipping comment nodes), so both top-level
+    import declarations and nested require()/import() calls become edges. Comments are never visited,
+    so a commented-out require/import produces no edge."""
+    imports: List[Dict[str, Any]] = []
+    exports: List[str] = []
+
+    def txt(node) -> str:
+        return text_fn(node)
+
+    def str_val(node) -> Optional[str]:
+        """Extract the string value from a string node (strips quotes)."""
+        raw = txt(node).strip()
+        if len(raw) >= 2 and raw[0] in ('"', "'", "`") and raw[-1] in ('"', "'", "`"):
+            return raw[1:-1]
+        return None
+
+    def clause_names(stmt) -> List[str]:
+        """Default + namespace binding identifiers of a JS import_statement (`import D from`, `import * as N`).
+        Named imports (`{a, b}`) are called unqualified, so they are deliberately skipped."""
+        out: List[str] = []
+        clause = next((c for c in stmt.children if c.type == "import_clause"), None)
+        if clause is None:
+            return out
+        for ch in clause.children:
+            if ch.type == "identifier":          # default import binding
+                nm = txt(ch).strip()
+                if re.fullmatch(r"[A-Za-z_]\w*", nm):
+                    out.append(nm)
+            elif ch.type == "namespace_import":  # `* as N`
+                ident = next((g for g in ch.children if g.type == "identifier"), None)
+                if ident is not None:
+                    nm = txt(ident).strip()
+                    if re.fullmatch(r"[A-Za-z_]\w*", nm):
+                        out.append(nm)
+        return out
+
+    if language in ("javascript", "typescript", "tsx"):
+        # Full-tree walk over non-comment nodes (tree-sitter never emits comment nodes as import/call
+        # children, so this is inherently comment-safe). Captures top-level imports AND nested require()
+        # calls in function bodies — both are real dependency edges. Binding names are captured so a
+        # qualified internal call (`fs.foo()` for `const fs = require('./util')`) resolves later.
+        root = tree.root_node
+        stack = list(root.children)
+        while stack:
+            n = stack.pop()
+            # skip comment nodes entirely
+            if "comment" in n.type:
+                continue
+            t = n.type
+            # `import ... from "spec"` / `export ... from "spec"` / `import "spec"`
+            if t in ("import_statement", "export_statement"):
+                src_node = n.child_by_field_name("source")
+                if src_node is None:
+                    # look for a string child directly
+                    for ch in n.children:
+                        if "string" in ch.type:
+                            src_node = ch
+                            break
+                if src_node is not None:
+                    spec = str_val(src_node)
+                    if spec:
+                        names = clause_names(n) if t == "import_statement" else []
+                        imports.append({"spec": spec, "names": names, "level": 0, "system": False})
+                # collect exported names from `export { a, b }`
+                if t == "export_statement":
+                    clause = n.child_by_field_name("declaration") or n.child_by_field_name("export_clause")
+                    if clause is None:
+                        for ch in n.children:
+                            if ch.type == "export_clause":
+                                clause = ch
+                                break
+                    if clause is not None:
+                        for ch in clause.children:
+                            if "identifier" in ch.type or ch.type == "export_specifier":
+                                nm = txt(ch).split(" as ")[0].strip()
+                                if nm and re.fullmatch(r"[A-Za-z_]\w*", nm):
+                                    exports.append(nm)
+                    # `export function/class/const/let/var name`
+                    decl = n.child_by_field_name("declaration")
+                    if decl is not None:
+                        nm_node = decl.child_by_field_name("name")
+                        if nm_node is not None:
+                            nm = txt(nm_node).strip()
+                            if nm and re.fullmatch(r"[A-Za-z_]\w*", nm):
+                                exports.append(nm)
+            # `require("spec")` or `import("spec")` as a call_expression
+            elif t == "call_expression":
+                fn_node = n.child_by_field_name("function")
+                if fn_node is not None:
+                    fn_name = txt(fn_node).strip()
+                    if fn_name in ("require", "import"):
+                        args = n.child_by_field_name("arguments")
+                        if args is not None:
+                            for ch in args.children:
+                                if "string" in ch.type:
+                                    spec = str_val(ch)
+                                    if spec:
+                                        # `const X = require(spec)` -> the binding X is the qualifier the
+                                        # caller uses; capture it (object-pattern destructures are skipped:
+                                        # those are called unqualified).
+                                        bind: List[str] = []
+                                        p = n.parent
+                                        if p is not None and p.type == "variable_declarator":
+                                            nm_node = p.child_by_field_name("name")
+                                            if nm_node is not None and nm_node.type == "identifier":
+                                                bnm = txt(nm_node).strip()
+                                                if re.fullmatch(r"[A-Za-z_]\w*", bnm):
+                                                    bind = [bnm]
+                                        imports.append({"spec": spec, "names": bind, "level": 0, "system": False})
+                                    break
+            # `module.exports.X = ...` or `exports.X = ...`
+            elif t == "expression_statement":
+                # check for module.exports assignment
+                for ch in n.children:
+                    if ch.type == "assignment_expression":
+                        left = ch.child_by_field_name("left")
+                        if left is not None:
+                            raw_left = txt(left)
+                            m = re.match(r"(?:module\.exports|exports)\.([A-Za-z_]\w*)", raw_left)
+                            if m:
+                                exports.append(m.group(1))
+                stack.extend(n.children)
+                continue
+            stack.extend(n.children)
+
+    return imports, list(dict.fromkeys(exports))
 
 
 # --------------------------------------------------------------------------- regex fallback backend
@@ -472,7 +641,10 @@ def _detect_entrypoints(fi: FileInfo, lines: List[str]) -> None:
 
 def parse_file(path: str, max_bytes: int) -> Optional[FileInfo]:
     ext = Path(path).suffix.lower()
-    if ext not in LANGUAGES:
+    basename = os.path.basename(path)
+    # basename.lower() catches dotfiles like .env where Path('.env').suffix=='' (no stem).
+    is_config = ext in CONFIG_EXTENSIONS or basename in SPECIAL_FILENAMES or basename.lower() in CONFIG_EXTENSIONS
+    if not is_config and ext not in LANGUAGES:
         return None
     try:
         if os.path.getsize(path) > max_bytes:
@@ -481,6 +653,13 @@ def parse_file(path: str, max_bytes: int) -> Optional[FileInfo]:
             src = f.read()
     except OSError:
         return None
+    # Config/IaC files: include for secret/perm scanning but skip function parsing entirely.
+    if is_config:
+        fi = FileInfo(path, "config")
+        fi.backend = "config"
+        fi.loc = src.count("\n") + 1
+        # No functions, constants, entrypoints, imports, exports — audit lanes grep the raw text.
+        return fi
     language, grammar = LANGUAGES[ext]
     if language == "python":
         fi = parse_python(path, src)
@@ -489,7 +668,15 @@ def parse_file(path: str, max_bytes: int) -> Optional[FileInfo]:
         if fi is None:
             fi = parse_regex(path, src, language)
     fi.idents = _tokenize(src)
-    fi.imports, fi.exports = _imports_exports(src, language)
+    # Imports/exports: the tree-sitter backend extracts ONLY JS/TS imports from AST nodes (comment-safe);
+    # _ts_imports_exports returns nothing for every other language. So even under tree-sitter we MUST fall
+    # back to the regex extractor for non-JS/TS languages — otherwise Go/Rust/Java/C/PHP/Ruby/C# lose all
+    # import + filegraph edges and the precise backend becomes strictly worse than the degraded one.
+    # _imports_exports is itself comment-safe (it runs _strip_comments), so the fallback can't reintroduce
+    # commented-out edges. JS/TS keep the AST path (skip the fallback) to preserve its comment-safety.
+    ts_covers_imports = fi.backend == "treesitter" and language in ("javascript", "typescript", "tsx")
+    if not fi.imports and not ts_covers_imports:
+        fi.imports, fi.exports = _imports_exports(src, language)
     return fi
 
 
@@ -510,6 +697,13 @@ _JS_EXPORT_RES = [
     re.compile(r"\bmodule\.exports\.(\w+)\s*="),
 ]
 _JS_EXPORT_BLOCK = re.compile(r"\bexport\s*\{([^}]*)\}")
+# Binding-name capture: the qualifier a caller uses for an internal module is the BINDING name, not the
+# module filename (`const fs = require('./util')` -> calls `fs.foo()`). Capture default/namespace/require
+# bindings so file_internal_qualifiers can resolve those qualified internal calls. Named imports
+# (`{a, b}`) are called unqualified, so they need no qualifier entry.
+_JS_REQUIRE_BIND = re.compile(r"""\b(?:const|let|var)\s+(\w+)\s*=\s*require\(\s*['"]([^'"]+)['"]""")
+_JS_IMPORT_DEFAULT = re.compile(r"""\bimport\s+(\w+)\s*(?:,\s*\{[^}]*\})?\s+from\s*['"]([^'"]+)['"]""")
+_JS_IMPORT_NS = re.compile(r"""\bimport\s*\*\s*as\s+(\w+)\s+from\s*['"]([^'"]+)['"]""")
 _C_INCLUDE_LOCAL = re.compile(r'#\s*include\s*"([^"]+)"')
 _C_INCLUDE_SYS = re.compile(r"#\s*include\s*<([^>]+)>")
 _GO_IMPORT_SINGLE = re.compile(r'^\s*import\s+(?:[\w.]+\s+)?"([^"]+)"')
@@ -526,15 +720,52 @@ _RUST_MOD = re.compile(r'^\s*(?:pub\s+)?mod\s+(\w+)\s*;', re.M)
 _RUST_USE = re.compile(r'^\s*(?:pub\s+)?use\s+([\w:]+)', re.M)
 
 
+_BLOCK_COMMENT_RE = re.compile(r'/\*.*?\*/', re.DOTALL)
+# `#` line/inline comments, but NOT `#!` shebangs (negative lookahead keeps the interpreter line).
+_HASH_COMMENT_RE = re.compile(r'(?m)#(?!!)[^\n]*')
+
+
+def _strip_comments(src: str, language: str) -> str:
+    """Return src with // line-comments and /* */ block-comments removed (for import regex scanning).
+
+    Limitation: does NOT strip string literals first, so an import URL like
+    "https://example.com/foo" will lose the `//` and may produce a truncated spec — rare in
+    practice because full-URL require() calls are uncommon, and the edge would be harmless.
+    Ruby # comments that appear inside strings are also not stripped, same rationale.
+    This is intentional: full string stripping is expensive and the residual false-negative
+    rate is negligible compared to the false-positives we are eliminating.
+    """
+    if language in ("javascript", "typescript", "tsx", "c", "cpp", "go", "java", "c_sharp", "rust"):
+        # strip /* ... */ first, then // line comments
+        src = _BLOCK_COMMENT_RE.sub('', src)
+        src = re.sub(r'(?m)//[^\n]*', '', src)
+    elif language == "php":
+        # PHP allows //, #, and /* */ (shebang `#!` on line 1 is preserved by _HASH_COMMENT_RE)
+        src = _BLOCK_COMMENT_RE.sub('', src)
+        src = re.sub(r'(?m)//[^\n]*', '', src)
+        src = _HASH_COMMENT_RE.sub('', src)
+    elif language == "ruby":
+        # Ruby uses # line comments; =begin/=end block comments are rare and left as-is. `#!` kept.
+        src = _HASH_COMMENT_RE.sub('', src)
+    return src
+
+
 def _imports_exports(src: str, language: str):
     if language == "python":
         return _py_imports_exports(src)
+    # Strip comments so that commented-out require/import lines don't become false filegraph edges.
+    # String literals are NOT stripped (see _strip_comments docstring for the residual limitation).
+    src = _strip_comments(src, language)
     imports: List[Dict[str, Any]] = []
     exports: List[str] = []
     if language in ("javascript", "typescript", "tsx"):
+        binds: Dict[str, List[str]] = {}  # spec -> [binding names the caller qualifies with]
+        for rx in (_JS_REQUIRE_BIND, _JS_IMPORT_DEFAULT, _JS_IMPORT_NS):
+            for nm, spec in rx.findall(src):
+                binds.setdefault(spec, []).append(nm)
         for rx in _JS_IMPORT_RES:
             for spec in rx.findall(src):
-                imports.append({"spec": spec, "names": [], "level": 0, "system": False})
+                imports.append({"spec": spec, "names": binds.get(spec, []), "level": 0, "system": False})
         for rx in _JS_EXPORT_RES:
             exports.extend(rx.findall(src))
         for blk in _JS_EXPORT_BLOCK.findall(src):
@@ -651,16 +882,49 @@ def _gitignored(root: str) -> set:
         return set()
 
 
-def walk_files(scope: str, max_bytes: int, only: Optional[List[str]]) -> List[str]:
+def _is_supported(fn: str) -> bool:
+    """True if a filename should be included: either a source language or a config/IaC file."""
+    # Extension-less special filenames (Dockerfile, Makefile, …) match by basename.
+    if os.path.basename(fn) in SPECIAL_FILENAMES:
+        return True
+    ext = Path(fn).suffix.lower()
+    if ext in LANGUAGES or ext in CONFIG_EXTENSIONS:
+        return True
+    # Dotfiles whose entire name IS the "extension" (e.g. .env -> suffix=='', but basename=='.env').
+    # Path('.env').suffix returns '' because there is no stem; check the basename directly.
+    bn = os.path.basename(fn).lower()
+    return bn in CONFIG_EXTENSIONS
+
+
+def walk_files(scope: str, max_bytes: int, only: Optional[List[str]]
+               ) -> Tuple[List[str], List[Dict[str, str]]]:
+    """Return (included, skipped) where skipped is [{path, reason}] with reasons:
+    symlink / unsupported / gitignored / too_large / unreadable."""
     scope = os.path.abspath(scope)
+    skipped: List[Dict[str, str]] = []
     if only is not None:
         # explicit file list (diff mode): keep the ones that exist + are supported
         out = []
         for rel in only:
             p = rel if os.path.isabs(rel) else os.path.join(scope, rel)
-            if os.path.isfile(p) and Path(p).suffix.lower() in LANGUAGES:
-                out.append(os.path.relpath(p, scope))
-        return sorted(out)
+            if not os.path.isfile(p):
+                continue
+            rel_path = os.path.relpath(p, scope)
+            if os.path.islink(p):
+                skipped.append({"path": rel_path, "reason": "symlink"})
+                continue
+            if not _is_supported(p):
+                skipped.append({"path": rel_path, "reason": "unsupported"})
+                continue
+            try:
+                if os.path.getsize(p) > max_bytes:
+                    skipped.append({"path": rel_path, "reason": "too_large"})
+                    continue
+            except OSError:
+                skipped.append({"path": rel_path, "reason": "unreadable"})
+                continue
+            out.append(rel_path)
+        return sorted(out), skipped
     ignored = _gitignored(scope)
     out = []
     for dirpath, dirnames, filenames in os.walk(scope):
@@ -668,16 +932,27 @@ def walk_files(scope: str, max_bytes: int, only: Optional[List[str]]) -> List[st
                        or d in (".github",)]
         for fn in filenames:
             full = os.path.join(dirpath, fn)
-            if os.path.islink(full):
-                continue
             rel = os.path.relpath(full, scope)
+            if os.path.islink(full):
+                skipped.append({"path": rel, "reason": "symlink"})
+                continue
             # os.sep is correct on this macOS/Linux tool; on Windows git emits "/" so the dir-prefix
             # arm would miss (won't-fix — recon already shells git + bash setup_venv.sh, Unix-only).
             if any(fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/") + os.sep) for pat in ignored):
+                skipped.append({"path": rel, "reason": "gitignored"})
                 continue
-            if Path(fn).suffix.lower() in LANGUAGES:
-                out.append(rel)
-    return sorted(out)
+            if not _is_supported(fn):
+                skipped.append({"path": rel, "reason": "unsupported"})
+                continue
+            try:
+                if os.path.getsize(full) > max_bytes:
+                    skipped.append({"path": rel, "reason": "too_large"})
+                    continue
+            except OSError:
+                skipped.append({"path": rel, "reason": "unreadable"})
+                continue
+            out.append(rel)
+    return sorted(out), skipped
 
 
 def _go_module_prefix(scope_abs: str) -> Optional[str]:
@@ -803,7 +1078,42 @@ def _graph_key(name: str, file: str, symbols: Dict[str, List[Dict[str, Any]]],
 
 
 def _resolve_call_target(name: str, caller: Dict[str, Any],
-                         symbols: Dict[str, List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+                         symbols: Dict[str, List[Dict[str, Any]]],
+                         known_internal_qualifiers: Optional[set] = None) -> Optional[Dict[str, Any]]:
+    """Resolve a call name to a symbol in the index.
+
+    Resolution rules (conservative, avoids false cross-file edges):
+      (a) Unqualified name -> same-file first; unique cross-file if no same-file match.
+      (b) self.X / this.X -> same-file method only (strip qualifier, same-file lookup).
+      (c) Qualified (qualifier.X) where qualifier head is proven internal (in known_internal_qualifiers)
+          -> resolve bare method name to same-file or unique cross-file.
+      (d) All other qualified calls (os.path.join, fs.readFileSync, etc.) -> drop (return None).
+
+    This prevents external-library qualifiers from binding to an unrelated in-repo function of the
+    same bare name (the "false reachable edge" bug: os.path.join -> in-repo join)."""
+    if "." in name:
+        # Extract qualifier head and method tail
+        head, _, tail = name.partition(".")
+        if head in ("self", "this"):
+            # (b) same-file method only
+            same_file = [loc for loc in symbols.get(tail, [])
+                         if loc.get("language") == caller.get("language")
+                         and loc.get("file") == caller.get("file")]
+            return same_file[0] if len(same_file) == 1 else None
+        # (c) check if qualifier head is a known internal module for this file
+        if known_internal_qualifiers is not None and head in known_internal_qualifiers:
+            bare = name.rsplit(".", 1)[-1]
+            candidates = [loc for loc in symbols.get(bare, [])
+                          if loc.get("language") == caller.get("language")]
+            same_file = [loc for loc in candidates if loc.get("file") == caller.get("file")]
+            if len(same_file) == 1:
+                return same_file[0]
+            if len(same_file) > 1:
+                return None
+            return candidates[0] if len(candidates) == 1 else None
+        # (d) qualified-external: drop without bare-name fallback
+        return None
+    # (a) Unqualified: same-file first, then unique cross-file
     candidates = [loc for loc in symbols.get(name, [])
                   if loc.get("language") == caller.get("language")]
     same_file = [loc for loc in candidates if loc.get("file") == caller.get("file")]
@@ -816,7 +1126,7 @@ def _resolve_call_target(name: str, caller: Dict[str, Any],
 
 def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[str, Any]:
     scope_abs = os.path.abspath(scope)
-    rels = walk_files(scope, max_bytes, only)
+    rels, skipped = walk_files(scope, max_bytes, only)
     files: List[Dict[str, Any]] = []
     symbols: Dict[str, List[Dict[str, Any]]] = {}
     constants: Dict[str, List[Dict[str, str]]] = {}
@@ -866,6 +1176,28 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
     for ep in entrypoints:
         ep_by_file.setdefault(ep["file"], []).append(ep)
 
+    # Per-file sorted function-start lines. An entry-point line ABOVE a def (a decorator) belongs to the
+    # NEAREST def below it, not to every sibling whose def happens to fall within _EP_GAP. Without this an
+    # internal helper sitting just under a route handler inherits the handler's entry-point flag and the
+    # gate then treats it as reachable, losing its strongest INVALID (dead-code) ground.
+    starts_by_file: Dict[str, List[int]] = {}
+    for fn in all_funcs:
+        starts_by_file.setdefault(fn["file"], []).append(fn["start"])
+    for _starts in starts_by_file.values():
+        _starts.sort()
+
+    def _ep_kind_for(loc: Dict[str, Any]) -> Optional[str]:
+        starts = starts_by_file.get(loc["file"], [])
+        for ep in ep_by_file.get(loc["file"], []):
+            line = ep["line"]
+            if loc["start"] <= line <= loc["end"]:
+                return ep["kind"]  # on the def line or in the body: the enclosing fn owns it
+            if loc["start"] - _EP_GAP <= line < loc["start"]:
+                # decorator region above the def: own it only if no other def lies between line and here
+                if not any(line < s < loc["start"] for s in starts):
+                    return ep["kind"]
+        return None
+
     function_keys: Dict[str, Dict[str, Any]] = {}
     key_by_span: Dict[Tuple[str, str, int, int], str] = {}
     for name, locs in symbols.items():
@@ -878,12 +1210,48 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
             loc["id"] = base if base_counts[base] == 1 else _function_id(loc["file"], name, loc["start"])
             key = _graph_key(name, loc["file"], symbols, loc["start"])
             loc["key"] = key
-            ep_kind = next((ep["kind"] for ep in ep_by_file.get(loc["file"], [])
-                            if loc["start"] - _EP_GAP <= ep["line"] <= loc["end"]), None)
+            ep_kind = _ep_kind_for(loc)
             if ep_kind:
                 loc["entrypoint"] = ep_kind  # over-flagging errs toward reachable (the safe direction)
             key_by_span[(loc["file"], name, loc["start"], loc["end"])] = key
             function_keys[key] = dict(loc, name=name)
+
+    # Build file-set and import-resolver prerequisites before the call graph loop so that
+    # _resolve_call_target can gate qualified calls by whether the qualifier head is a known
+    # internal module (i.e. imports to an in-repo file). This avoids os.path.join / fs.readFileSync
+    # binding to an unrelated in-repo `join`/`readFileSync`.
+    fileset = {f["path"] for f in files}
+    bybase: Dict[str, List[str]] = {}
+    for r in fileset:
+        bybase.setdefault(os.path.basename(r), []).append(r)
+    module_prefix = _go_module_prefix(scope_abs) if languages.get("go") else None
+
+    # Per-file set of qualifier heads that map to an in-repo file.  For Python `import mymod` or
+    # `from mymod import x` where mymod.py is in scope, "mymod" is internal.  For non-Python the
+    # import name list may be empty; use the spec's last path component as the module name.
+    file_internal_qualifiers: Dict[str, set] = {}
+    for rel, imps in imports_map.items():
+        qual_set: set = set()
+        for imp in imps:
+            if imp.get("system"):
+                continue  # system/external import: not internal
+            resolved = _resolve_import(imp, rel, lang_of.get(rel, ""), fileset, bybase, module_prefix)
+            if resolved is None:
+                continue  # not in scope -> external
+            # The qualifier head is the first name the caller uses to reference this import.
+            # For Python: imp["names"] = [alias or first component] from the import statement.
+            # For JS/TS: import name is taken from the spec tail (the variable binding is unavailable here).
+            # For other languages: use first name in imp["names"] if present.
+            names = imp.get("names") or []
+            if names:
+                qual_set.update(n.split(".")[0] for n in names if n)
+            else:
+                # Fallback: last path component of the spec (e.g. "./util" -> "util")
+                tail = imp["spec"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                tail = tail.split(".")[0]  # strip extension if present
+                if tail:
+                    qual_set.add(tail)
+        file_internal_qualifiers[rel] = qual_set
 
     # Call-graph edges are conservative: same-file definitions shadow other files, exactly one
     # same-language cross-file candidate is allowed, and ambiguous names are skipped. Resolve each
@@ -895,7 +1263,8 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
         caller_key = key_by_span[(f["file"], f["name"], f["start"], f["end"])]
         callees.setdefault(caller_key, [])
         for c in f["calls"]:
-            target = _resolve_call_target(c, f, symbols)
+            target = _resolve_call_target(c, f, symbols,
+                                          file_internal_qualifiers.get(f["file"], set()))
             if target is None:
                 continue
             callee_key = target["key"]
@@ -919,11 +1288,7 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
     # File-level module map: edges file -> {dep_file: [via names]}, plus the external libs each file pulls
     # in (NOT traversed). Edges come from BOTH import statements AND cross-file calls, so the graph holds
     # even when reachability is implicit. External libraries are listed but never become graph nodes.
-    fileset = {f["path"] for f in files}
-    bybase: Dict[str, List[str]] = {}
-    for r in fileset:
-        bybase.setdefault(os.path.basename(r), []).append(r)
-    module_prefix = _go_module_prefix(scope_abs) if languages.get("go") else None
+    # (fileset / bybase / module_prefix are already computed above for the qualifier resolver.)
     filegraph: Dict[str, Dict[str, List[str]]] = {}
     external: Dict[str, List[str]] = {}
 
@@ -948,10 +1313,16 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
     for src_file, dst_file, via in cross_calls:
         _edge(src_file, dst_file, via)
 
+    skipped_count = len(skipped)
+    unsupported_count = sum(1 for s in skipped if s["reason"] == "unsupported")
+    too_large_count = sum(1 for s in skipped if s["reason"] == "too_large")
+    unreadable_count = sum(1 for s in skipped if s["reason"] == "unreadable")
+
     return {
         "scope": scope_abs,
         "treesitter": bool(_TS_AVAILABLE),
         "files": files,
+        "skipped": skipped,  # [{path, reason}] — symlink/unsupported/gitignored/too_large/unreadable
         "languages": languages,
         "backends": backends,  # per-language parser used: {lang: {ast|treesitter|regex: file_count}}
         "symbols": symbols,
@@ -970,6 +1341,10 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
             "entrypoint_count": len(entrypoints),
             "constant_count": len(constants),
             "edge_count": sum(len(d) for d in filegraph.values()),
+            "skipped_count": skipped_count,
+            "unsupported_count": unsupported_count,
+            "too_large_count": too_large_count,
+            "unreadable_count": unreadable_count,
         },
     }
 
@@ -1002,9 +1377,22 @@ def cmd_index(args) -> int:
         degraded = sorted(l for l, b in idx.get("backends", {}).items()
                           if l != "python" and "treesitter" not in b and "regex" in b)
         note = f"  [degraded (regex) for: {', '.join(degraded)}]" if idx["treesitter"] and degraded else ""
+        skip_note = ""
+        if s.get("skipped_count", 0):
+            parts = []
+            if s.get("unsupported_count", 0):
+                parts.append(f"{s['unsupported_count']} unsupported")
+            if s.get("too_large_count", 0):
+                parts.append(f"{s['too_large_count']} too_large")
+            if s.get("unreadable_count", 0):
+                parts.append(f"{s['unreadable_count']} unreadable")
+            symlink_count = s["skipped_count"] - s.get("unsupported_count", 0) - s.get("too_large_count", 0) - s.get("unreadable_count", 0)
+            if symlink_count > 0:
+                parts.append(f"{symlink_count} symlink/gitignored")
+            skip_note = f"  skipped {s['skipped_count']} ({', '.join(parts)})"
         print(f"recon: {s['file_count']} files, {s['function_count']} functions, "
               f"{s['entrypoint_count']} entry points, {s['constant_count']} constants "
-              f"(tree-sitter: {'on' if idx['treesitter'] else 'off — degraded'}){note} -> {args.out}")
+              f"(tree-sitter: {'on' if idx['treesitter'] else 'off — degraded'}){note}{skip_note} -> {args.out}")
     else:
         print(out)
     return 0
@@ -1076,11 +1464,15 @@ def _loc_for_key(idx: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+_EXTRACT_CONTEXT_DEFAULT = 60  # default lines above+below for the fallback window
+
+
 def cmd_extract(args) -> int:
     idx, err = _load_index_arg(args.index)
     if err:
         print(err, file=sys.stderr)
         return 1
+    context_lines = getattr(args, "context_lines", _EXTRACT_CONTEXT_DEFAULT)
     target = args.target
     file = fn = line = None
     if "#" not in target and ":" in target and target.rsplit(":", 1)[1].isdigit():
@@ -1098,7 +1490,31 @@ def cmd_extract(args) -> int:
         span = (loc["file"], loc["start"], loc["end"])
     else:
         span = _find_span(idx, file, fn, line, scope)
+
+    # Resolve the target file path for the fallback window (used when span is None).
+    target_file = file
+    if target_file is None and fn is not None and idx:
+        # Bare function name with no file: can't open a file without a path; bail normally.
+        pass
+
     if not span:
+        # No enclosing function found. If we have a file:line target, emit a line-centered
+        # window of context_lines above and below so config/IaC files are still useful.
+        if target_file and line is not None:
+            full = target_file if os.path.isabs(target_file) else os.path.join(scope, target_file)
+            try:
+                with open(full, "r", encoding="utf-8", errors="replace") as f:
+                    all_lines = f.read().splitlines()
+            except OSError as e:
+                print(f"recon: cannot read {full}: {e}", file=sys.stderr)
+                return 1
+            n_lines = len(all_lines)
+            win_start = max(1, line - context_lines)
+            win_end = min(n_lines, line + context_lines)
+            snippet = "\n".join(all_lines[win_start - 1:win_end])
+            rel = os.path.relpath(full, scope)
+            print(f"# {rel}:{win_start}-{win_end}\n# fallback window, not exact function\n{snippet}")
+            return 0
         print(f"recon: no function found for {target!r}", file=sys.stderr)
         return 1
     fpath, start, end = span
@@ -1299,12 +1715,17 @@ def cmd_summary(args) -> int:
         print(err, file=sys.stderr)
         return 1
     s = idx["summary"]
+    # Group skipped by reason for the summary view; full list lives in idx["skipped"].
+    skipped_by_reason: Dict[str, List[str]] = {}
+    for item in idx.get("skipped", []):
+        skipped_by_reason.setdefault(item["reason"], []).append(item["path"])
     print(json.dumps({
         "summary": s,
         "languages": idx["languages"],
         "treesitter": idx["treesitter"],
         "backends": idx.get("backends", {}),  # which parser ran per language (regex = degraded)
         "entrypoints": idx["entrypoints"][:50],
+        "skipped_by_reason": {k: v[:20] for k, v in skipped_by_reason.items()},  # top 20 per reason
     }, indent=2))
     return 0
 
@@ -1357,6 +1778,10 @@ def build_parser() -> argparse.ArgumentParser:
     pe = sub.add_parser("extract", help="print the exact function body")
     pe.add_argument("target", help="file#fn | file:line | fn")
     pe.add_argument("--index", default=None)
+    pe.add_argument("--context-lines", type=int, default=_EXTRACT_CONTEXT_DEFAULT,
+                    dest="context_lines",
+                    help="lines of context above+below for the fallback window when no enclosing "
+                         "function is found (default: %(default)s)")
     pe.set_defaults(func=cmd_extract)
 
     pc = sub.add_parser("callers", help="deterministic caller list")

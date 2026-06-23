@@ -149,10 +149,15 @@ const FRAMEWORKS = {
     //   add-to-existing: same as content-only but SKIP writing astro.config if one already exists.
     //   full-project: scaffold a complete buildable project (package.json + npm install) then run astro check.
     assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
-      const { basePath, i18n, versioning } = opts
+      const { basePath, i18n, versioning, site } = opts
       // basePath -> Astro top-level `base` option in defineConfig (e.g. base: '/docs').
       const baseNote = basePath
         ? `   Set base: '${basePath}' in the defineConfig() call (outside starlight()); this makes Astro prefix all routes with the subpath.\n`
+        : ''
+      // site -> Astro top-level `site` option. Starlight auto-adds @astrojs/sitemap, which requires it;
+      // also sets canonical URLs. Without it the build warns and skips the sitemap (non-fatal).
+      const siteNote = site
+        ? `   Set site: '${site}' in the defineConfig() call (top-level, alongside integrations); required for the sitemap Starlight generates and for canonical URLs.\n`
         : ''
       // i18n -> Starlight locales config (defaultLocale + locales map).
       const i18nNote = i18n
@@ -174,7 +179,7 @@ const FRAMEWORKS = {
           : `3. Assemble ${outDir}/astro.config.mjs: a starlight() integration whose sidebar reflects the page groups ` +
             `(${groups}). Use slug items for the admitted pages. Derive a title from the brief. ` +
             `If an astro.config already exists, update its sidebar/title rather than clobbering unrelated config.\n`) +
-        baseNote + i18nNote + versioningNote
+        baseNote + siteNote + i18nNote + versioningNote
       )
     },
     // validate: per-framework empirical build gate. buildCmd returns the shell command to run;
