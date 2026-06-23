@@ -48,7 +48,7 @@
 //   refsDir?:     string  deep-escalation fallback for docs-scraper references
 // }
 
-// requires-skills: docs-scraper, docs-site-builder
+// requires-skills: docs-scraper, docs-site-builder, document
 export const meta = {
   name: 'docs-migrate',
   description: 'Migrate a documentation site from one framework to another: acquire source corpus, map pages via crosswalk, fan out conversion workers, gate for syntax leaks, assemble target config.',

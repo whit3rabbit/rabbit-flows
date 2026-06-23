@@ -20,7 +20,8 @@
     "installer",
     ".claude/workflows",
     "plugins/workflow-kit",
-    "README.md"
+    "README.md",
+    "!**/*-workspace/**"
   ],
   "engines": {
     "node": ">=18"

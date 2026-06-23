@@ -2,13 +2,6 @@
   "$comment": "Catalog the installer reads. Hand-maintained; `npx ... --check` asserts every referenced file exists. skills[] resolve under plugins/workflow-kit/skills/<name>/, agents[] under plugins/workflow-kit/agents/<name>.md.",
   "workflows": [
     {
-      "name": "starter",
-      "file": ".claude/workflows/starter.js",
-      "description": "Reference workflow: decompose a question, fan out workers, gate their notes, synthesize.",
-      "skills": ["workflow-guardrails"],
-      "agents": []
-    },
-    {
       "name": "security-audit",
       "file": ".claude/workflows/security-audit.js",
       "description": "Defensive code audit: map attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation.",
@@ -25,8 +18,8 @@
     {
       "name": "docs-create",
       "file": ".claude/workflows/docs-create.js",
-      "description": "Author an Astro Starlight documentation site from a brief: plan pages, fan out authors, verify + assemble config.",
-      "skills": ["docs-site-builder"],
+      "description": "Author a documentation site from a brief: plan pages, fan out authors, verify + assemble config. Targets Starlight, Docusaurus, MkDocs, VitePress, Fumadocs, mdBook, or Docsify via the framework arg.",
+      "skills": ["docs-site-builder", "document"],
       "agents": []
     },
     {
@@ -53,15 +46,15 @@
     {
       "name": "docs-from-code",
       "file": ".claude/workflows/docs-from-code.js",
-      "description": "Document a whole codebase into a Starlight site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back.",
-      "skills": ["eatahorse", "docs-site-builder", "document-codebase"],
+      "description": "Document a whole codebase into a docs site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks via the framework arg.",
+      "skills": ["eatahorse", "docs-site-builder", "document-codebase", "document"],
       "agents": []
     },
     {
       "name": "docs-migrate",
       "file": ".claude/workflows/docs-migrate.js",
       "description": "Migrate a documentation site from one framework to another: acquire source corpus, map pages via crosswalk, fan out conversion workers, gate for syntax leaks, assemble target config.",
-      "skills": ["docs-scraper", "docs-site-builder"],
+      "skills": ["docs-scraper", "docs-site-builder", "document"],
       "agents": []
     }
   ]

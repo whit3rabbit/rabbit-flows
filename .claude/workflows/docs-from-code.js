@@ -48,7 +48,7 @@
 //   versioning ({current, versions?[]}, optional) — version label; mapped where supported (Docusaurus, Sphinx,
 //     MkDocs/mike); noted and skipped for frameworks without built-in versioning.
 //
-// requires-skills: eatahorse, docs-site-builder, document-codebase
+// requires-skills: eatahorse, docs-site-builder, document-codebase, document
 //   (Bundling only. The eatahorse CLI surface is distilled INLINE as CMD/cli() and sliced per-agent; the
 //    Starlight CONTRACT + IA_CONTRACT are distilled inline from docs-site-builder. Those consts are the
 //    runtime source of truth; the bundled skills are the portable copies. Workflow stages do NOT auto-load
@@ -1024,96 +1024,4381 @@ working result that fast, the IA (or the product's onboarding) is the problem, n
 the single highest-leverage page; design the journey backwards from it.`
 // @generated-end docs-contracts/ia-contract
 
+// @generated-start docs-contracts/docusaurus-contract
+const DOCUSAURUS_CONTRACT = `DOCUSAURUS AUTHORING CONTRACT (distilled from docs-site-builder/frameworks/docusaurus/references; do not re-derive syntax from memory).
+
+---
+
+# Docusaurus: Setup
+
+Distilled from facebook/docusaurus (v3.x). React-based static-site generator for documentation.
+
+## New project
+
+\`\`\`sh
+npx create-docusaurus@latest my-site classic
+# or with TypeScript
+npx create-docusaurus@latest my-site classic --typescript
+
+cd my-site
+npm start   # dev server at http://localhost:3000
+npm run build   # production build into ./build/
+\`\`\`
+
+The \`classic\` preset includes \`@docusaurus/preset-classic\` (docs, blog, pages, themes).
+
+## Project structure
+
+\`\`\`
+my-site/
+  blog/                  # blog posts (optional)
+  docs/                  # documentation markdown
+    intro.md
+    tutorial-basics/
+      create-a-page.md
+  src/
+    components/          # React components
+    css/
+      custom.css         # global styles
+    pages/               # standalone React/MDX pages
+  static/                # assets copied to build root
+    img/
+  docusaurus.config.js   # main config
+  sidebars.js            # sidebar structure
+  package.json
+\`\`\`
+
+## Dev commands
+
+\`\`\`sh
+npm start           # start dev server (http://localhost:3000)
+npm run build       # build for production (output: ./build/)
+npm run serve       # serve built output locally
+npm run clear       # clear generated assets and cache
+npm run swizzle     # customize theme components
+npm run deploy      # deploy to GitHub Pages
+\`\`\`
+
+## Notes
+
+- Content lives in \`docs/\` (Markdown or MDX). Route = \`baseUrl/docs/<slug>\`.
+- Blog posts live in \`blog/\`. Each file is a post; dated filename recommended (\`2024-01-01-title.md\`).
+- Standalone pages: \`src/pages/*.tsx|md|mdx\` — routed without the \`/docs/\` prefix.
+- Docusaurus v3 requires Node.js 18+.
+
+---
+
+# Docusaurus: Configuration (docusaurus.config.js)
+
+Distilled from facebook/docusaurus (v3.x).
+
+\`docusaurus.config.js\` (or \`.ts\`) is the primary config file at the project root.
+
+## Minimal config
+
+\`\`\`js
+// docusaurus.config.js
+const config = {
+  title: 'My Site',
+  tagline: 'Dinosaurs are cool',
+  url: 'https://your-docusaurus-site.example.com',
+  baseUrl: '/',
+  onBrokenLinks: 'throw',
+  onBrokenMarkdownLinks: 'warn',
+  favicon: 'img/favicon.ico',
+  organizationName: 'facebook',   // GitHub org/user (for GitHub Pages deploy)
+  projectName: 'docusaurus',      // GitHub repo name
+  presets: [
+    ['classic', {
+      docs: { sidebarPath: './sidebars.js' },
+      blog: { showReadingTime: true },
+      theme: { customCss: './src/css/custom.css' },
+    }],
+  ],
+  themeConfig: {
+    navbar: { title: 'My Site', items: [] },
+    footer: { style: 'dark', links: [], copyright: \`Copyright \${new Date().getFullYear()}\` },
+  },
+};
+export default config;
+\`\`\`
+
+## Top-level fields
+
+| Field | Type | Notes |
+|---|---|---|
+| \`title\` | string | Site title in browser tab and navbar |
+| \`tagline\` | string | Subtitle used in default home page |
+| \`url\` | string | Full URL of your site (production) |
+| \`baseUrl\` | string | Base path (e.g. \`/my-project/\` for GitHub Pages sub-paths) |
+| \`onBrokenLinks\` | \`'throw'|'warn'|'ignore'\` | Action on broken internal links |
+| \`onBrokenMarkdownLinks\` | \`'throw'|'warn'|'ignore'\` | Action on broken markdown links |
+| \`favicon\` | string | Path under \`static/\` |
+| \`i18n\` | object | Internationalization config (see below) |
+| \`plugins\` | array | Plugin entries |
+| \`presets\` | array | Preset entries (classic preset bundles docs+blog+pages+theme) |
+| \`themeConfig\` | object | Theme-specific config (navbar, footer, colorMode, etc.) |
+| \`markdown\` | object | Global markdown options (e.g. \`{ mermaid: true }\`) |
+
+## \`themeConfig\`
+
+### \`navbar\`
+
+\`\`\`js
+navbar: {
+  title: 'My Site',
+  logo: { alt: 'My Logo', src: 'img/logo.svg' },
+  items: [
+    { type: 'docSidebar', sidebarId: 'tutorialSidebar', position: 'left', label: 'Docs' },
+    { to: '/blog', label: 'Blog', position: 'left' },
+    { href: 'https://github.com/org/repo', label: 'GitHub', position: 'right' },
+    { type: 'docsVersionDropdown', position: 'right' },
+    { type: 'localeDropdown', position: 'right' },
+  ],
+  hideOnScroll: false,
+}
+\`\`\`
+
+Navbar item types: \`default\` (link), \`docSidebar\`, \`doc\`, \`dropdown\`, \`docsVersion\`,
+\`docsVersionDropdown\`, \`localeDropdown\`, \`search\`, \`html\`, \`custom\`.
+
+### \`footer\`
+
+\`\`\`js
+footer: {
+  style: 'dark',   // 'dark' | 'light'
+  links: [
+    {
+      title: 'Docs',
+      items: [{ label: 'Getting started', to: '/docs/intro' }],
+    },
+    {
+      title: 'Community',
+      items: [{ label: 'Discord', href: 'https://discord.gg/...' }],
+    },
+  ],
+  copyright: \`Copyright © \${new Date().getFullYear()} My Company\`,
+}
+\`\`\`
+
+### \`colorMode\`
+
+\`\`\`js
+colorMode: {
+  defaultMode: 'light',        // 'light' | 'dark'
+  disableSwitch: false,
+  respectPrefersColorScheme: true,
+}
+\`\`\`
+
+### \`prism\` (code highlighting)
+
+\`\`\`js
+prism: {
+  theme: require('prism-react-renderer').themes.github,
+  darkTheme: require('prism-react-renderer').themes.dracula,
+  additionalLanguages: ['bash', 'python'],
+}
+\`\`\`
+
+### \`docs\` (classic preset \`docs\` plugin options)
+
+\`\`\`js
+docs: {
+  sidebarPath: './sidebars.js',
+  editUrl: 'https://github.com/org/repo/edit/main/',
+  showLastUpdateAuthor: true,
+  showLastUpdateTime: true,
+  breadcrumbs: true,
+  versions: {},        // versioning config
+  lastVersion: 'current',
+}
+\`\`\`
+
+## Sidebar (\`sidebars.js\`)
+
+\`\`\`js
+// sidebars.js
+const sidebars = {
+  tutorialSidebar: [
+    'intro',                           // doc id (relative path minus .md)
+    {
+      type: 'category',
+      label: 'Tutorial',
+      items: ['tutorial-basics/create-a-page', 'tutorial-basics/create-a-document'],
+      collapsible: true,
+      collapsed: false,
+    },
+    { type: 'autogenerated', dirName: 'api' },   // auto from docs/api/
+    { type: 'link', label: 'GitHub', href: 'https://github.com/org/repo' },
+    { type: 'html', value: '<hr/>' },
+  ],
+};
+export default sidebars;
+\`\`\`
+
+Sidebar item types: \`doc\`, \`category\`, \`autogenerated\`, \`link\`, \`html\`, \`ref\`.
+
+### Category shorthand
+
+Placing \`_category_.json\` or \`_category_.yml\` in a \`docs/\` subdirectory generates that category automatically:
+\`\`\`json
+{ "label": "Tutorial", "position": 2, "collapsed": false }
+\`\`\`
+
+## i18n
+
+\`\`\`js
+i18n: {
+  defaultLocale: 'en',
+  locales: ['en', 'fr', 'de'],
+  localeConfigs: {
+    fr: { label: 'Français', direction: 'ltr' },
+  },
+}
+\`\`\`
+
+---
+
+# Docusaurus: Frontmatter
+
+Distilled from facebook/docusaurus (v3.x).
+
+## Doc pages (\`docs/\`)
+
+\`\`\`yaml
+---
+id: my-doc-id                   # overrides the file-path slug (optional)
+title: My Doc Title             # (required) page title and sidebar label
+description: A short summary.   # used in <meta name="description"> and cards
+sidebar_label: Short label      # label shown in sidebar (overrides title)
+sidebar_position: 2             # numeric order within its category
+slug: /custom-url               # overrides the default URL path
+tags:
+  - docs
+  - feature
+keywords:
+  - docs
+  - docusaurus
+image: /img/og.png              # og:image for social sharing
+hide_title: false               # suppress the H1 title at top of page
+hide_table_of_contents: false   # suppress right-side TOC
+toc_min_heading_level: 2
+toc_max_heading_level: 3
+pagination_prev: null           # disable/set the "Previous" pagination link (null or doc id)
+pagination_next: null
+draft: false                    # exclude from production build
+last_update:
+  date: 2024-01-01
+  author: Someone
+custom_edit_url: null           # override the "Edit this page" link (null to disable)
+---
+\`\`\`
+
+## Blog posts (\`blog/\`)
+
+\`\`\`yaml
+---
+title: Blog Post Title
+description: Blog post description
+slug: my-blog-post              # URL (default: derived from filename)
+authors:
+  - name: Sébastien Lorber
+    title: Docusaurus maintainer
+    url: https://sebastienlorber.com
+    image_url: https://github.com/slorber.png
+  - slorber                     # reference to authors.yml entry
+tags: [hello, docusaurus]
+image: /img/blog-og.png
+hide_table_of_contents: false
+draft: false
+date: 2024-01-01T10:00
+---
+\`\`\`
+
+## Standalone pages (\`src/pages/\`)
+
+Standalone pages (\`.md\` or \`.tsx\`) don't use doc frontmatter; they're rendered as React pages.
+MDX pages may have:
+\`\`\`yaml
+---
+title: My Page
+description: A standalone page
+---
+\`\`\`
+
+## Notes
+
+- \`id\` defaults to the file path relative to \`docs/\`, minus the extension.
+- \`slug\` can start with \`/\` (absolute site path) or be relative.
+- Boolean defaults: \`hide_title: false\`, \`hide_table_of_contents: false\`, \`draft: false\`.
+
+---
+
+# Docusaurus: Content Authoring
+
+Distilled from facebook/docusaurus (v3.x). Uses MDX v3 (supports React components in \`.mdx\`).
+
+## File types
+
+- \`.md\` — standard Markdown; no JSX/React components.
+- \`.mdx\` — MDX (Markdown + JSX). Import and use React components.
+
+## Admonitions (callouts)
+
+\`\`\`md
+:::note
+Note content.
+:::
+
+:::tip[Custom title]
+Tip with a custom title.
+:::
+
+:::info
+:::
+
+:::warning
+:::
+
+:::danger
+:::
+\`\`\`
+
+## Code blocks
+
+Fenced code blocks with syntax highlighting (Prism):
+
+\`\`\`\`md
+\`\`\`js title="src/hello.js"
+function hello() {
+  console.log('Hello, World!');
+}
+\`\`\`
+\`\`\`\`
+
+Line highlighting:
+\`\`\`\`md
+\`\`\`js {1,3-5}
+const a = 1;   // highlighted
+const b = 2;
+const c = 3;   // highlighted
+const d = 4;   // highlighted
+const e = 5;   // highlighted
+\`\`\`
+\`\`\`\`
+
+Show line numbers: \` \`\`\`js showLineNumbers \`
+
+## Tabs (MDX only)
+
+\`\`\`mdx
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs>
+  <TabItem value="apple" label="Apple" default>
+    This is an apple.
+  </TabItem>
+  <TabItem value="orange" label="Orange">
+    This is an orange.
+  </TabItem>
+</Tabs>
+\`\`\`
+
+Synced tabs across the page: \`<Tabs groupId="os">\`.
+
+## Details (collapsible)
+
+\`\`\`mdx
+<details>
+  <summary>Toggle me!</summary>
+
+  Markdown content inside a collapsible block.
+</details>
+\`\`\`
+
+## Import Markdown
+
+\`\`\`mdx
+import MyContent from './myContent.md';
+
+<MyContent />
+\`\`\`
+
+## React/JSX in MDX
+
+\`\`\`mdx
+import Highlight from '@site/src/components/Highlight';
+
+Some text, then a <Highlight color="#25c2a0">highlighted phrase</Highlight>.
+\`\`\`
+
+## Math (KaTeX)
+
+Install \`remark-math\` + \`rehype-katex\`, configure in \`docusaurus.config.js\`, then:
+\`\`\`md
+Inline: $E = mc^2$
+
+Block:
+$$
+\int_0^\infty e^{-x} dx = 1
+$$
+\`\`\`
+
+## Mermaid diagrams
+
+Enable: \`markdown: { mermaid: true }\` + \`@docusaurus/theme-mermaid\` plugin.
+
+\`\`\`\`md
+\`\`\`mermaid
+graph LR
+  A-->B
+  B-->C
+\`\`\`
+\`\`\`\`
+
+## Asset references
+
+\`\`\`md
+![My Image](./assets/my-image.png)
+\`\`\`
+
+Or in MDX: \`import myImage from './assets/my-image.png'; <img src={myImage} />\`
+
+Static assets (no processing): place in \`static/img/\`; reference as \`/img/filename.png\`.
+
+## Partial documents
+
+Place reusable fragments in \`docs/_partials/\` (underscore prefix hides them from sidebar):
+\`\`\`mdx
+import Partial from './_partials/common-steps.md';
+<Partial />
+\`\`\`
+
+## Table of contents
+
+Auto-generated from \`##\` and \`###\` headings. Adjust depth via frontmatter:
+\`\`\`yaml
+toc_min_heading_level: 2
+toc_max_heading_level: 4
+\`\`\`
+
+---
+
+# Docusaurus: Built-in Theme Components
+
+Distilled from facebook/docusaurus (v3.x). Use in \`.mdx\` files with \`import\` from \`@theme/\`.
+
+## Tabs / TabItem
+
+\`\`\`mdx
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs groupId="platform" queryString>
+  <TabItem value="win" label="Windows" default>Windows steps</TabItem>
+  <TabItem value="mac" label="macOS">macOS steps</TabItem>
+  <TabItem value="linux" label="Linux">Linux steps</TabItem>
+</Tabs>
+\`\`\`
+
+Props:
+- \`Tabs\`: \`groupId\` (string, syncs across same-page instances), \`defaultValue\`, \`values\`, \`queryString\` (persist in URL query param).
+- \`TabItem\`: \`value\` (required, unique within \`<Tabs>\`), \`label\` (display name), \`default\` (pre-selected).
+
+## CodeBlock
+
+\`\`\`mdx
+import CodeBlock from '@theme/CodeBlock';
+
+<CodeBlock language="js" title="src/hello.js" showLineNumbers>
+  {\`function hello() { return 'Hello!'; }\`}
+</CodeBlock>
+\`\`\`
+
+Props: \`language\`, \`title\`, \`showLineNumbers\`, \`metastring\` (Prism token string).
+
+## Admonition (programmatic form)
+
+\`\`\`mdx
+import Admonition from '@theme/Admonition';
+
+<Admonition type="tip" icon="💡" title="My tip">
+  Content here.
+</Admonition>
+\`\`\`
+
+Types: \`note\`, \`tip\`, \`info\`, \`warning\`, \`danger\`.
+
+## DocCardList (index pages)
+
+\`\`\`mdx
+import DocCardList from '@theme/DocCardList';
+
+<DocCardList />   // renders cards for all docs in the current category
+\`\`\`
+
+## Mermaid (v3.3+)
+
+\`\`\`mdx
+import Mermaid from '@theme/Mermaid';
+
+<Mermaid value={\`graph LR\n  A --> B\`} />
+\`\`\`
+
+Requires \`@docusaurus/theme-mermaid\` and \`markdown: { mermaid: true }\` in config.
+
+## BrowserWindow (unofficial / theme utility)
+
+Not a core component but commonly used in examples:
+\`\`\`mdx
+import BrowserWindow from '@site/src/components/BrowserWindow';
+
+<BrowserWindow url="https://example.com">
+  Preview content
+</BrowserWindow>
+\`\`\`
+
+## Swizzling (customising components)
+
+To override a theme component:
+\`\`\`sh
+npx docusaurus swizzle @docusaurus/theme-classic Footer -- --eject   # copy to src/theme/
+\`\`\`
+
+Preferred: \`--wrap\` (wrap the original), \`--eject\` (full copy).
+Overridden component lives in \`src/theme/Footer/index.js\`.
+
+## Custom React components
+
+Place in \`src/components/\`. Import with \`@site/src/components/MyComp\` in MDX files.
+
+\`\`\`mdx
+import MyCard from '@site/src/components/MyCard';
+
+<MyCard title="Hello">Content</MyCard>
+\`\`\`
+
+## Head metadata injection
+
+\`\`\`mdx
+import Head from '@docusaurus/Head';
+
+<Head>
+  <meta name="twitter:card" content="summary_large_image" />
+</Head>
+\`\`\``
+// @generated-end docs-contracts/docusaurus-contract
+
+// @generated-start docs-contracts/mkdocs-contract
+const MKDOCS_CONTRACT = `MKDOCS AUTHORING CONTRACT (distilled from docs-site-builder/frameworks/mkdocs/references; do not re-derive syntax from memory).
+
+---
+
+# MkDocs: Setup
+
+Distilled from mkdocs/mkdocs + squidfunk/mkdocs-material. Python-based static-site generator.
+
+## Install
+
+\`\`\`sh
+pip install mkdocs
+# With Material theme (strongly recommended):
+pip install mkdocs-material
+\`\`\`
+
+Or with extras (social cards, image processing):
+\`\`\`sh
+pip install "mkdocs-material[imaging]"
+\`\`\`
+
+## New project
+
+\`\`\`sh
+mkdocs new my-project   # creates mkdocs.yml + docs/index.md
+cd my-project
+mkdocs serve            # dev server at http://127.0.0.1:8000
+mkdocs build            # output to ./site/
+\`\`\`
+
+## Project structure
+
+\`\`\`
+my-project/
+  docs/
+    index.md            # homepage
+    getting-started.md
+    api/
+      reference.md
+  mkdocs.yml            # primary config
+\`\`\`
+
+## Commands
+
+\`\`\`sh
+mkdocs serve            # local dev server (auto-reload)
+mkdocs build            # build to ./site/ (publishable)
+mkdocs build --clean    # clean build
+mkdocs gh-deploy        # deploy to gh-pages branch
+mkdocs new <dir>        # scaffold new project
+\`\`\`
+
+## Notes
+
+- Python 3.8+ required for MkDocs-Material 9.x.
+- \`site/\` is the build output; add it to \`.gitignore\`.
+- MkDocs-Material is effectively the canonical MkDocs setup; most real deployments use it.
+- Plugins, extensions, and hooks are all configured in \`mkdocs.yml\`.
+
+---
+
+# MkDocs: Configuration (mkdocs.yml)
+
+Distilled from mkdocs/mkdocs + squidfunk/mkdocs-material (v9.x).
+
+## Minimal config
+
+\`\`\`yaml
+site_name: My Docs
+\`\`\`
+
+## Full config example
+
+\`\`\`yaml
+site_name: My Project
+site_url: https://myproject.example.com/
+site_description: Documentation for My Project
+site_author: My Name
+repo_url: https://github.com/org/repo
+repo_name: org/repo
+
+theme:
+  name: material
+  language: en
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  font:
+    text: Roboto
+    code: Roboto Mono
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Configuration: getting-started/configuration.md
+  - API Reference:
+    - api/overview.md
+    - api/auth.md
+
+plugins:
+  - search
+  - tags
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      title: On this page
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/org/repo
+  version:
+    provider: mike
+
+copyright: Copyright &copy; 2024 My Company
+\`\`\`
+
+## \`theme.features\` (Material — key ones)
+
+| Feature | Effect |
+|---|---|
+| \`navigation.instant\` | SPA-style instant loading |
+| \`navigation.tabs\` | Top-level nav as tabs |
+| \`navigation.sections\` | Render sections in sidebar |
+| \`navigation.expand\` | Auto-expand sidebar |
+| \`navigation.top\` | Back-to-top button |
+| \`navigation.indexes\` | Section index pages (folder with \`index.md\`) |
+| \`navigation.footer\` | Prev/next page links in footer |
+| \`search.highlight\` | Highlight search terms on page |
+| \`search.suggest\` | Inline search suggestions |
+| \`content.code.copy\` | Copy button on code blocks |
+| \`content.code.annotate\` | Code annotations |
+| \`content.tabs.link\` | Linked content tabs |
+| \`toc.follow\` | TOC auto-scrolls |
+
+## \`nav\` rules
+
+- If \`nav\` is omitted: MkDocs auto-generates from the file tree.
+- Sections: a list under a key. Mix of bare files and sub-sections.
+- Index page for a section: a file matching the section name or \`index.md\` in the folder.
+- Absolute paths in nav are relative to \`docs/\`.
+
+## Plugins (common)
+
+\`\`\`yaml
+plugins:
+  - search:                     # built-in full-text search
+      lang: en
+  - tags:                       # page tagging (Material)
+      tags_file: tags.md
+  - mike:                       # versioning
+  - git-revision-date-localized # show last commit date
+  - minify:                     # minify HTML/CSS/JS
+      minify_html: true
+\`\`\`
+
+## Hooks (\`hooks/\`)
+
+Python scripts in \`hooks/\` that modify build output:
+\`\`\`yaml
+hooks:
+  - hooks/on_page_markdown.py
+\`\`\`
+
+---
+
+# MkDocs: Frontmatter
+
+Distilled from mkdocs/mkdocs + squidfunk/mkdocs-material (v9.x).
+
+Frontmatter is YAML between \`---\` delimiters at the top of a Markdown file.
+
+## Core MkDocs frontmatter
+
+\`\`\`yaml
+---
+title: Page Title               # overrides H1/filename as page title
+description: Short description  # used in <meta name="description">
+hide:
+  - navigation                  # hide the left sidebar on this page
+  - toc                         # hide the right table of contents
+  - footer                      # hide prev/next footer
+---
+\`\`\`
+
+## Material-specific frontmatter
+
+\`\`\`yaml
+---
+status: new          # badge in sidebar: 'new' | 'deprecated'
+icon: material/star  # icon next to title in sidebar
+tags:
+  - HTML
+  - JavaScript
+search:
+  boost: 2           # boost this page in search results (default 1)
+  exclude: false     # exclude from search index
+---
+\`\`\`
+
+## Template frontmatter
+
+\`\`\`yaml
+---
+template: home.html  # use a custom Jinja2 template for this page
+---
+\`\`\`
+
+## Notes
+
+- MkDocs frontmatter is minimal; most configuration lives in \`mkdocs.yml\`.
+- \`title\` from frontmatter overrides the first \`# H1\` heading and the nav label if no explicit nav entry.
+- \`tags\` require the \`tags\` plugin enabled in \`mkdocs.yml\`.
+- \`hide: [navigation, toc]\` is useful for landing pages that should show full-width content.
+- \`description\` is not displayed on the page itself; it populates \`<meta name="description">\` and social sharing cards.
+
+---
+
+# MkDocs: Content Authoring
+
+Distilled from mkdocs/mkdocs + squidfunk/mkdocs-material (v9.x) with pymdownx extensions.
+
+## Admonitions
+
+Requires \`admonition\` + \`pymdownx.details\` extensions.
+
+\`\`\`md
+!!! note
+    Note content (4-space indented).
+
+!!! tip "Custom title"
+    Tip with a custom title.
+
+!!! warning ""
+    Warning with no title (empty string).
+
+??? note "Collapsible (closed by default)"
+    Expand to see content.
+
+???+ tip "Collapsible (open by default)"
+    Open by default.
+\`\`\`
+
+Types: \`note\`, \`abstract\`, \`info\`, \`tip\`, \`success\`, \`question\`, \`warning\`, \`failure\`, \`danger\`, \`bug\`, \`example\`, \`quote\`.
+
+## Code blocks
+
+Requires \`pymdownx.highlight\` + \`pymdownx.superfences\`.
+
+\`\`\`\`md
+\`\`\`python title="hello.py" linenums="1"
+def hello():
+    print("Hello, World!")
+\`\`\`
+\`\`\`\`
+
+Inline highlighting: \`\` \`#!python range()\` \`\` (syntax: \`\` \`#!<lang> code\` \`\`).
+
+Code annotations (requires \`content.code.annotate\` theme feature):
+\`\`\`\`md
+\`\`\`python
+def hello():  # (1)!
+    print("Hello")
+\`\`\`
+
+1. This is an annotation.
+\`\`\`\`
+
+## Content tabs
+
+Requires \`pymdownx.tabbed\` with \`alternate_style: true\`.
+
+\`\`\`md
+=== "Python"
+    \`\`\`python
+    print("Hello")
+    \`\`\`
+
+=== "JavaScript"
+    \`\`\`js
+    console.log("Hello");
+    \`\`\`
+\`\`\`
+
+## Mermaid diagrams
+
+Requires \`pymdownx.superfences\` with the mermaid custom fence.
+
+\`\`\`\`md
+\`\`\`mermaid
+graph LR
+  A[Start] --> B[End]
+\`\`\`
+\`\`\`\`
+
+## Math (KaTeX/MathJax)
+
+Enable in config: \`pymdownx.arithmatex\` extension + JS loader.
+
+\`\`\`md
+Inline: $E = mc^2$
+
+Block:
+$$
+\int_0^\infty e^{-x} dx = 1
+$$
+\`\`\`
+
+## Grids (Material)
+
+Requires \`attr_list\` + \`md_in_html\`.
+
+\`\`\`md
+<div class="grid cards" markdown>
+
+- :material-clock-fast:{ .lg .middle } **Set up in 5 minutes**
+
+    Install and configure quickly.
+
+    [:octicons-arrow-right-24: Getting started](getting-started.md)
+
+</div>
+\`\`\`
+
+## Buttons
+
+Requires \`attr_list\`.
+
+\`\`\`md
+[Subscribe to newsletter](#){ .md-button }
+[Download :fontawesome-solid-download:](#){ .md-button .md-button--primary }
+\`\`\`
+
+## Images with captions
+
+Requires \`attr_list\` + \`md_in_html\`.
+
+\`\`\`md
+![My Image](path/to/image.png){ align=right width=300 }
+
+<figure markdown="span">
+  ![Image title](path/to/image.png){ width="300" }
+  <figcaption>Image caption</figcaption>
+</figure>
+\`\`\`
+
+## Snippets (reusable content)
+
+Requires \`pymdownx.snippets\`.
+
+\`\`\`md
+--8<-- "includes/common-steps.md"
+\`\`\`
+
+Place shared content in \`docs/includes/\`.
+
+## Emoji
+
+Requires \`pymdownx.emoji\`.
+
+\`\`\`md
+:material-home: :fontawesome-brands-github: :octicons-arrow-right-24:
+\`\`\`
+
+## Keyboard keys
+
+Requires \`pymdownx.keys\`.
+
+\`\`\`md
+++ctrl+alt+del++
+\`\`\`
+
+---
+
+# MkDocs: Material Components
+
+Distilled from squidfunk/mkdocs-material (v9.x). MkDocs uses Markdown extensions, not importable components.
+
+## Summary
+
+MkDocs-Material uses Markdown extensions and HTML/CSS utility classes rather than React/Vue components.
+"Components" here means the patterns you use in Markdown to produce rich UI elements.
+
+## Cards grid
+
+Requires \`attr_list\` + \`md_in_html\`.
+
+\`\`\`md
+<div class="grid cards" markdown>
+
+- :material-clock-fast:{ .lg .middle } **Install in 5 minutes**
+
+    ---
+    Quick setup for any project.
+    [:octicons-arrow-right-24: Getting started](getting-started.md)
+
+- :material-scale-balance:{ .lg .middle } **Open Source**
+
+    ---
+    Material for MkDocs is licensed under MIT.
+
+</div>
+\`\`\`
+
+## Annotations
+
+Requires \`content.code.annotate\` feature + \`attr_list\`.
+
+\`\`\`md
+Lorem ipsum (1) dolor sit amet.
+{ .annotate }
+
+1. This is the annotation text.
+\`\`\`
+
+## Tooltips
+
+Requires \`pymdownx.snippets\` + \`attr_list\`.
+
+\`\`\`md
+[Hover me](example.com "Tooltip text"){ title="Tooltip text" }
+\`\`\`
+
+## Details (collapsible blocks)
+
+\`\`\`md
+??? "Summary line"
+    Content inside the collapsible block.
+
+???+ "Open by default"
+    This one starts expanded.
+\`\`\`
+
+## Status badges in nav
+
+Set per-page in frontmatter:
+\`\`\`yaml
+status: new       # shows "New" badge
+status: deprecated
+\`\`\`
+
+## Content tabs
+
+\`\`\`md
+=== "Tab One"
+    Content for tab one.
+
+=== "Tab Two"
+    Content for tab two.
+\`\`\`
+
+## Feedback widget
+
+Configured in \`mkdocs.yml\` analytics section. Renders thumbs up/down per page.
+
+\`\`\`yaml
+analytics:
+  feedback:
+    title: Was this page helpful?
+    ratings:
+      - icon: material/thumb-up-outline
+        name: This page was helpful
+        data: 1
+        note: Thanks for your feedback!
+      - icon: material/thumb-down-outline
+        name: This page could be improved
+        data: 0
+        note: Thanks for the feedback!
+\`\`\`
+
+## Blog (Material plugin)
+
+Requires the \`blog\` plugin:
+\`\`\`yaml
+plugins:
+  - blog
+\`\`\`
+
+Blog posts live in \`docs/blog/posts/\`.
+
+## Social cards
+
+Automatically generated thumbnails (requires \`[imaging]\` extras):
+\`\`\`yaml
+plugins:
+  - social
+\`\`\``
+// @generated-end docs-contracts/mkdocs-contract
+
+// @generated-start docs-contracts/vitepress-contract
+const VITEPRESS_CONTRACT = `VITEPRESS AUTHORING CONTRACT (distilled from docs-site-builder/frameworks/vitepress/references; do not re-derive syntax from memory).
+
+---
+
+# VitePress: Setup
+
+Distilled from vuejs/vitepress (v1.x). Vue + Vite static-site generator for documentation.
+
+## New project (interactive scaffold)
+
+\`\`\`sh
+npm add -D vitepress
+npx vitepress init
+\`\`\`
+
+The wizard asks: root dir, site title, description, theme (default/custom), TypeScript.
+
+\`\`\`sh
+npm run docs:dev     # dev server at http://localhost:5173
+npm run docs:build   # build to ./docs/.vitepress/dist/
+npm run docs:preview # preview built output
+\`\`\`
+
+## Minimal manual setup
+
+\`\`\`sh
+mkdir docs && echo '# Hello VitePress' > docs/index.md
+npx vitepress dev docs
+\`\`\`
+
+## Project structure
+
+\`\`\`
+project-root/
+  docs/                    # content root (configurable)
+    .vitepress/
+      config.mts           # primary config file
+      theme/               # optional custom theme
+        index.ts           # theme entry
+        style.css
+    index.md               # home page
+    getting-started.md
+    guide/
+      introduction.md
+  package.json
+\`\`\`
+
+## \`package.json\` scripts
+
+\`\`\`json
+{
+  "scripts": {
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
+  },
+  "devDependencies": {
+    "vitepress": "^1.0.0"
+  }
+}
+\`\`\`
+
+## Notes
+
+- VitePress v1 requires Node.js 18+.
+- Config file: \`.vitepress/config.mts\` (TypeScript recommended) or \`config.js\`.
+- Content root defaults to \`docs/\` but can be set with the \`srcDir\` option.
+- Build output: \`.vitepress/dist/\` (relative to the docs root).
+- \`public/\` inside the docs root serves static assets at the site root.
+
+---
+
+# VitePress: Configuration (.vitepress/config.mts)
+
+Distilled from vuejs/vitepress (v1.x).
+
+## Minimal config
+
+\`\`\`ts
+// docs/.vitepress/config.mts
+import { defineConfig } from 'vitepress'
+
+export default defineConfig({
+  title: 'My Docs',
+  description: 'A VitePress Site',
+})
+\`\`\`
+
+## Full config example
+
+\`\`\`ts
+import { defineConfig } from 'vitepress'
+
+export default defineConfig({
+  // Site metadata
+  title: 'My Docs',
+  titleTemplate: ':title - My Docs',   // browser tab pattern
+  description: 'Documentation for My Project',
+  lang: 'en-US',
+  base: '/',                            // set to /repo-name/ for GitHub Pages
+
+  // Build options
+  srcDir: '.',                          // relative to config file's dir
+  outDir: '../dist',
+  cleanUrls: true,                      // drop .html from URLs
+
+  // Head tags
+  head: [
+    ['link', { rel: 'icon', href: '/favicon.ico' }],
+    ['meta', { name: 'og:type', content: 'website' }],
+  ],
+
+  // Markdown options
+  markdown: {
+    lineNumbers: true,
+    image: { lazyLoading: true },
+    math: true,                         // requires markdown-it-mathjax3
+    config(md) { /* remark plugins */ },
+  },
+
+  // Theme config
+  themeConfig: {
+    // Navigation
+    nav: [
+      { text: 'Guide', link: '/guide/' },
+      { text: 'API', link: '/api/', activeMatch: '/api/' },
+      {
+        text: 'v1.x',
+        items: [
+          { text: '1.0 Changelog', link: '/changelog/1.0' },
+          { text: 'v0.x', link: 'https://vitepress-v0.netlify.app' },
+        ],
+      },
+    ],
+
+    // Sidebar
+    sidebar: {
+      '/guide/': [
+        {
+          text: 'Introduction',
+          items: [
+            { text: 'What is VitePress?', link: '/guide/what-is-vitepress' },
+            { text: 'Getting Started', link: '/guide/getting-started' },
+          ],
+          collapsed: false,
+        },
+      ],
+      '/api/': [
+        {
+          text: 'API Reference',
+          items: [{ text: 'Config', link: '/api/config' }],
+        },
+      ],
+    },
+
+    // Or a flat sidebar (same sidebar everywhere)
+    // sidebar: [{ text: 'Guide', items: [...] }],
+
+    // Social links
+    socialLinks: [
+      { icon: 'github', link: 'https://github.com/vuejs/vitepress' },
+      { icon: 'twitter', link: '...' },
+      { icon: { svg: '<svg>...</svg>' }, link: '...' },  // custom icon
+    ],
+
+    // Footer (not shown on pages with sidebar)
+    footer: {
+      message: 'Released under the MIT License.',
+      copyright: 'Copyright © 2024 My Company',
+    },
+
+    // Algolia search
+    search: {
+      provider: 'algolia',
+      options: { appId: '...', apiKey: '...', indexName: '...' },
+    },
+    // Or local search (built-in, no setup):
+    // search: { provider: 'local' },
+
+    // Edit link
+    editLink: {
+      pattern: 'https://github.com/org/repo/edit/main/docs/:path',
+      text: 'Edit this page on GitHub',
+    },
+
+    // Last updated
+    lastUpdated: { text: 'Updated at', formatOptions: { dateStyle: 'full', timeStyle: 'medium' } },
+
+    // Carbon ads
+    carbonAds: { code: '...', placement: '...' },
+
+    // Doc footer
+    docFooter: { prev: 'Previous page', next: 'Next page' },
+
+    // Aside (table of contents on right)
+    aside: true,         // 'left' | true (right) | false
+    outline: { level: [2, 3], label: 'On this page' },
+
+    // Language menu (i18n)
+    langMenuLabel: 'Language',
+    returnToTopLabel: 'Return to top',
+  },
+
+  // Internationalization
+  locales: {
+    root: { label: 'English', lang: 'en' },
+    fr: { label: 'Français', lang: 'fr', themeConfig: { nav: [] } },
+  },
+
+  // Vite config passthrough
+  vite: {
+    server: { port: 5173 },
+  },
+})
+\`\`\`
+
+## Sidebar format
+
+\`\`\`ts
+// Flat (global): array
+sidebar: [
+  { text: 'Introduction', link: '/intro' },
+  {
+    text: 'Guide',
+    collapsed: false,
+    items: [
+      { text: 'Installation', link: '/guide/install' },
+      { text: 'Configuration', link: '/guide/config' },
+    ],
+  },
+]
+
+// Per-path: object keyed by path prefix
+sidebar: {
+  '/guide/': [...],   // active when URL starts with /guide/
+  '/api/': [...],
+}
+\`\`\`
+
+Items can be nested: an item can have \`items\` for sub-sections. Max depth: 6 levels rendered.
+
+---
+
+# VitePress: Frontmatter
+
+Distilled from vuejs/vitepress (v1.x).
+
+## Common page frontmatter
+
+\`\`\`yaml
+---
+title: Page Title             # browser tab title and <h1> (if no H1 in content)
+titleTemplate: false          # disable the title template for this page
+description: Page description # <meta name="description">
+layout: doc                   # 'doc' (default) | 'home' | 'page' (full-width, no sidebar)
+lang: en-US                   # override site lang for this page
+dir: ltr                      # text direction 'ltr' | 'rtl'
+---
+\`\`\`
+
+## Table of contents
+
+\`\`\`yaml
+---
+outline: [2, 3]       # heading levels to show (number, [min,max], or 'deep' for all)
+outline: deep         # all heading levels
+outline: false        # disable TOC
+---
+\`\`\`
+
+## Sidebar and nav
+
+\`\`\`yaml
+---
+aside: false          # hide the aside/TOC on this page
+---
+\`\`\`
+
+## Edit link and last updated
+
+\`\`\`yaml
+---
+editLink: false       # hide the "Edit this page" link on this page
+lastUpdated: false    # hide last-updated timestamp for this page
+---
+\`\`\`
+
+## Home page (layout: home)
+
+\`\`\`yaml
+---
+layout: home
+
+hero:
+  name: "My Project"
+  text: "A great tool for developers."
+  tagline: Fast, reliable, and easy to use.
+  image:
+    src: /logo.png
+    alt: My Project Logo
+  actions:
+    - theme: brand
+      text: Get Started
+      link: /guide/getting-started
+    - theme: alt
+      text: View on GitHub
+      link: https://github.com/org/repo
+
+features:
+  - icon:
+      src: /icons/fast.svg
+    title: Blazing Fast
+    details: Built on Vite for instant HMR and fast builds.
+  - icon: 🔒
+    title: Secure
+    details: Security-first design.
+  - title: Easy to Use
+    icon:
+      light: /icons/light.png
+      dark: /icons/dark.png
+    details: Simple configuration.
+---
+\`\`\`
+
+## Page frontmatter (layout: page)
+
+\`layout: page\` renders the content without the doc sidebar and article header.
+Useful for custom landing pages or full-width pages.
+
+## Head tags (per-page)
+
+\`\`\`yaml
+---
+head:
+  - - meta
+    - name: twitter:card
+      content: summary_large_image
+  - - link
+    - rel: canonical
+      href: https://example.com/page
+---
+\`\`\`
+
+## Notes
+
+- Frontmatter values override the equivalent site-level \`themeConfig\` settings.
+- \`layout: doc\` (default) shows the sidebar + TOC.
+- \`layout: page\` removes sidebar and limits the TOC.
+- \`layout: home\` renders a special hero/features layout using the \`hero\` and \`features\` frontmatter keys.
+
+---
+
+# VitePress: Content Authoring
+
+Distilled from vuejs/vitepress (v1.x). Uses markdown-it + Vue-in-Markdown.
+
+## Custom containers (callouts)
+
+\`\`\`md
+::: info
+Information callout.
+:::
+
+::: tip Custom Title
+Tip with a custom title.
+:::
+
+::: warning
+Warning callout.
+:::
+
+::: danger STOP
+Danger callout with custom label.
+:::
+
+::: details Click to expand
+Hidden content.
+:::
+\`\`\`
+
+## Code blocks
+
+\`\`\`\`md
+\`\`\`js
+console.log('Hello, World!')
+\`\`\`
+
+\`\`\`ts{1,3-5}
+const a = 1     // highlighted
+const b = 2
+const c = 3     // highlighted
+\`\`\`
+
+\`\`\`js:line-numbers
+// line numbers enabled
+const a = 1
+\`\`\`
+\`\`\`\`
+
+Focus mode (dim non-focused lines):
+\`\`\`\`md
+\`\`\`js
+export default {
+  data() {
+    return { // [!code focus]
+      msg: 'Hello' // [!code focus]
+    }
+  }
+}
+\`\`\`
+\`\`\`\`
+
+Diff highlighting:
+\`\`\`\`md
+\`\`\`js
+const removed = 'old' // [!code --]
+const added = 'new'   // [!code ++]
+\`\`\`
+\`\`\`\`
+
+Code group (tabbed):
+\`\`\`\`md
+::: code-group
+\`\`\`sh [npm]
+npm install vitepress
+\`\`\`
+\`\`\`sh [pnpm]
+pnpm add vitepress
+\`\`\`
+\`\`\`sh [yarn]
+yarn add vitepress
+\`\`\`
+:::
+\`\`\`\`
+
+## Snippet import
+
+Import code from external files:
+\`\`\`md
+<<< @/src/example.ts
+<<< @/src/example.ts{1,3-5}     # with highlight
+<<< @/src/example.ts{ts}        # language override
+<<< @/src/example.ts#region     # named region: // #region / // #endregion
+\`\`\`
+
+## Vue components in Markdown
+
+VitePress runs Markdown through Vue. Use Vue syntax and global components:
+
+\`\`\`md
+The count is {{ 1 + 1 }}.
+
+<span v-if="true">Visible</span>
+
+<Badge type="tip" text="New" />
+\`\`\`
+
+Escaped: \`<span v-pre>{{ literal }}</span>\`
+
+## Importing Vue components
+
+Place components in \`docs/.vitepress/theme/\` or any path; import in Markdown:
+
+\`\`\`md
+<script setup>
+import MyComponent from './MyComponent.vue'
+</script>
+
+<MyComponent />
+\`\`\`
+
+## Math (requires markdown-it-mathjax3)
+
+Install: \`npm add -D markdown-it-mathjax3\`; enable: \`markdown: { math: true }\` in config.
+
+\`\`\`md
+Inline: $E = mc^2$
+
+Block:
+$$
+\int_0^\infty e^{-x} dx = 1
+$$
+\`\`\`
+
+## Mermaid (via vitepress-plugin-mermaid or custom)
+
+\`\`\`md
+\`\`\`mermaid
+sequenceDiagram
+  Alice->>John: Hello!
+\`\`\`
+\`\`\`
+
+## Table of contents (in-page)
+
+Insert \`[[toc]]\` anywhere to render an inline TOC.
+
+## Links
+
+- Internal links: relative paths (\`.md\` or without extension).
+  \`[Page](./guide.md)\` or \`[Page](./guide)\` — VitePress rewrites to the final URL.
+- External links: auto-opened in new tab with \`rel="noopener noreferrer"\`.
+
+---
+
+# VitePress: Built-in Components
+
+Distilled from vuejs/vitepress (v1.x). Available globally in all \`.md\` and \`.vue\` files.
+
+## Badge
+
+Inline badge for labeling items in text or headings.
+
+\`\`\`md
+### My Feature <Badge type="info" text="v1.2" />
+
+Version <Badge type="tip" text="New" />
+\`\`\`
+
+Props:
+- \`type\`: \`'info'\` | \`'tip'\` | \`'warning'\` | \`'danger'\` (default: \`'tip'\`)
+- \`text\`: string displayed in the badge
+- \`vertical\`: \`'top'\` | \`'middle'\` (default: \`'top'\`) — vertical alignment relative to surrounding text
+
+## Image (lazy loading)
+
+Standard Markdown images get lazy loading when \`markdown.image.lazyLoading: true\` is set.
+
+\`\`\`md
+![Alt text](./image.png)
+\`\`\`
+
+To use \`<picture>\` for dark/light variants, use HTML directly or a custom Vue component.
+
+## Custom Theme Components
+
+Place custom Vue components in \`docs/.vitepress/theme/\`:
+
+\`\`\`ts
+// docs/.vitepress/theme/index.ts
+import DefaultTheme from 'vitepress/theme'
+import MyComponent from './MyComponent.vue'
+
+export default {
+  ...DefaultTheme,
+  enhanceApp({ app }) {
+    app.component('MyComponent', MyComponent)
+  },
+}
+\`\`\`
+
+Then use globally in Markdown:
+\`\`\`md
+<MyComponent title="Hello" />
+\`\`\`
+
+## Layout slots
+
+Inject content into VitePress's default layout via named slots:
+
+\`\`\`ts
+// docs/.vitepress/theme/index.ts
+import DefaultTheme from 'vitepress/theme'
+import Announcement from './Announcement.vue'
+
+export default {
+  ...DefaultTheme,
+  Layout: () => h(DefaultTheme.Layout, null, {
+    'aside-top': () => h(Announcement),
+    'nav-bar-content-after': () => h(MyBadge),
+  }),
+}
+\`\`\`
+
+Available slots include: \`home-hero-before\`, \`home-hero-info-before\`, \`home-hero-info\`,
+\`home-hero-info-after\`, \`home-hero-actions-after\`, \`home-features-before\`, \`home-features-after\`,
+\`sidebar-nav-before\`, \`sidebar-nav-after\`, \`aside-top\`, \`aside-bottom\`, \`aside-outline-before\`,
+\`aside-outline-after\`, \`aside-ads-before\`, \`aside-ads-after\`, \`doc-before\`, \`doc-after\`,
+\`doc-footer-before\`, \`nav-bar-title-before\`, \`nav-bar-title-after\`, \`nav-bar-content-before\`,
+\`nav-bar-content-after\`, \`nav-screen-content-before\`, \`nav-screen-content-after\`.
+
+## useData composable
+
+Access VitePress data in custom components:
+
+\`\`\`vue
+<script setup>
+import { useData } from 'vitepress'
+const { theme, page, frontmatter, isDark } = useData()
+</script>
+
+<template>
+  <h1>{{ frontmatter.title }}</h1>
+</template>
+\`\`\`
+
+## withBase helper
+
+Prepend \`base\` URL to asset paths in components:
+
+\`\`\`ts
+import { withBase } from 'vitepress'
+const logoSrc = withBase('/images/logo.png')
+\`\`\``
+// @generated-end docs-contracts/vitepress-contract
+
+// @generated-start docs-contracts/fumadocs-contract
+const FUMADOCS_CONTRACT = `FUMADOCS AUTHORING CONTRACT (distilled from docs-site-builder/frameworks/fumadocs/references; do not re-derive syntax from memory).
+
+---
+
+# Fumadocs: Setup
+
+Distilled from fuma-nama/fumadocs (v14.x). Next.js-based documentation framework.
+
+## New project (recommended)
+
+\`\`\`sh
+npm create fumadocs-app@latest
+# interactive wizard: project name, content source (fumadocs-mdx or Content Collections)
+cd my-app
+npm run dev   # dev server at http://localhost:3000
+\`\`\`
+
+The wizard scaffolds a complete Next.js App Router project.
+
+## Manual installation (into existing Next.js app)
+
+\`\`\`sh
+npm install fumadocs-ui fumadocs-core
+npm install fumadocs-mdx   # for MDX content source (most common)
+# or: npm install fumadocs-content-collections  # for content-collections source
+\`\`\`
+
+### Required peer dependencies
+
+- Next.js 14+ (App Router)
+- React 18+
+
+## Project structure (from scaffold)
+
+\`\`\`
+my-app/
+  app/
+    (home)/
+      page.tsx              # home page
+    docs/
+      [[...slug]]/
+        page.tsx            # catch-all docs route
+        layout.tsx          # docs layout (sidebar, breadcrumbs)
+    layout.tsx              # root layout (providers)
+  content/
+    docs/                   # MDX content files
+      index.mdx             # home doc
+      getting-started.mdx
+      meta.json             # folder metadata (nav order, title)
+  source.config.ts          # fumadocs-mdx source configuration
+  next.config.mjs           # Next.js config with Fumadocs MDX plugin
+  package.json
+\`\`\`
+
+## \`next.config.mjs\`
+
+\`\`\`js
+import { createMDX } from 'fumadocs-mdx/next'
+
+const withMDX = createMDX()
+
+/** @type {import('next').NextConfig} */
+const config = {
+  reactStrictMode: true,
+}
+
+export default withMDX(config)
+\`\`\`
+
+## \`source.config.ts\`
+
+\`\`\`ts
+import { defineDocs, defineConfig } from 'fumadocs-mdx/config'
+
+export const docs = defineDocs({
+  dir: 'content/docs',
+})
+
+export default defineConfig({
+  mdxOptions: {
+    // remark/rehype plugins
+  },
+})
+\`\`\`
+
+## \`app/layout.tsx\` (root provider)
+
+\`\`\`tsx
+import { RootProvider } from 'fumadocs-ui/provider'
+import type { ReactNode } from 'react'
+
+export default function Layout({ children }: { children: ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <RootProvider>{children}</RootProvider>
+      </body>
+    </html>
+  )
+}
+\`\`\`
+
+## Commands
+
+\`\`\`sh
+npm run dev       # development server
+npm run build     # production build
+npm run start     # serve production build
+\`\`\`
+
+## Notes
+
+- Fumadocs is a React/Next.js framework; it does NOT generate a static site without Next.js.
+- Deploy to Vercel, Netlify, or any Node-compatible host.
+- Content source options: \`fumadocs-mdx\` (recommended, uses Next.js MDX pipeline) or \`fumadocs-content-collections\` (schema-validated).
+
+---
+
+# Fumadocs: Configuration
+
+Distilled from fuma-nama/fumadocs (v14.x).
+
+Configuration is spread across several files, not a single config file.
+
+## Source: \`source.config.ts\`
+
+\`\`\`ts
+import { defineDocs, defineConfig } from 'fumadocs-mdx/config'
+import { rehypeCode } from 'fumadocs-core/mdx-plugins'
+import { remarkInstall } from 'fumadocs-docgen'
+
+export const docs = defineDocs({
+  dir: 'content/docs',
+})
+
+export default defineConfig({
+  mdxOptions: {
+    remarkPlugins: [remarkInstall],
+    rehypePlugins: (v) => [rehypeCode, ...v],
+  },
+})
+\`\`\`
+
+## Docs route: \`app/docs/[[...slug]]/page.tsx\`
+
+\`\`\`tsx
+import { source } from '@/lib/source'
+import { DocsPage, DocsBody, DocsTitle, DocsDescription } from 'fumadocs-ui/page'
+import { notFound } from 'next/navigation'
+import defaultMdxComponents from 'fumadocs-ui/mdx'
+
+export default async function Page({ params }: { params: { slug?: string[] } }) {
+  const page = source.getPage(params.slug)
+  if (!page) notFound()
+
+  const MDX = page.data.body
+
+  return (
+    <DocsPage
+      toc={page.data.toc}
+      full={page.data.full}
+      tableOfContent={{ style: 'clerk', single: false }}
+      tableOfContentPopover={{ enabled: true }}
+    >
+      <DocsTitle>{page.data.title}</DocsTitle>
+      <DocsDescription>{page.data.description}</DocsDescription>
+      <DocsBody>
+        <MDX components={defaultMdxComponents} />
+      </DocsBody>
+    </DocsPage>
+  )
+}
+
+export function generateStaticParams() {
+  return source.generateParams()
+}
+
+export async function generateMetadata({ params }: { params: { slug?: string[] } }) {
+  const page = source.getPage(params.slug)
+  if (!page) notFound()
+  return { title: page.data.title, description: page.data.description }
+}
+\`\`\`
+
+## Docs layout: \`app/docs/[[...slug]]/layout.tsx\`
+
+\`\`\`tsx
+import { DocsLayout } from 'fumadocs-ui/layouts/docs'
+import { source } from '@/lib/source'
+import type { ReactNode } from 'react'
+
+export default function Layout({ children }: { children: ReactNode }) {
+  return (
+    <DocsLayout
+      tree={source.pageTree}
+      nav={{ title: 'My Docs' }}
+      sidebar={{ collapsible: true }}
+    >
+      {children}
+    </DocsLayout>
+  )
+}
+\`\`\`
+
+## Source binding: \`lib/source.ts\`
+
+\`\`\`ts
+import { docs } from '@/.source'
+import { loader } from 'fumadocs-core/source'
+import { createMDXSource } from 'fumadocs-mdx'
+
+export const source = loader({
+  baseUrl: '/docs',
+  source: createMDXSource(docs),
+})
+\`\`\`
+
+## Navigation: \`meta.json\`
+
+Each content directory can have a \`meta.json\` to control sidebar order and labels:
+
+\`\`\`json
+{
+  "title": "Getting Started",
+  "pages": ["index", "installation", "configuration"],
+  "defaultOpen": true
+}
+\`\`\`
+
+\`pages\` is an ordered list of filenames (without extension). Folders are referenced by their dir name.
+
+## \`fumadocs-ui\` theming
+
+The \`RootProvider\` accepts a \`theme\` prop:
+\`\`\`tsx
+<RootProvider theme={{ defaultMode: 'dark' }}>
+\`\`\`
+
+Custom CSS variables in \`global.css\`:
+\`\`\`css
+:root {
+  --fd-nav-height: 4rem;
+  --fd-sidebar-width: 260px;
+}
+\`\`\`
+
+## Search
+
+Fumadocs ships with built-in Orama search (no config needed) or Algolia:
+
+\`\`\`ts
+// app/api/search/route.ts
+import { source } from '@/lib/source'
+import { createSearchAPI } from 'fumadocs-core/search/server'
+
+export const { GET } = createSearchAPI('advanced', {
+  indexes: source.getPages().map((page) => ({
+    title: page.data.title,
+    description: page.data.description,
+    url: page.url,
+    id: page.url,
+    structuredData: page.data.structuredData,
+  })),
+})
+\`\`\`
+
+---
+
+# Fumadocs: Frontmatter
+
+Distilled from fuma-nama/fumadocs (v14.x). Used in \`.mdx\` files in \`content/docs/\`.
+
+## Standard frontmatter
+
+\`\`\`yaml
+---
+title: Page Title             # (required) displayed as page heading and in nav
+description: Short description # shown below title, used in <meta>
+icon: FileText                # Lucide icon name — shown in sidebar next to the title
+full: false                   # if true: full-width page (no TOC aside)
+---
+\`\`\`
+
+## Sidebar position and visibility
+
+Sidebar order and structure is controlled by \`meta.json\` files in each directory, NOT by per-file frontmatter.
+
+\`meta.json\` in the same directory:
+\`\`\`json
+{
+  "title": "Guide",
+  "pages": ["intro", "setup", "config"],
+  "defaultOpen": true
+}
+\`\`\`
+
+## TOC configuration
+
+\`\`\`yaml
+---
+toc: true    # default; set false to hide TOC on this page
+---
+\`\`\`
+
+## Full page width
+
+\`\`\`yaml
+---
+full: true   # removes the TOC aside, content spans full width
+---
+\`\`\`
+
+## Custom frontmatter fields
+
+Define additional typed fields in \`source.config.ts\`:
+
+\`\`\`ts
+import { defineDocs, defineConfig, frontmatterSchema } from 'fumadocs-mdx/config'
+import { z } from 'zod'
+
+export const docs = defineDocs({
+  dir: 'content/docs',
+  docs: {
+    schema: frontmatterSchema.extend({
+      preview: z.string().optional(),
+      tags: z.array(z.string()).optional(),
+    }),
+  },
+})
+\`\`\`
+
+Then access in \`page.data.preview\`, \`page.data.tags\`.
+
+## Notes
+
+- Fumadocs frontmatter is minimal. Most structure (nav, order) comes from \`meta.json\`.
+- \`icon\` accepts any Lucide icon name (see https://lucide.dev/) as a string.
+- \`title\` is the only required field; pages without it won't render a heading.
+- All frontmatter fields are TypeScript-typed via the Zod schema in \`source.config.ts\`.
+
+---
+
+# Fumadocs: Content Authoring
+
+Distilled from fuma-nama/fumadocs (v14.x). Content is \`.mdx\` files in \`content/docs/\`.
+
+## File format
+
+All doc pages use \`.mdx\` (MDX — Markdown + JSX). Standard Markdown works inside MDX.
+
+## Callouts / admonitions
+
+Via the \`Callout\` component (included in \`fumadocs-ui/mdx\` defaults):
+
+\`\`\`mdx
+import { Callout } from 'fumadocs-ui/components/callout'
+
+<Callout type="info">This is an info callout.</Callout>
+<Callout type="warn">Warning callout.</Callout>
+<Callout type="error">Error callout.</Callout>
+<Callout title="Custom Title">Note with a title.</Callout>
+\`\`\`
+
+Types: \`info\` (default), \`warn\`, \`error\`.
+
+Or use the remark-based syntax (if \`remarkAdmonition\` plugin is configured):
+\`\`\`md
+> [!NOTE]
+> GitHub-style admonition.
+\`\`\`
+
+## Code blocks
+
+Standard fenced code blocks with optional title and highlighting via \`rehypeCode\`:
+
+\`\`\`\`md
+\`\`\`ts title="hello.ts"
+function hello(): string {
+  return 'Hello!'
+}
+\`\`\`
+\`\`\`\`
+
+Diff:
+\`\`\`\`md
+\`\`\`ts
+const a = 1  // [!code --]
+const b = 2  // [!code ++]
+\`\`\`
+\`\`\`\`
+
+## Tabs
+
+\`\`\`mdx
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
+
+<Tabs items={['npm', 'pnpm', 'yarn']}>
+  <Tab value="npm">
+    \`\`\`sh
+    npm install fumadocs-ui
+    \`\`\`
+  </Tab>
+  <Tab value="pnpm">
+    \`\`\`sh
+    pnpm add fumadocs-ui
+    \`\`\`
+  </Tab>
+  <Tab value="yarn">
+    \`\`\`sh
+    yarn add fumadocs-ui
+    \`\`\`
+  </Tab>
+</Tabs>
+\`\`\`
+
+## Steps
+
+\`\`\`mdx
+import { Steps, Step } from 'fumadocs-ui/components/steps'
+
+<Steps>
+  <Step>
+    ### Install
+
+    Run \`npm install fumadocs-ui\`.
+  </Step>
+  <Step>
+    ### Configure
+
+    Add \`RootProvider\` to your layout.
+  </Step>
+</Steps>
+\`\`\`
+
+## File tree
+
+\`\`\`mdx
+import { Files, Folder, File } from 'fumadocs-ui/components/files'
+
+<Files>
+  <Folder name="app" defaultOpen>
+    <File name="page.tsx" />
+    <File name="layout.tsx" />
+  </Folder>
+  <File name="next.config.mjs" />
+</Files>
+\`\`\`
+
+## Cards
+
+\`\`\`mdx
+import { Cards, Card } from 'fumadocs-ui/components/card'
+
+<Cards>
+  <Card title="Getting Started" href="/docs/getting-started" icon={<MyIcon />} />
+  <Card title="API Reference" href="/docs/api" description="Full API docs." />
+</Cards>
+\`\`\`
+
+## Accordion
+
+\`\`\`mdx
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion'
+
+<Accordions>
+  <Accordion title="What is Fumadocs?">
+    Fumadocs is a Next.js documentation framework.
+  </Accordion>
+  <Accordion title="How do I install it?">
+    Run \`npm create fumadocs-app@latest\`.
+  </Accordion>
+</Accordions>
+\`\`\`
+
+## Auto-install snippet (fumadocs-docgen)
+
+\`\`\`mdx
+import { AutoTypeTable } from 'fumadocs-typescript/ui'
+
+<AutoTypeTable path="./my-types.ts" name="MyConfig" />
+\`\`\`
+
+## MDX defaults
+
+\`defaultMdxComponents\` from \`fumadocs-ui/mdx\` pre-wires all built-in components.
+Pass it to \`<MDX components={defaultMdxComponents} />\` in the page component.
+Individual components can be added to it:
+
+\`\`\`tsx
+import defaultMdxComponents from 'fumadocs-ui/mdx'
+const components = { ...defaultMdxComponents, MyComponent }
+\`\`\`
+
+---
+
+# Fumadocs: UI Components
+
+Distilled from fuma-nama/fumadocs (v14.x). Import from \`fumadocs-ui/components/*\`.
+
+## Callout
+
+\`\`\`tsx
+import { Callout } from 'fumadocs-ui/components/callout'
+
+<Callout type="info" title="Optional title">
+  Content here.
+</Callout>
+\`\`\`
+
+Props: \`type?: 'info' | 'warn' | 'error'\`, \`title?: string\`, \`icon?: ReactNode\`.
+
+## Tabs / Tab
+
+\`\`\`tsx
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs'
+
+<Tabs items={['Tab 1', 'Tab 2']} defaultIndex={0} persist groupId="install">
+  <Tab value="Tab 1">Content for tab 1</Tab>
+  <Tab value="Tab 2">Content for tab 2</Tab>
+</Tabs>
+\`\`\`
+
+Props:
+- \`Tabs\`: \`items\` (string[], required), \`defaultIndex\`, \`persist\` (remember in localStorage), \`groupId\` (sync across instances).
+- \`Tab\`: \`value\` (string matching items entry, required).
+
+## Steps / Step
+
+\`\`\`tsx
+import { Steps, Step } from 'fumadocs-ui/components/steps'
+
+<Steps>
+  <Step>### Step One\n\nContent.</Step>
+  <Step>### Step Two\n\nContent.</Step>
+</Steps>
+\`\`\`
+
+No required props; each \`Step\` renders its children as markdown.
+
+## Cards / Card
+
+\`\`\`tsx
+import { Cards, Card } from 'fumadocs-ui/components/card'
+
+<Cards>
+  <Card href="/docs/intro" title="Introduction" description="Learn the basics." />
+  <Card href="/docs/api" title="API Reference" icon={<BookIcon />} />
+</Cards>
+\`\`\`
+
+Props for \`Card\`: \`href\` (string), \`title\` (string), \`description?\` (string), \`icon?\` (ReactNode), \`external?\` (boolean).
+
+## Files / Folder / File
+
+\`\`\`tsx
+import { Files, Folder, File } from 'fumadocs-ui/components/files'
+
+<Files>
+  <Folder name="src" defaultOpen>
+    <File name="index.ts" />
+    <Folder name="lib">
+      <File name="utils.ts" />
+    </Folder>
+  </Folder>
+</Files>
+\`\`\`
+
+Props for \`Folder\`: \`name\` (string), \`defaultOpen?\` (boolean).
+Props for \`File\`: \`name\` (string), \`icon?\` (ReactNode).
+
+## Accordion / Accordions
+
+\`\`\`tsx
+import { Accordion, Accordions } from 'fumadocs-ui/components/accordion'
+
+<Accordions type="single" collapsible>
+  <Accordion id="faq-1" title="Question 1">Answer 1</Accordion>
+  <Accordion id="faq-2" title="Question 2">Answer 2</Accordion>
+</Accordions>
+\`\`\`
+
+Props for \`Accordions\`: \`type?: 'single' | 'multiple'\`, \`collapsible?\` (boolean).
+Props for \`Accordion\`: \`id\` (string), \`title\` (string).
+
+## Codeblock (manual)
+
+\`\`\`tsx
+import { CodeBlock, Pre } from 'fumadocs-ui/components/codeblock'
+
+<CodeBlock filename="hello.ts" allowCopy>
+  <Pre>{\`const x = 1;\`}</Pre>
+</CodeBlock>
+\`\`\`
+
+## ImageZoom
+
+\`\`\`tsx
+import { ImageZoom } from 'fumadocs-ui/components/image-zoom'
+
+<ImageZoom src="/screenshot.png" alt="Screenshot" width={800} height={400} />
+\`\`\`
+
+Wraps Next.js \`<Image>\` with a click-to-zoom lightbox.
+
+## DocsPage layout components
+
+Used in \`app/docs/[[...slug]]/page.tsx\`:
+
+\`\`\`tsx
+import {
+  DocsPage,
+  DocsBody,
+  DocsTitle,
+  DocsDescription,
+  DocsCategory,
+} from 'fumadocs-ui/page'
+\`\`\`
+
+- \`DocsPage\`: root wrapper; accepts \`toc\`, \`full\`, \`tableOfContent\`, \`tableOfContentPopover\`.
+- \`DocsBody\`: wraps rendered MDX content.
+- \`DocsTitle\`: renders page \`title\` as \`<h1>\`.
+- \`DocsDescription\`: renders page \`description\`.
+- \`DocsCategory\`: renders child pages as a card grid (for index/category pages).`
+// @generated-end docs-contracts/fumadocs-contract
+
+// @generated-start docs-contracts/mdbook-contract
+const MDBOOK_CONTRACT = `MDBOOK AUTHORING CONTRACT (distilled from docs-site-builder/frameworks/mdbook/references; do not re-derive syntax from memory).
+
+---
+
+# mdBook: Setup
+
+Distilled from rust-lang/mdBook (v0.4.x). Rust-based Markdown book generator.
+
+## Install
+
+\`\`\`sh
+# Via cargo (Rust toolchain required)
+cargo install mdbook
+
+# Via pre-built binary (download from GitHub releases):
+# https://github.com/rust-lang/mdBook/releases
+\`\`\`
+
+## New project
+
+\`\`\`sh
+mdbook init my-book
+cd my-book
+mdbook serve   # dev server at http://localhost:3000
+mdbook build   # output to ./book/
+\`\`\`
+
+\`mdbook init\` creates:
+\`\`\`
+my-book/
+  book.toml      # configuration
+  src/
+    SUMMARY.md   # table of contents (drives navigation)
+    chapter_1.md
+\`\`\`
+
+When prompted, it can generate a \`.gitignore\` for the \`book/\` output.
+
+## Commands
+
+\`\`\`sh
+mdbook init [path]        # create new book
+mdbook build [path]       # build to book/ (default)
+mdbook serve [path]       # build + live-reload dev server
+mdbook test [path]        # run Rust doc-tests in code blocks
+mdbook clean [path]       # delete build output
+mdbook watch [path]       # rebuild on file changes (no server)
+\`\`\`
+
+## Project structure
+
+\`\`\`
+my-book/
+  book.toml              # book configuration
+  src/
+    SUMMARY.md           # defines the chapter structure (required)
+    README.md            # introduction / home page (linked from SUMMARY.md)
+    chapter-1.md
+    chapter-2/
+      README.md          # chapter index page
+      sub-section.md
+  book/                  # build output (auto-generated, gitignore this)
+  theme/                 # optional: override HTML/CSS/JS/handlebars templates
+\`\`\`
+
+## Notes
+
+- \`SUMMARY.md\` is the only navigation file. All chapters must be listed there.
+- mdBook produces a static HTML site (no JavaScript framework).
+- Chapters not linked in \`SUMMARY.md\` are not built.
+- mdBook is commonly used for Rust crate documentation (The Rust Book, Rustonomicon, etc.).
+
+---
+
+# mdBook: Configuration (book.toml)
+
+Distilled from rust-lang/mdBook (v0.4.x).
+
+## Minimal config
+
+\`\`\`toml
+[book]
+title = "My Book"
+\`\`\`
+
+## Full config example
+
+\`\`\`toml
+[book]
+title = "My Book"
+authors = ["Jane Smith"]
+description = "A book about things."
+language = "en"
+multilingual = false
+src = "src"           # content source directory (default: "src")
+
+[build]
+build-dir = "book"   # output directory (default: "book")
+create-missing = true  # create missing chapter files from SUMMARY.md
+
+[rust]
+edition = "2021"     # Rust edition for doc-tests (default: "2015")
+
+[output.html]
+theme = "default"                        # or path to a custom theme dir
+default-theme = "light"                  # "light" | "rust" | "coal" | "navy" | "ayu"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/org/repo"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/org/repo/edit/main/{path}"
+site-url = "/my-book/"                   # for deployment at a sub-path
+cname = "book.example.com"
+no-section-label = false                 # omit section numbers in sidebar
+additional-css = ["theme/custom.css"]
+additional-js = ["theme/custom.js"]
+mathjax-support = true                   # enable MathJax
+google-analytics = "UA-XXXXX-Y"
+search.enable = true
+search.limit = 30
+search.use-boolean-and = true
+search.boost-title = 2
+search.boost-hierarchy = 1
+search.boost-paragraph = 1
+search.expand = true
+search.heading-split-level = 3
+search.copy-js = true
+
+[output.html.print]
+enable = true        # print.html page for the entire book
+page-break = true    # insert page breaks between chapters in print view
+
+[output.html.fold]
+enable = false       # fold/collapse sections in the sidebar
+level = 0            # depth at which to fold
+
+[output.html.playground]
+editable = false     # allow editing code examples inline
+line-numbers = false
+
+[preprocessor.index]
+# built-in: converts README.md to index.html
+[preprocessor.links]
+# built-in: expands {{#include path}} and {{#rustdoc_include ...}}
+\`\`\`
+
+## \`SUMMARY.md\` (navigation definition)
+
+This file is required and defines the entire book structure.
+
+\`\`\`md
+# Summary
+
+[Introduction](README.md)
+
+- [First Chapter](chapter-1.md)
+- [Second Chapter](chapter-2/README.md)
+  - [Sub-section](chapter-2/sub-section.md)
+
+---
+
+[Appendix](appendix.md)
+[Other references]()   # chapter without a file (coming soon placeholder)
+\`\`\`
+
+Rules:
+- **Numbered chapters:** items in an ordered/unordered list under a \`# Part Title\`.
+- **Prefix chapters:** links before the first list item (not numbered, always visible).
+- **Suffix chapters:** links after all list items (not numbered).
+- **Draft chapters:** \`[Title]()\` with no link — shows in sidebar but is not built.
+- **Separators:** \`---\` adds a horizontal rule between sections.
+- \`README.md\` in a directory becomes the chapter index (\`index.html\`).
+
+## Preprocessors
+
+\`\`\`toml
+[preprocessor.mermaid]
+command = "mdbook-mermaid"   # external preprocessor binary
+
+[preprocessor.admonish]
+command = "mdbook-admonish"
+\`\`\`
+
+Install external preprocessors via cargo:
+\`\`\`sh
+cargo install mdbook-mermaid
+mdbook-mermaid install   # injects JS into book.toml/theme
+\`\`\`
+
+## Output backends
+
+\`\`\`toml
+[output.html]      # default HTML output
+[output.epub]      # EPUB via mdbook-epub (external)
+[output.pdf]       # PDF via mdbook-pdf (external)
+[output.markdown]  # raw markdown passthrough (built-in, for testing)
+\`\`\`
+
+---
+
+# mdBook: Frontmatter and Page Metadata
+
+Distilled from rust-lang/mdBook (v0.4.x).
+
+## Standard frontmatter (not used by default)
+
+**mdBook does NOT process YAML/TOML frontmatter by default.** Frontmatter blocks are rendered as-is (as a table or code block) unless a preprocessor strips them.
+
+If you need frontmatter processing, add a preprocessor like \`mdbook-preprocessor-front-matter\` or handle it in a custom preprocessor.
+
+## Page metadata via SUMMARY.md
+
+Navigation titles and structure come from \`SUMMARY.md\`, not from per-file frontmatter:
+
+\`\`\`md
+- [Custom Title](path/to/file.md)
+\`\`\`
+
+The link label in \`SUMMARY.md\` is the chapter's display name in the sidebar and navigation.
+The page's \`# H1\` heading is shown at the top of the rendered page.
+
+## Part labels
+
+\`\`\`md
+# Part One
+
+- [Chapter 1](ch1.md)
+
+# Part Two
+
+- [Chapter 4](ch4.md)
+\`\`\`
+
+Part headings (\`# Title\`) create sidebar sections (not rendered as chapters).
+
+## Draft chapters
+
+\`\`\`md
+- [Upcoming Feature]()   # no file path = draft (visible in sidebar, not clickable)
+\`\`\`
+
+## Include directives (within chapter files)
+
+These are processed by the built-in \`links\` preprocessor:
+
+\`\`\`md
+{{#include path/to/file.md}}
+{{#include path/to/file.md:10:20}}       # lines 10-20 only
+{{#include path/to/file.md:ANCHOR_NAME}} # named anchor
+
+{{#rustdoc_include path/to/lib.rs:ANCHOR}}  # hide boilerplate, run as doc-test
+\`\`\`
+
+Named anchors in source files (Rust, Python, etc.):
+\`\`\`rust
+// ANCHOR: my_anchor
+fn example() {}
+// ANCHOR_END: my_anchor
+\`\`\`
+
+## Playgrounds
+
+Mark a code block as editable (requires \`[output.html.playground] editable = true\`):
+\`\`\`\`md
+\`\`\`rust,editable
+fn main() {
+    println!("Edit me!");
+}
+\`\`\`
+\`\`\`\`
+
+Code block attributes: \`,editable\`, \`,noplayground\`, \`,ignore\`, \`,should_panic\`, \`,no_run\`.
+
+## Notes
+
+- Page title in the browser tab = \`# H1\` heading in the file.
+- Sidebar title = the label in \`SUMMARY.md\`.
+- There is no per-file slug or URL override; URLs derive from the file path relative to \`src/\`.
+
+---
+
+# mdBook: Content Authoring
+
+Distilled from rust-lang/mdBook (v0.4.x). Chapters are Markdown files in \`src/\`.
+
+## Markdown support
+
+mdBook uses a CommonMark-compatible Markdown parser (pulldown-cmark). Most standard Markdown works.
+
+## Handlebars helpers (built-in template variables)
+
+Available in \`theme/\` override templates (Handlebars), not in content \`.md\` files.
+Content files render as-is except for \`{{#include}}\` and other preprocessor directives.
+
+## File includes
+
+Processed by the built-in \`links\` preprocessor (enabled by default):
+
+\`\`\`md
+<!-- Include entire file -->
+{{#include relative/path/to/file.md}}
+
+<!-- Include line range -->
+{{#include src/lib.rs:10:25}}
+
+<!-- Include a named anchor region -->
+{{#include src/lib.rs:example_function}}
+\`\`\`
+
+In the included file, mark anchors:
+\`\`\`rust
+// ANCHOR: example_function
+pub fn example() -> i32 { 42 }
+// ANCHOR_END: example_function
+\`\`\`
+
+## Code blocks
+
+Standard fenced code blocks with syntax highlighting (highlight.js):
+
+\`\`\`\`md
+\`\`\`rust
+fn main() {
+    println!("Hello, world!");
+}
+\`\`\`
+
+\`\`\`python
+print("Hello, world!")
+\`\`\`
+\`\`\`\`
+
+Supported language hints: any language that highlight.js recognizes.
+
+### Rust-specific: runnable examples
+
+\`\`\`\`md
+\`\`\`rust
+fn main() {
+    println!("This runs in the playground!");
+}
+\`\`\`
+\`\`\`\`
+
+To disable (not runnable): \` \`\`\`rust,noplayground \` or \` \`\`\`rust,no_run \`
+
+To mark as expected-to-panic: \` \`\`\`rust,should_panic \`
+
+To hide from rendered output but include in doc-tests: \` \`\`\`rust,ignore \`
+
+## MathJax (if enabled in config)
+
+\`\`\`toml
+[output.html]
+mathjax-support = true
+\`\`\`
+
+Inline: \`\\(E = mc^2\\)\`
+Block:
+\`\`\`
+\\[
+\int_0^\infty e^{-x} dx = 1
+\\]
+\`\`\`
+
+Note: mdBook uses \`\\(\` and \`\\[\` (double backslash), not \`$\` and \`$$\`.
+
+## Admonitions (via mdbook-admonish preprocessor)
+
+Install: \`cargo install mdbook-admonish && mdbook-admonish install\`
+
+\`\`\`\`md
+\`\`\`admonish note
+This is a note.
+\`\`\`
+
+\`\`\`admonish tip title="Pro tip"
+Custom title tip.
+\`\`\`
+
+\`\`\`admonish warning
+Watch out!
+\`\`\`
+\`\`\`\`
+
+Types: \`note\`, \`abstract\`, \`info\`, \`tip\`, \`success\`, \`question\`, \`warning\`, \`failure\`, \`danger\`, \`bug\`, \`example\`, \`quote\`.
+
+## Mermaid diagrams (via mdbook-mermaid preprocessor)
+
+Install: \`cargo install mdbook-mermaid && mdbook-mermaid install\`
+
+\`\`\`\`md
+\`\`\`mermaid
+graph LR
+  A --> B --> C
+\`\`\`
+\`\`\`\`
+
+## Table of contents (inline)
+
+No built-in inline TOC. The sidebar auto-generates chapter navigation.
+Right-side heading TOC is rendered by the HTML theme from the page's headings.
+
+## Images and assets
+
+Place images in \`src/images/\` (or any subdirectory of \`src/\`).
+
+\`\`\`md
+![My Image](images/screenshot.png)
+\`\`\`
+
+Relative paths work relative to the chapter file's location within \`src/\`.
+
+## Custom HTML
+
+Raw HTML works in Markdown files. Useful for special layouts.
+
+\`\`\`md
+<div class="warning">
+
+This is a custom warning block using raw HTML.
+
+</div>
+\`\`\`
+
+---
+
+# mdBook: Theme and Extensions
+
+Distilled from rust-lang/mdBook (v0.4.x). mdBook has no component system; customization is via theme overrides and preprocessors.
+
+## Built-in theme files (override by placing in \`theme/\`)
+
+\`\`\`
+theme/
+  index.hbs          # main Handlebars page template
+  head.hbs           # extra <head> content
+  header.hbs         # top bar content
+  redirect.hbs       # redirect page template
+  toc.js             # table of contents behavior
+  favicon.png        # book favicon
+  favicon.svg
+  book.js            # main JS (search, theme switcher, etc.)
+  css/
+    chrome.css       # layout/chrome styles
+    general.css      # body/typography styles
+    print.css        # print-specific styles
+    variables.css    # CSS custom properties for theming
+  highlight.js       # syntax highlighting
+  highlight.css
+  tomorrow-night.css
+  ayu-highlight.css
+\`\`\`
+
+\`mdbook init --theme\` to copy all theme files to \`theme/\` for editing.
+
+## CSS customization
+
+The easiest customization: add a \`custom.css\` and reference it in \`book.toml\`:
+\`\`\`toml
+[output.html]
+additional-css = ["theme/custom.css"]
+\`\`\`
+
+CSS custom properties to override (defined in \`theme/css/variables.css\`):
+\`\`\`css
+:root {
+  --bg: white;
+  --fg: #333;
+  --sidebar-bg: #fafafa;
+  --sidebar-fg: #364149;
+  --links: #4183c4;
+  --inline-code-color: #c0341d;
+}
+\`\`\`
+
+## JS customization
+
+\`\`\`toml
+[output.html]
+additional-js = ["theme/custom.js"]
+\`\`\`
+
+## Handlebars variables (in \`index.hbs\`)
+
+Available template variables:
+\`\`\`handlebars
+{{title}}             <!-- page title -->
+{{book_title}}        <!-- book title from book.toml -->
+{{chapter_title}}     <!-- current chapter title -->
+{{path}}              <!-- file path of current chapter -->
+{{content}}           <!-- rendered Markdown HTML -->
+{{toc}}               <!-- sidebar TOC HTML -->
+{{previous}}          <!-- { link, name } or undefined -->
+{{next}}              <!-- { link, name } or undefined -->
+{{git_repository_url}} <!-- from config -->
+{{print_enable}}      <!-- print.html enabled? -->
+{{search_enabled}}    <!-- search feature enabled? -->
+\`\`\`
+
+## Preprocessors
+
+Preprocessors transform Markdown before rendering. Common ones:
+
+| Preprocessor | Install | Effect |
+|---|---|---|
+| \`mdbook-admonish\` | \`cargo install mdbook-admonish\` | Callout blocks |
+| \`mdbook-mermaid\` | \`cargo install mdbook-mermaid\` | Mermaid diagrams |
+| \`mdbook-toc\` | \`cargo install mdbook-toc\` | Inline \`<!-- toc -->\` generation |
+| \`mdbook-tabs\` | \`cargo install mdbook-tabs\` | Tabbed content |
+| \`mdbook-katex\` | \`cargo install mdbook-katex\` | KaTeX math (alternative to MathJax) |
+
+Custom preprocessor minimal config:
+\`\`\`toml
+[preprocessor.my-preprocessor]
+command = "my-preprocessor-binary"
+renderer = ["html"]   # only run for HTML output
+\`\`\`
+
+## Output backends (non-HTML)
+
+\`\`\`toml
+[output.markdown]   # built-in: markdown passthrough (testing)
+[output.epub]       # via mdbook-epub: cargo install mdbook-epub
+\`\`\``
+// @generated-end docs-contracts/mdbook-contract
+
+// @generated-start docs-contracts/docsify-contract
+const DOCSIFY_CONTRACT = `DOCSIFY AUTHORING CONTRACT (distilled from docs-site-builder/frameworks/docsify/references; do not re-derive syntax from memory).
+
+---
+
+# Docsify: Setup
+
+Distilled from docsifyjs/docsify (v4.x). Runtime Markdown renderer — no build step.
+
+## Key concept
+
+Docsify renders Markdown at runtime in the browser. You serve static files (HTML + Markdown);
+no build pipeline or compilation step is required.
+
+## Install CLI (optional)
+
+\`\`\`sh
+npm i docsify-cli -g
+\`\`\`
+
+## New project
+
+\`\`\`sh
+docsify init ./docs   # creates docs/index.html, docs/README.md, docs/.nojekyll
+
+cd docs
+docsify serve .       # local server at http://localhost:3000
+\`\`\`
+
+Without the CLI, just serve the directory with any static file server:
+\`\`\`sh
+npx serve docs
+# or
+python3 -m http.server 3000 --directory docs
+\`\`\`
+
+## Minimal \`index.html\`
+
+\`\`\`html
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Docs</title>
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    window.$docsify = {
+      name: 'My Docs',
+      repo: 'https://github.com/org/repo',
+      loadSidebar: true,
+      subMaxLevel: 2,
+    }
+  </script>
+  <script src="//cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
+</body>
+</html>
+\`\`\`
+
+## Project structure
+
+\`\`\`
+docs/
+  .nojekyll          # prevents GitHub Pages from ignoring _ files
+  index.html         # entry point (the app shell + config)
+  README.md          # home page content
+  _sidebar.md        # sidebar navigation (when loadSidebar: true)
+  _navbar.md         # top navbar (when loadNavbar: true)
+  _coverpage.md      # cover page (when coverpage: true)
+  guide/
+    README.md        # /guide/ route
+    advanced.md      # /guide/advanced route
+\`\`\`
+
+## Deployment
+
+Docsify is just static files. Deploy to:
+- GitHub Pages: push to \`gh-pages\` branch or \`docs/\` folder
+- Netlify / Vercel: serve the \`docs/\` directory
+- Any static host
+
+Add \`.nojekyll\` to prevent GitHub from ignoring \`_sidebar.md\` etc.
+
+## Notes
+
+- No build step = instant authoring, but no tree-shaking or pre-rendering.
+- Content is fetched via XHR at runtime; SEO requires server-side rendering (not included).
+- Docsify v4 uses CDN-based delivery; no npm install needed for the site itself.
+
+---
+
+# Docsify: Configuration (window.$docsify)
+
+Distilled from docsifyjs/docsify (v4.x). All config lives in \`index.html\`.
+
+## Configuration object
+
+\`\`\`js
+window.$docsify = {
+  // ---- Identity ----
+  name: 'My Docs',               // site name (shown in sidebar header)
+  nameLink: '/',                 // link for the site name
+  logo: '/_media/icon.svg',      // logo next to name in sidebar
+  repo: 'https://github.com/org/repo',  // GitHub corner link
+
+  // ---- Entry / routing ----
+  homepage: 'README.md',         // default home page file
+  basePath: '/base/',            // base path for all requests
+  alias: {
+    '/old-path': '/new-path',    // URL redirects
+  },
+  routerMode: 'hash',            // 'hash' (default) | 'history'
+  relativePath: false,
+
+  // ---- Sidebar ----
+  loadSidebar: true,             // load _sidebar.md for navigation
+  loadSidebar: '_sidebar.md',    // custom filename
+  hideSidebar: false,
+  sidebarDisplayLevel: 1,        // auto-collapse after this level
+  subMaxLevel: 2,                // TOC heading depth from page content in sidebar (0 = disabled)
+  autoHeader: false,             // auto insert # header before sidebar items
+
+  // ---- Navbar ----
+  loadNavbar: true,              // load _navbar.md
+  loadNavbar: '_navbar.md',      // custom filename
+  mergeNavbar: false,            // merge navbar into sidebar on small screens
+
+  // ---- Cover page ----
+  coverpage: true,               // load _coverpage.md
+  coverpage: '_coverpage.md',    // custom filename
+  onlyCover: false,              // hide sidebar on cover page
+  coverpage: ['/', '/zh-cn/'],   // multi-language cover pages
+
+  // ---- Page behavior ----
+  maxLevel: 4,                   // maximum TOC heading level
+  auto2top: true,                // scroll to top on route change
+  executeScript: false,          // execute <script> in content
+  noEmoji: false,                // disable emoji parsing
+  noCompileLinks: false,         // keep external links unmodified
+  externalLinkTarget: '_blank',
+  externalLinkRel: 'noopener',
+  cornerExternalLinkTarget: '_blank',
+
+  // ---- Search (plugin) ----
+  search: {
+    maxAge: 86400000,
+    paths: 'auto',               // 'auto' | array of paths
+    placeholder: 'Type to search',
+    noData: 'No Results!',
+    depth: 2,
+    hideOtherSidebarContent: false,
+    namespace: 'my-docs',
+  },
+
+  // ---- Pagination (plugin) ----
+  pagination: {
+    previousText: 'PREV',
+    nextText: 'NEXT',
+    crossChapter: true,
+    crossChapterText: true,
+  },
+
+  // ---- Tabs (plugin) ----
+  tabs: { persist: true, sync: true, theme: 'material' },
+
+  // ---- Misc ----
+  themeColor: '#3F51B5',         // primary color (overrides CSS variable)
+  formatUpdated: '{YYYY}/{MM}/{DD}', // last-updated date format
+  notFoundPage: '_404.md',       // custom 404 page
+}
+\`\`\`
+
+## Sidebar (\`_sidebar.md\`)
+
+\`\`\`md
+<!-- _sidebar.md -->
+- [Home](/)
+- [Getting Started](getting-started.md)
+- Guide
+  - [Installation](guide/installation.md)
+  - [Configuration](guide/configuration.md)
+  - [Advanced](guide/advanced.md)
+- [API Reference](api.md)
+- [Changelog](changelog.md)
+\`\`\`
+
+Rules:
+- Indented items become sub-items.
+- Plain text (no link) is a section header.
+- Links are relative to the docs root.
+- One \`_sidebar.md\` at the root applies everywhere; subdirectories can have their own.
+
+## Navbar (\`_navbar.md\`)
+
+\`\`\`md
+<!-- _navbar.md -->
+- [EN](/)
+- [中文](/zh-cn/)
+
+<!--separator-->
+- Links
+  - [GitHub](https://github.com/org/repo)
+  - [npm](https://npmjs.com/package/my-package)
+\`\`\`
+
+## Cover page (\`_coverpage.md\`)
+
+\`\`\`md
+<!-- _coverpage.md -->
+# My Docs
+
+> A simple documentation site.
+
+- Fast
+- Searchable
+- Easy to maintain
+
+[Getting Started](getting-started.md)
+[GitHub](https://github.com/org/repo)
+
+![color](#f0f0f0)   <!-- background color or image URL -->
+\`\`\`
+
+## Themes (CDN)
+
+Change by swapping the \`<link>\` stylesheet in \`index.html\`:
+
+\`\`\`html
+<!-- vue (default) -->
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css">
+<!-- buble -->
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/buble.css">
+<!-- dark -->
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/dark.css">
+<!-- pure -->
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify@4/lib/themes/pure.css">
+<!-- docsify-darkly (unofficial popular theme) -->
+<link rel="stylesheet" href="//cdn.jsdelivr.net/npm/docsify-darkly-theme@latest/dist/style.min.css">
+\`\`\`
+
+---
+
+# Docsify: Frontmatter
+
+Distilled from docsifyjs/docsify (v4.x).
+
+## Key point
+
+**Docsify does not process YAML frontmatter by default.** Frontmatter blocks are displayed as raw Markdown (typically a table or code block) unless a plugin handles them.
+
+## Page identity
+
+- URL = the file path relative to the docs root. No slug customization in frontmatter.
+- Page title in browser tab = the first \`# H1\` heading found in the page.
+- Sidebar label = the link text in \`_sidebar.md\`, not derived from the file.
+
+## Custom cover page (not frontmatter)
+
+The \`_coverpage.md\` file is the cover page; it uses regular Markdown content.
+
+## Plugin-based frontmatter
+
+Some community plugins add frontmatter support. Example with \`docsify-front-matter\`:
+
+\`\`\`md
+---
+title: Custom Page Title
+keywords: docs, search
+---
+\`\`\`
+
+Without such a plugin, strip frontmatter manually or the block will render visibly.
+
+## Recommended convention
+
+Since there is no native frontmatter, use H1 headings for page titles:
+
+\`\`\`md
+# Getting Started
+
+Content begins here.
+\`\`\`
+
+The \`_sidebar.md\` entry controls what the page is called in navigation:
+\`\`\`md
+- [Getting Started](getting-started.md)
+\`\`\`
+
+## Per-directory sidebars
+
+To scope a sidebar to a subdirectory:
+1. Create \`guide/_sidebar.md\` with links relative to that directory.
+2. Set \`window.$docsify.alias\` if needed to prevent the root sidebar from overriding.
+
+Example:
+\`\`\`md
+<!-- guide/_sidebar.md -->
+- [Back to Home](/)
+- [Guide Overview](guide/)
+- [Installation](guide/installation.md)
+\`\`\`
+
+---
+
+# Docsify: Content Authoring
+
+Distilled from docsifyjs/docsify (v4.x). Content is standard Markdown rendered at runtime.
+
+## Page files
+
+- Every \`.md\` file in the docs root (and subdirectories) is a routable page.
+- \`README.md\` is the index page for its directory (\`/\` or \`/guide/\`).
+- URLs: \`docs/guide/installation.md\` → \`/#/guide/installation\`.
+
+## Standard Markdown
+
+All CommonMark Markdown is supported. No compile step means no MDX or JSX.
+
+\`\`\`md
+# Heading 1
+
+Regular paragraphs, **bold**, _italic_, \`inline code\`.
+
+[Link text](other-page.md)    <!-- relative links work natively -->
+[External](https://example.com)
+
+![alt text](/_media/image.png)
+
+| Column A | Column B |
+|---|---|
+| value    | value    |
+
+> Blockquote for callouts (no admonition plugin by default).
+
+- Unordered list
+- Item 2
+
+1. Ordered list
+2. Item 2
+
+\`\`\`js
+console.log('fenced code block');
+\`\`\`
+\`\`\`
+
+## Code highlighting
+
+Docsify auto-loads Prism.js. Highlight languages by fencing with the language name:
+
+\`\`\`md
+\`\`\`python
+def greet(name):
+    return f"Hello, {name}"
+\`\`\`
+\`\`\`
+
+To add extra Prism languages, include them in \`index.html\` before the docsify script:
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+\`\`\`
+
+## Linking between pages
+
+\`\`\`md
+[Relative link](guide/installation.md)
+[Anchor on this page](#section-heading)
+[Anchor on another page](guide/installation.md#requirements)
+\`\`\`
+
+Docsify rewrites relative \`.md\` links to hash routes automatically.
+
+## Images and media
+
+\`\`\`md
+![Logo](/_media/logo.png)
+<!-- Serve assets from the docs/ root; /_media/ is a common convention -->
+\`\`\`
+
+## Embedding HTML
+
+Since content renders at runtime in the browser, HTML in Markdown works:
+\`\`\`html
+<div class="tip">This is a tip.</div>
+\`\`\`
+
+## Admonitions (plugin)
+
+No built-in admonition syntax. Add the \`docsify-plugin-flexible-alerts\` plugin for:
+\`\`\`md
+> [!NOTE]
+> This is a note.
+
+> [!TIP]
+> This is a tip.
+
+> [!WARNING]
+> This is a warning.
+
+> [!DANGER]
+> This is a danger alert.
+\`\`\`
+
+Requires adding the plugin script to \`index.html\`.
+
+## Tabs (plugin)
+
+With \`docsify-tabs\` plugin:
+\`\`\`md
+<!-- tabs:start -->
+#### **Tab One**
+Content for tab one.
+
+#### **Tab Two**
+Content for tab two.
+<!-- tabs:end -->
+\`\`\`
+
+## Search
+
+The built-in search plugin indexes all pages. Enable in \`index.html\`:
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
+\`\`\`
+
+Configure in \`window.$docsify\`:
+\`\`\`js
+search: {
+  maxAge: 86400000,
+  paths: 'auto',
+  placeholder: 'Type to search',
+  noData: 'No Results!',
+  depth: 2,
+}
+\`\`\`
+
+## Pagination (plugin)
+
+Add \`docsify-pagination\` for prev/next navigation:
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/docsify-pagination/dist/docsify-pagination.min.js"></script>
+\`\`\`
+
+## Notes
+
+- No YAML frontmatter support by default. Use H1 headings for page titles.
+- Content is XHR-fetched at runtime — keep files small for fast loads.
+- All plugins are added as \`<script>\` tags in \`index.html\`; there is no bundler config.
+- For SEO, consider docsify-ssr or a prerender service (Docsify has no static HTML output).
+
+---
+
+# Docsify: Components and Plugins
+
+Distilled from docsifyjs/docsify (v4.x). Docsify has no compiled component system; all
+"components" are either raw HTML/Markdown patterns or optional plugins added via CDN scripts.
+
+## Core patterns (no plugin required)
+
+### Callouts / blockquotes
+
+No built-in admonition component. Use blockquotes for emphasis:
+\`\`\`md
+> **Note:** This is important.
+
+> **Warning:** Be careful here.
+\`\`\`
+
+Or use HTML:
+\`\`\`html
+<div style="border-left: 4px solid #4CAF50; padding: 10px; background: #f9f9f9;">
+  This is a tip.
+</div>
+\`\`\`
+
+### Badges
+
+Use external badge services (no built-in component):
+\`\`\`md
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+\`\`\`
+
+### Details/accordion
+
+Standard HTML works:
+\`\`\`html
+<details>
+  <summary>Click to expand</summary>
+  Hidden content here.
+</details>
+\`\`\`
+
+## Plugins (add script tags to \`index.html\`)
+
+### Flexible alerts (admonitions)
+
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/docsify-plugin-flexible-alerts"></script>
+\`\`\`
+
+Usage:
+\`\`\`md
+> [!NOTE]
+> A note.
+
+> [!TIP]
+> A tip.
+
+> [!WARNING]
+> A warning.
+
+> [!DANGER]
+> Danger!
+\`\`\`
+
+### Tabs
+
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/docsify-tabs@1"></script>
+\`\`\`
+
+Config in \`window.$docsify\`:
+\`\`\`js
+tabs: { persist: true, sync: true, theme: 'material' }
+\`\`\`
+
+Usage:
+\`\`\`md
+<!-- tabs:start -->
+#### **npm**
+\`\`\`sh
+npm install my-package
+\`\`\`
+
+#### **yarn**
+\`\`\`sh
+yarn add my-package
+\`\`\`
+<!-- tabs:end -->
+\`\`\`
+
+### Copy code button
+
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/docsify-copy-code/dist/docsify-copy-code.min.js"></script>
+\`\`\`
+
+No config needed; adds a copy button to all fenced code blocks automatically.
+
+### Pagination (prev/next)
+
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/docsify-pagination/dist/docsify-pagination.min.js"></script>
+\`\`\`
+
+Config:
+\`\`\`js
+pagination: {
+  previousText: 'PREV',
+  nextText: 'NEXT',
+  crossChapter: true,
+}
+\`\`\`
+
+### Edit on GitHub
+
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/docsify-edit-on-github"></script>
+\`\`\`
+
+Config:
+\`\`\`js
+plugins: [
+  EditOnGithubPlugin.create('https://github.com/org/repo/blob/main/docs/')
+]
+\`\`\`
+
+### Zoom images
+
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/docsify@4/lib/plugins/zoom-image.min.js"></script>
+\`\`\`
+
+All images become click-to-zoom by default. Exclude with \`<!-- {docsify-ignore} -->\` after the image.
+
+### Mermaid diagrams
+
+\`\`\`html
+<script src="//cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+<script src="//cdn.jsdelivr.net/npm/docsify-mermaid@latest/dist/docsify-mermaid.js"></script>
+\`\`\`
+
+Config:
+\`\`\`js
+mermaid: { startOnLoad: true }
+\`\`\`
+
+Usage:
+\`\`\`md
+\`\`\`mermaid
+graph TD;
+  A-->B;
+  B-->C;
+\`\`\`
+\`\`\`
+
+## Theme customization
+
+Override CSS variables in \`index.html\` or a custom CSS file:
+\`\`\`css
+:root {
+  --theme-color: #3F51B5;
+  --sidebar-width: 300px;
+  --content-max-width: 900px;
+}
+\`\`\`
+
+Link a custom stylesheet:
+\`\`\`html
+<link rel="stylesheet" href="/custom.css">
+\`\`\`
+
+## Notes
+
+- There is no component import syntax (no JSX, no MDX).
+- All enhancements are opt-in plugins loaded via CDN \`<script>\` tags in \`index.html\`.
+- Plugin configuration goes in the \`window.$docsify\` object (see \`configuration.md\`).
+- Docsify's plugin API allows custom plugins via \`window.$docsify.plugins\` array, but
+  third-party CDN plugins are the common path.`
+// @generated-end docs-contracts/docsify-contract
+
+// @generated-start docs-contracts/frameworks
+// SPLICE FRAGMENT — single source of truth for the framework-aware docs substrate.
+//
+// This file is NOT standalone-valid JS. It is inlined verbatim by
+// scripts/build-docs-contracts.mjs between the docs-contracts/frameworks generated markers
+// into .claude/workflows/docs-create.js and docs-from-code.js. (The marker strings are
+// intentionally NOT repeated here: a verbatim copy of an end-marker inside the block would
+// make the build splice match the wrong boundary.) It references symbols that
+// exist in the HOST workflow's scope, not here:
+//   - CONTRACT and the per-framework <FW>_CONTRACT consts (generated contract blocks above this one)
+//   - the agent() and log() workflow globals
+// Edit HERE, then run: node scripts/build-docs-contracts.mjs  (npm run check enforces no drift).
+//
+// Contents: CROSSWALK + getCrosswalkColumn + STARLIGHT_LEAK_PATTERNS + the FRAMEWORKS registry
+// (13 frameworks) + resolveLinksAndAssets. The build-repair loop (runBuildRepairLoop) stays in
+// docs-create.js — it is that workflow's orchestration, not shared substrate.
+
+// --- CROSSWALK: framework-neutral intent -> syntax map ----------------------------------------
+// Maps each documentation construct (by intent) to the correct syntax per framework.
+// Inject ONLY the active framework's column into author + gate prompts (slice-per-agent rule).
+// "filled" frameworks below have confirmed syntax; unfilled entries are null (fall back to docs).
+//
+// Constructs covered:
+//   callout   - information callout / admonition
+//   tabs      - tabbed content switcher
+//   steps     - numbered sequential procedure
+//   card      - highlighted content card block
+//   filetree  - annotated directory/file tree
+//   code-title - code block with a visible filename/title label
+//
+// Usage: getCrosswalkColumn(framework) -> string to inject into an author prompt.
+// The quality gate also uses this to check for syntax leaks (e.g. <Aside in a mkdocs page).
+const CROSSWALK = {
+  callout: {
+    starlight:  ':::note / :::tip / :::caution / :::danger  (or <Aside type="note|tip|caution|danger"> in .mdx)',
+    docusaurus: ':::note / :::tip / :::info / :::warning / :::danger  (CommonMark-adjacent; no import needed)',
+    mkdocs:     '!!! note "Optional title" / !!! tip / !!! warning / !!! danger  (Material admonition)',
+    vitepress:  '::: info / ::: tip / ::: warning / ::: danger  (followed by content, closed with :::)',
+    // frameworks without a confirmed callout short-form (authors consult official docs):
+    fumadocs: null, mdbook: null, docsify: null, sphinx: null, nextra: null,
+    mintlify: null, docsy: null, scalar: null, redocly: null,
+  },
+  tabs: {
+    starlight:  '<Tabs syncKey?="pkg"><TabItem label="npm">...</TabItem></Tabs>  (.mdx, import from @astrojs/starlight/components)',
+    docusaurus: '<Tabs><TabItem value="npm" label="npm">...</TabItem></Tabs>  (.mdx, import from @docusaurus/theme-common)',
+    mkdocs:     '=== "Tab 1"\n    content\n=== "Tab 2"\n    content  (Material tabbed extension, no import)',
+    vitepress:  'No native tabs — use <script setup> + component or a custom VitePress plugin',
+    fumadocs: null, mdbook: null, docsify: null, sphinx: null, nextra: null,
+    mintlify: null, docsy: null, scalar: null, redocly: null,
+  },
+  steps: {
+    starlight:  '<Steps> wrapping a markdown ordered list (1. 2. 3.)  (.mdx, import from @astrojs/starlight/components)',
+    docusaurus: 'Plain markdown ordered list (1. 2. 3.) — no special wrapper needed; Docusaurus renders them as steps.',
+    mkdocs:     'Plain markdown ordered list (1. 2. 3.); no dedicated steps component in Material.',
+    vitepress:  'Plain markdown ordered list (1. 2. 3.); no dedicated steps component.',
+    fumadocs: null, mdbook: null, docsify: null, sphinx: null, nextra: null,
+    mintlify: null, docsy: null, scalar: null, redocly: null,
+  },
+  card: {
+    starlight:  '<Card title="..." icon?="...">content</Card> inside <CardGrid stagger?>  (.mdx, import from @astrojs/starlight/components)',
+    docusaurus: 'No native Card component — use a custom component or admonition with :::tip as a visual workaround.',
+    mkdocs:     'No native card — use Material grid cards: <div class="grid cards" markdown> ... </div> (requires grid plugin).',
+    vitepress:  'No native card — use a custom Vue component or style a <div class="custom-block tip">.',
+    fumadocs: null, mdbook: null, docsify: null, sphinx: null, nextra: null,
+    mintlify: null, docsy: null, scalar: null, redocly: null,
+  },
+  filetree: {
+    starlight:  '<FileTree> wrapping a markdown nested list  (.mdx, import from @astrojs/starlight/components)',
+    docusaurus: 'No native FileTree — use a code block with bash/text language and indentation to represent structure.',
+    mkdocs:     'No native FileTree — use a code block with bash language and indentation.',
+    vitepress:  'No native FileTree — use a code block with a bash/text language label.',
+    fumadocs: null, mdbook: null, docsify: null, sphinx: null, nextra: null,
+    mintlify: null, docsy: null, scalar: null, redocly: null,
+  },
+  'code-title': {
+    starlight:  'Fenced code block with title="filename.js" attribute: ```js title="src/util.js"',
+    docusaurus: 'Fenced code block with title="filename.js" meta: ```js title="src/util.js"',
+    mkdocs:     'Fenced code block with title added via Material\'s annotations or code block title feature: ``` js title="src/util.js"',
+    vitepress:  'Fenced code block with filename label in the info string: ```js [filename.js]  (or use codegroup feature for multiple)',
+    fumadocs: null, mdbook: null, docsify: null, sphinx: null, nextra: null,
+    mintlify: null, docsy: null, scalar: null, redocly: null,
+  },
+}
+
+// getCrosswalkColumn: returns the slice of CROSSWALK for the given framework as an injected string.
+// Null entries are omitted (author consults framework docs for those constructs).
+// leakPatterns: Starlight-specific patterns that must NOT appear in non-Starlight output.
+function getCrosswalkColumn(fw) {
+  const lines = []
+  for (const [construct, fwMap] of Object.entries(CROSSWALK)) {
+    const syntax = fwMap[fw]
+    if (syntax) lines.push(`  ${construct}: ${syntax}`)
+  }
+  if (!lines.length) return null
+  return `COMPONENT CROSSWALK for ${fw} (authoritative per-construct syntax — use these, not Starlight syntax):\n${lines.join('\n')}`
+}
+
+// Starlight-specific syntax patterns that indicate a syntax leak into other frameworks.
+// The quality gate uses these to detect and reject pages that incorrectly include Starlight syntax.
+const STARLIGHT_LEAK_PATTERNS = [
+  `@astrojs/starlight`,
+  `<Aside`,
+  `<Card`,
+  `<CardGrid`,
+  `<FileTree`,
+  `<Steps`,
+  `<Tabs`,
+  `<TabItem`,
+  `<LinkCard`,
+  `<LinkButton`,
+  `<Badge`,
+]
+
 // --- FRAMEWORKS registry -----------------------------------------------------------------------
-// Mirror of docs-create.js FRAMEWORKS. Single source of truth per framework; keyed by framework id.
-// Only Starlight has an inline authoring contract; other frameworks fall back to current official docs.
-// The sentinel key "_unfilled" is the runtime fallback for any unrecognised framework id.
-// assemblePrompt is injected into the finalize agent (step 1-3 block in Phase 6b).
+// Single source of truth keyed by framework id. Each entry covers everything a docs-create run
+// needs to be framework-aware without branching on strings throughout the script.
+//
+// Schema per entry:
+//   contentRoot    — where page files live (relative to outDir)
+//   configFiles    — the config files this framework uses (so the verify stage knows what to write)
+//   contract       — inline authoring contract text (authoritative runtime source; null = no inline contract)
+//   assemblePrompt — instructions the verify/finalize agent uses to write or update the primary config
+//                    (injected into the verify prompt so per-framework config assembly logic lives here;
+//                     covers steps 2-3 only; the empirical build gate is scripted via runBuildRepairLoop)
+//   validate       — empirical build check: { buildCmd(outDir, scaffoldMode) -> string|null,
+//                    parseErrors(stderr) -> string[] }
+//                    buildCmd returns the shell command to run (null = not runnable for this framework),
+//                    parseErrors extracts human-readable error lines from stderr/stdout.
+//                    null validate = no empirical check at all (legacy sentinel for unrecognized frameworks).
+//                    parseErrors is consumed by runBuildRepairLoop (defined near the top of this file).
+//
+// Only Starlight is fully populated. Other frameworks fall back to their refsDir skeletons and
+// current-docs lookups (context7/find-docs). Add a new entry — populate all five keys — before
+// using a framework id in a run; a missing `contract` means authors get the "no inline contract"
+// fallback warning. The sentinel key "_unfilled" is the runtime fallback for any unrecognised
+// framework id; do NOT name a real framework "_unfilled".
 const FRAMEWORKS = {
   starlight: {
     contentRoot: 'src/content/docs',
-    configFiles: ['astro.config.mjs', 'src/content.config.ts'],
+    // assetDir: where authored assets (images, diagrams) are placed relative to outDir.
+    // resolveLinksAndAssets copies files here and rewrites src/href paths in page content.
     assetDir: 'src/assets',
+    configFiles: ['astro.config.mjs', 'src/content.config.ts'],
+    // CONTRACT is defined above; bound here so callers reach it through the registry.
     contract: CONTRACT,
-    // scaffoldMode routing (mirrors docs-create.js):
+    // assemblePrompt covers steps 2-3 (config writing). The empirical build gate is scripted
+    // separately (runBuildRepairLoop); assemblePrompt does NOT include a build step.
+    // scaffoldMode routing:
     //   content-only (default): write content + config; empirical check skipped unless already buildable.
-    //   add-to-existing: same but PATCH existing astro.config rather than assembling from scratch.
+    //   add-to-existing: same as content-only but SKIP writing astro.config if one already exists.
     //   full-project: scaffold a complete buildable project (package.json + npm install) then run astro check.
     assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
       const { basePath, i18n, versioning } = opts
-      // basePath -> Astro top-level `base` option in defineConfig.
+      // basePath -> Astro top-level `base` option in defineConfig (e.g. base: '/docs').
       const baseNote = basePath
-        ? `   Set base: '${basePath}' in the defineConfig() call (outside starlight()) in astro.config.mjs.\n`
+        ? `   Set base: '${basePath}' in the defineConfig() call (outside starlight()); this makes Astro prefix all routes with the subpath.\n`
         : ''
-      // i18n -> Starlight locales config.
+      // i18n -> Starlight locales config (defaultLocale + locales map).
       const i18nNote = i18n
-        ? `   Add locales: { ${i18n.locales.map(l => `'${l}': { label: '${l}' }`).join(', ')} } and defaultLocale: '${i18n.defaultLocale}' ` +
-          `inside the starlight() integration config.\n`
+        ? `   Add a locales block inside starlight(): defaultLocale: '${i18n.defaultLocale}', ` +
+          `locales: { ${i18n.locales.map(l => `'${l}': { label: '${l}' }`).join(', ')} }. ` +
+          `Create src/content/docs/<locale>/ dirs for each locale.\n`
         : ''
-      // Starlight has no built-in versioning.
+      // Starlight has no built-in versioning; note it and skip.
       const versioningNote = versioning
-        ? `   NOTE: Starlight has no built-in versioning. Versioning (current="${versioning.current}") is noted ` +
-          `but NOT configured — use manual subpath routing or community plugins if needed.\n`
+        ? `   NOTE: Starlight has no built-in versioning support. Versioning (current="${versioning.current}") is noted ` +
+          `but NOT configured — use community plugins or manual subpath routing if needed.\n`
         : ''
       return (
-        `1. Ensure the content collection exists: write ${outDir}/src/content.config.ts with docsLoader()+docsSchema() if missing.\n` +
+        `2. Ensure the content collection exists: write ${outDir}/src/content.config.ts with docsLoader()+docsSchema() if missing.\n` +
         (scaffoldMode === 'add-to-existing'
-          ? `2. UPDATE (do NOT clobber) ${outDir}/astro.config.mjs: patch the sidebar to reflect the admitted ` +
-            `page groups (${groups}). Use slug items for the admitted pages; update the title only if missing.\n`
-          : `2. Assemble ${outDir}/astro.config.mjs: a starlight() integration whose sidebar reflects the admitted ` +
-            `page groups (${groups}). Use slug items for the admitted pages; derive a title from the repo/brief. ` +
+          ? `3. UPDATE (do NOT clobber) ${outDir}/astro.config.mjs: patch the sidebar to reflect the page groups ` +
+            `(${groups}). Use slug items for the admitted pages. Derive a title from the brief only if one is missing. ` +
+            `If no astro.config exists, create one.\n`
+          : `3. Assemble ${outDir}/astro.config.mjs: a starlight() integration whose sidebar reflects the page groups ` +
+            `(${groups}). Use slug items for the admitted pages. Derive a title from the brief. ` +
             `If an astro.config already exists, update its sidebar/title rather than clobbering unrelated config.\n`) +
-        (scaffoldMode === 'full-project'
-          ? `3. SCAFFOLD: if "${outDir}" has no package.json, create a minimal one (name from repo/brief, astro + @astrojs/starlight as deps). ` +
-            `Run \`npm install --prefix "${outDir}"\` (or skip if node_modules already present). ` +
-            `Then run \`npx astro check\` from "${outDir}" and summarize pass/fail in buildResult.\n`
-          : `3. EMPIRICAL CHECK: if "${outDir}" is a buildable Astro project (has package.json with astro + node_modules), ` +
-            `run \`npx astro check\` from there and summarize pass/fail in buildResult. If it is NOT buildable (no install), ` +
-            `set buildResult to "skipped: not a buildable project" — do NOT run npm install. ` +
-            `// ponytail: content + config only by design; scaffolding a full installable project is the upgrade if astro check must always run.\n`) +
         baseNote + i18nNote + versioningNote
       )
     },
-    validate: null,
+    // validate: per-framework empirical build gate. buildCmd returns the shell command to run;
+    // parseErrors extracts actionable error lines from build output for the repair loop.
+    // prerequisiteNote: checked by runBuildRepairLoop's haiku bash-agent to decide when to skip.
+    validate: {
+      buildCmd: (outDir, scaffoldMode) => {
+        if (scaffoldMode === 'full-project') {
+          // full-project scaffolds first then runs check
+          return `npm install --prefix "${outDir}" && npx astro check --root "${outDir}"`
+        }
+        // content-only / add-to-existing: only run if already installable
+        return `npx astro check --root "${outDir}"`
+      },
+      // prerequisiteNote: used by the bash-agent in runBuildRepairLoop to know when to skip.
+      prerequisiteNote: 'has package.json with astro dependency and node_modules present',
+      // parseErrors: extract type-check and config error lines from astro check output.
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /error|Error|✗|✘|cannot|Cannot|failed|Failed/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
   },
+  // --- Docusaurus (facebook/docusaurus v3.x) ----------------------------------------------------
+  // Content lives in docs/ (markdown) and src/pages/ (React/MDX standalone pages).
+  // Config: docusaurus.config.js + sidebars.js at project root.
+  // No inline contract: authors fetch current Docusaurus docs via find-docs/context7.
+  docusaurus: {
+    contentRoot: 'docs',
+    assetDir: 'static',
+    configFiles: ['docusaurus.config.js', 'sidebars.js'],
+    contract: DOCUSAURUS_CONTRACT,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> Docusaurus `baseUrl` in docusaurus.config.js.
+      const baseNote = basePath
+        ? `   Set baseUrl: '${basePath}' in docusaurus.config.js (the subpath the site is served under).\n`
+        : ''
+      // i18n -> Docusaurus i18n config block.
+      const i18nNote = i18n
+        ? `   Add an i18n block to docusaurus.config.js: { defaultLocale: '${i18n.defaultLocale}', ` +
+          `locales: [${i18n.locales.map(l => `'${l}'`).join(', ')}] }. ` +
+          `Create i18n/<locale>/docusaurus-plugin-content-docs/current/ dirs for each locale.\n`
+        : ''
+      // versioning -> Docusaurus versions config.
+      const versioningNote = versioning
+        ? `   Add docs.versions to the preset config: { current: { label: '${versioning.current}' }` +
+          (versioning.versions.length ? `, ${versioning.versions.map(v => `'${v}': { label: '${v}' }`).join(', ')}` : '') +
+          ` }. Also set docs.lastVersion: '${versioning.current}'.\n`
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE (do NOT clobber) ${outDir}/sidebars.js: patch the sidebar to reflect the page groups ` +
+            `(${groups}). Use doc-id or category items. Derive a title only if missing.\n`
+          : `2. Write or repair ${outDir}/sidebars.js: a tutorialSidebar (or named per the brief) that groups ` +
+            `the admitted pages (${groups}) using category + doc items. ` +
+            `If it already exists, update categories/items rather than clobbering unrelated config.\n`) +
+        `3. Ensure ${outDir}/docusaurus.config.js exists with title, url, baseUrl, presets: [['classic', {docs:{sidebarPath:'./sidebars.js'}}]]. ` +
+        `Update title/sidebar only if already present; never clobber unrelated themeConfig.\n` +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      buildCmd: (outDir, scaffoldMode) => {
+        if (scaffoldMode === 'full-project') {
+          return `npm install --prefix "${outDir}" && npx docusaurus build --out-dir "${outDir}/build" "${outDir}"`
+        }
+        return `npx docusaurus build --out-dir "${outDir}/build" "${outDir}"`
+      },
+      prerequisiteNote: 'has package.json with @docusaurus/core and node_modules present',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /error|Error|\[ERROR\]|failed|Failed|SyntaxError|Cannot/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // --- MkDocs + Material (v9.x) ----------------------------------------------------------------
+  // Content lives in docs/. Config: mkdocs.yml at project root.
+  // No inline contract: authors fetch current MkDocs Material docs via find-docs/context7.
+  mkdocs: {
+    contentRoot: 'docs',
+    // MkDocs: assets live alongside content (docs/assets/); relative links work from any page.
+    assetDir: 'docs/assets',
+    configFiles: ['mkdocs.yml'],
+    contract: MKDOCS_CONTRACT,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> MkDocs site_url (the canonical URL prefix; controls absolute link generation).
+      const baseNote = basePath
+        ? `   Set site_url: '${basePath}' in mkdocs.yml so absolute links and the sitemap use the correct subpath.\n`
+        : ''
+      // i18n -> MkDocs i18n plugin (mkdocs-material extra: i18n, or the mkdocs-i18n plugin).
+      const i18nNote = i18n
+        ? `   Add the i18n plugin to mkdocs.yml: plugins: [i18n: {default_language: '${i18n.defaultLocale}', ` +
+          `languages: { ${i18n.locales.map(l => `${l}: { name: '${l}', build: true }`).join(', ')} } }]. ` +
+          `Requires mkdocs-material or the mkdocs-i18n package.\n`
+        : ''
+      // versioning -> mike (the MkDocs versioning tool).
+      const versioningNote = versioning
+        ? `   NOTE: MkDocs versioning is handled by the 'mike' tool, not by mkdocs.yml config. ` +
+          `Add 'mike' to the plugins list so the version switcher appears (current="${versioning.current}"). ` +
+          `Run: mike deploy ${versioning.current} latest --update-aliases after building.\n`
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE (do NOT clobber) ${outDir}/mkdocs.yml: patch the nav section to reflect the page groups ` +
+            `(${groups}). Preserve existing theme, plugins, and markdown_extensions blocks.\n`
+          : `2. Write or repair ${outDir}/mkdocs.yml: include site_name (from the brief), theme: {name: material}, ` +
+            `and a nav section mapping the page groups (${groups}) to their files. ` +
+            `If it already exists, update site_name and nav only.\n`) +
+        `3. (no content-collection step for MkDocs.)\n` +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      buildCmd: (outDir, scaffoldMode) => {
+        if (scaffoldMode === 'full-project') {
+          return `pip install mkdocs mkdocs-material 2>&1 | tail -1 && mkdocs build --strict -f "${outDir}/mkdocs.yml"`
+        }
+        // --strict promotes warnings (missing nav pages, broken links) to errors
+        return `mkdocs build --strict -f "${outDir}/mkdocs.yml"`
+      },
+      prerequisiteNote: 'mkdocs binary available and mkdocs.yml exists in outDir',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /ERROR|WARNING.*not found|error|Failed/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // --- VitePress (v1.x) -------------------------------------------------------------------------
+  // Content lives in docs/ (or the srcDir configured in .vitepress/config.mts).
+  // Config: docs/.vitepress/config.mts at project root.
+  // No inline contract: authors fetch current VitePress docs via find-docs/context7.
+  vitepress: {
+    contentRoot: 'docs',
+    // VitePress: public/ for global assets; docs/public/ is aliased to the site root.
+    assetDir: 'docs/public',
+    configFiles: ['docs/.vitepress/config.mts'],
+    contract: VITEPRESS_CONTRACT,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> VitePress `base` in defineConfig (served under a subpath).
+      const baseNote = basePath
+        ? `   Set base: '${basePath}' in defineConfig() so all assets and links are prefixed with the subpath.\n`
+        : ''
+      // i18n -> VitePress locales config object.
+      const i18nNote = i18n
+        ? `   Add a locales object to defineConfig(): { root: { label: '${i18n.defaultLocale}', lang: '${i18n.defaultLocale}' }, ` +
+          `${i18n.locales.filter(l => l !== i18n.defaultLocale).map(l => `'/${l}/': { label: '${l}', lang: '${l}' }`).join(', ')} }. ` +
+          `Create docs/<locale>/ directories for each non-default locale.\n`
+        : ''
+      // VitePress has no built-in versioning.
+      const versioningNote = versioning
+        ? `   NOTE: VitePress has no built-in versioning. Versioning (current="${versioning.current}") is noted ` +
+          `but NOT configured — use a multi-dir approach (docs/v1/, docs/v2/) if needed.\n`
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE (do NOT clobber) ${outDir}/docs/.vitepress/config.mts: patch themeConfig.sidebar to reflect ` +
+            `the page groups (${groups}). Preserve nav, socialLinks, and other themeConfig keys.\n`
+          : `2. Write or repair ${outDir}/docs/.vitepress/config.mts: a defineConfig with title (from the brief), ` +
+            `description, and themeConfig.sidebar reflecting the page groups (${groups}) as grouped items with text+link. ` +
+            `If it already exists, update title and sidebar only.\n`) +
+        `3. (no content-collection step for VitePress.)\n` +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      buildCmd: (outDir, scaffoldMode) => {
+        if (scaffoldMode === 'full-project') {
+          return `npm install --prefix "${outDir}" && npx vitepress build docs --root "${outDir}"`
+        }
+        return `npx vitepress build docs --root "${outDir}"`
+      },
+      prerequisiteNote: 'has package.json with vitepress devDependency and node_modules present',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /error|Error|\[vitepress\].*warn|dead link|ENOENT/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // --- Fumadocs (fuma-nama/fumadocs v14.x) -----------------------------------------------------
+  // Content lives in content/docs/ as .mdx files. No single config file — config is spread across
+  // source.config.ts, app/docs/[[...slug]]/page.tsx, layout.tsx, and lib/source.ts.
+  // Nav order controlled by meta.json files (not frontmatter).
+  // No inline contract: authors fetch current Fumadocs docs via find-docs/context7.
+  fumadocs: {
+    contentRoot: 'content/docs',
+    assetDir: 'public',
+    configFiles: ['source.config.ts', 'lib/source.ts'],
+    contract: FUMADOCS_CONTRACT,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> Next.js basePath in next.config.mjs (Fumadocs runs on Next.js).
+      const baseNote = basePath
+        ? `   Add basePath: '${basePath}' to the Next.js config in ${outDir}/next.config.mjs so all routes are prefixed.\n`
+        : ''
+      // i18n -> Next.js i18n config in next.config.mjs.
+      const i18nNote = i18n
+        ? `   Add i18n: { defaultLocale: '${i18n.defaultLocale}', locales: [${i18n.locales.map(l => `'${l}'`).join(', ')}] } ` +
+          `to the Next.js config in ${outDir}/next.config.mjs. Create app/[lang]/docs/ layout for locale routing.\n`
+        : ''
+      // Fumadocs has no built-in versioning.
+      const versioningNote = versioning
+        ? `   NOTE: Fumadocs has no built-in versioning. Versioning (current="${versioning.current}") is noted ` +
+          `but NOT configured — use a route-prefix approach (content/docs/v1/, v2/) if needed.\n`
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE meta.json files in each content/docs/ subdirectory to reflect the page groups ` +
+            `(${groups}). Each meta.json controls the sidebar order for its directory via the "pages" array.\n`
+          : `2. For each page group (${groups}), write or update the meta.json in its content/docs/<group>/ directory. ` +
+            `Each meta.json: {"title":"<group>","pages":[...filenames without ext...],"defaultOpen":true}. ` +
+            `Ensure source.config.ts exists with defineDocs({dir:'content/docs'}) if missing.\n`) +
+        `3. (Fumadocs uses Next.js app router — no single sidebar config file; structure flows from meta.json.)\n` +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      buildCmd: (outDir, scaffoldMode) => {
+        if (scaffoldMode === 'full-project') {
+          return `npm install --prefix "${outDir}" && npx next build "${outDir}"`
+        }
+        return `npx next build "${outDir}"`
+      },
+      prerequisiteNote: 'has package.json with next and node_modules present',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /error|Error|Failed to compile|Type error|✗/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // --- mdBook (rust-lang/mdBook v0.4.x) --------------------------------------------------------
+  // Content lives in src/. SUMMARY.md (required) defines the entire chapter structure.
+  // Config: book.toml at project root. No frontmatter processing by default.
+  // No inline contract: authors fetch current mdBook docs via find-docs/context7.
+  mdbook: {
+    contentRoot: 'src',
+    // mdBook: images referenced relatively from src/ live alongside chapter files; src/images/ is convention.
+    assetDir: 'src/images',
+    configFiles: ['book.toml', 'src/SUMMARY.md'],
+    contract: MDBOOK_CONTRACT,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> mdBook [output.html] site-url.
+      const baseNote = basePath
+        ? `   Set site-url = '${basePath}' under [output.html] in book.toml so absolute links use the correct subpath.\n`
+        : ''
+      // mdBook has limited i18n support; note it.
+      const i18nNote = i18n
+        ? `   NOTE: mdBook has no built-in i18n. Internationalization (defaultLocale="${i18n.defaultLocale}") is noted ` +
+          `but NOT configured — use separate book.toml per language or the mdbook-i18n-helpers crate if needed.\n`
+        : ''
+      // mdBook has no versioning; note it.
+      const versioningNote = versioning
+        ? `   NOTE: mdBook has no built-in versioning. Versioning (current="${versioning.current}") is noted ` +
+          `but NOT configured — use subpath deployments (e.g. /v1/, /v2/) if needed.\n`
+        : ''
+      return (
+        `2. Write or repair ${outDir}/src/SUMMARY.md: the required navigation definition. ` +
+        `List every admitted page as "- [Title](path/to/file.md)" organized under Part headers (# Part) ` +
+        `reflecting the page groups (${groups}). Prefix chapters (before the first list) for any intro/overview pages.\n` +
+        (scaffoldMode === 'add-to-existing'
+          ? `3. UPDATE (do NOT clobber) ${outDir}/book.toml: patch [book] title only if missing. ` +
+            `Preserve all other toml sections.\n`
+          : `3. Write or repair ${outDir}/book.toml: [book] with title (from the brief), language="en", src="src". ` +
+            `Add [output.html] with git-repository-url if the brief mentions a repo. ` +
+            `If it already exists, update [book].title only.\n`) +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      // mdbook is a binary (cargo install mdbook); no npm/pip prerequisite.
+      buildCmd: (outDir, _scaffoldMode) => `mdbook build "${outDir}"`,
+      prerequisiteNote: 'mdbook binary available (install via cargo or prebuilt release)',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /\[ERROR\]|\[WARN\].*missing|error\[|panicked|SUMMARY\.md/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // --- Docsify (docsifyjs/docsify v4.x) --------------------------------------------------------
+  // Content lives at the docs root (no subfolder convention). Navigation via _sidebar.md.
+  // Config lives entirely in index.html (window.$docsify object). No frontmatter support by default.
+  // No inline contract: authors fetch current Docsify docs via find-docs/context7.
+  docsify: {
+    contentRoot: '.',
+    assetDir: '_media',
+    configFiles: ['index.html', '_sidebar.md'],
+    contract: DOCSIFY_CONTRACT,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> Docsify window.$docsify.basePath option.
+      const baseNote = basePath
+        ? `   Set basePath: '${basePath}' in window.$docsify config in index.html.\n`
+        : ''
+      // Docsify has limited i18n; note it.
+      const i18nNote = i18n
+        ? `   NOTE: Docsify has no official i18n plugin. Internationalization (defaultLocale="${i18n.defaultLocale}") is noted ` +
+          `but NOT configured — use separate index.html + _sidebar.md per locale in subfolders if needed.\n`
+        : ''
+      // Docsify has no versioning; note it.
+      const versioningNote = versioning
+        ? `   NOTE: Docsify has no built-in versioning. Versioning (current="${versioning.current}") is noted ` +
+          `but NOT configured — use a dropdown navbar or subpath deploy if needed.\n`
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE ${outDir}/_sidebar.md: patch the navigation to reflect the page groups ` +
+            `(${groups}). Preserve any existing entries unrelated to the admitted pages.\n`
+          : `2. Write or repair ${outDir}/_sidebar.md: a Docsify sidebar listing all admitted pages ` +
+            `grouped by section (plain text heading, no link, followed by indented "- [Title](path.md)" items). ` +
+            `Groups: ${groups}. Include a "- [Home](/)" link at the top.\n`) +
+        (scaffoldMode === 'add-to-existing'
+          ? `3. UPDATE ${outDir}/index.html: patch window.$docsify.name if missing; ` +
+            `ensure loadSidebar: true is set. Do NOT clobber other config or CDN script tags.\n`
+          : `3. Write or repair ${outDir}/index.html: a minimal Docsify bootstrap with ` +
+            `window.$docsify = {name: '<title from brief>', loadSidebar: true, subMaxLevel: 2, repo: ''}. ` +
+            `Include CDN scripts for docsify v4. If it already exists, patch name/loadSidebar only.\n`) +
+        // Step 4 (empirical build check) is scripted — runBuildRepairLoop returns "skipped" for Docsify
+        // because buildCmd returns null. No step 4 needed here.
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      // Docsify is client-side only; no build command.
+      buildCmd: (_outDir, _scaffoldMode) => null,
+      skipReason: 'docsify has no build step (client-side SPA)',
+      parseErrors: (_output) => [],
+    },
+  },
+
+  // --- Sphinx (sphinx-doc/sphinx v8.x + MyST-Parser for Markdown) --------------------------------
+  // Content lives in docs/ as .rst or .md (with MyST-Parser). Config: docs/conf.py at project root.
+  // Navigation controlled by toctree directives embedded in index.rst / index.md.
+  // No inline contract: authors fetch current Sphinx docs via find-docs/context7.
+  sphinx: {
+    contentRoot: 'docs',
+    assetDir: 'docs/_static',
+    configFiles: ['docs/conf.py', 'docs/index.rst'],
+    contract: null,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> Sphinx html_baseurl in conf.py (used by the sitemap extension).
+      const baseNote = basePath
+        ? `   Set html_baseurl = '${basePath}' in conf.py so the canonical sitemap uses the correct subpath.\n`
+        : ''
+      // i18n -> Sphinx language setting and gettext extraction.
+      const i18nNote = i18n
+        ? `   Set language = '${i18n.defaultLocale}' in conf.py. For additional locales ` +
+          `(${i18n.locales.filter(l => l !== i18n.defaultLocale).join(', ')}), ` +
+          `note that Sphinx i18n uses gettext: run 'make gettext' then 'sphinx-intl update -p _build/gettext -l <locale>' ` +
+          `to generate per-locale .po files. Document the commands in the README.\n`
+        : ''
+      // versioning -> Sphinx version/release in conf.py.
+      const versioningNote = versioning
+        ? `   Set version = '${versioning.current}' and release = '${versioning.current}' in conf.py. ` +
+          (versioning.versions.length ? `Prior versions: ${versioning.versions.join(', ')} — use separate Sphinx builds or sphinx-multiversion for a version switcher.\n` : '\n')
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE ${outDir}/docs/index.rst (or index.md): patch the toctree directive to include ` +
+            `the admitted pages (${groups}). Preserve all existing toctree entries and directives.\n`
+          : `2. Write or repair ${outDir}/docs/index.rst: a root document with a toctree listing the admitted ` +
+            `pages organized by group (${groups}). Use :maxdepth: 2 and :caption: per group. ` +
+            `If an index already exists, add missing toctree entries without removing existing ones.\n`) +
+        (scaffoldMode === 'add-to-existing'
+          ? `3. UPDATE ${outDir}/docs/conf.py: patch project/author/release only if missing. ` +
+            `Preserve existing extensions, html_theme, and other settings.\n`
+          : `3. Write or repair ${outDir}/docs/conf.py: set project (from the brief), author, release, ` +
+            `extensions = ['myst_parser', 'sphinx.ext.autodoc', 'sphinx.ext.viewcode'], ` +
+            `html_theme = 'furo' (or 'sphinx_rtd_theme'), source_suffix = {'.rst':'restructuredtext','.md':'markdown'}. ` +
+            `If it already exists, update project/author only.\n`) +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      buildCmd: (outDir, scaffoldMode) => {
+        if (scaffoldMode === 'full-project') {
+          return `pip install sphinx furo myst-parser 2>&1 | tail -1 && sphinx-build -W -b html "${outDir}/docs" "${outDir}/docs/_build/html"`
+        }
+        // -W promotes warnings to errors for stricter checking
+        return `sphinx-build -W -b html "${outDir}/docs" "${outDir}/docs/_build/html"`
+      },
+      prerequisiteNote: 'sphinx-build available and docs/conf.py exists in outDir',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /WARNING:|ERROR:|Exception|error:/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // --- Nextra (shuding/nextra v3.x) -------------------------------------------------------------
+  // Next.js-based docs framework. Content lives in pages/ (v2) or content/ (v3) as .mdx.
+  // Config: theme.config.tsx (Nextra docs theme) + next.config.mjs at project root.
+  // No inline contract: authors fetch current Nextra docs via find-docs/context7.
+  nextra: {
+    contentRoot: 'content',
+    assetDir: 'public',
+    configFiles: ['next.config.mjs', 'theme.config.tsx'],
+    contract: null,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> Next.js basePath in next.config.mjs.
+      const baseNote = basePath
+        ? `   Add basePath: '${basePath}' to the Next.js config in ${outDir}/next.config.mjs.\n`
+        : ''
+      // i18n -> Next.js i18n config.
+      const i18nNote = i18n
+        ? `   Add i18n: { defaultLocale: '${i18n.defaultLocale}', locales: [${i18n.locales.map(l => `'${l}'`).join(', ')}] } ` +
+          `to the Next.js config in ${outDir}/next.config.mjs.\n`
+        : ''
+      // Nextra has no built-in versioning.
+      const versioningNote = versioning
+        ? `   NOTE: Nextra has no built-in versioning. Versioning (current="${versioning.current}") is noted ` +
+          `but NOT configured — use a content version subpath approach if needed.\n`
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE _meta files in each content/ subdirectory to reflect the page groups ` +
+            `(${groups}). Each _meta.{js|ts|json} controls sidebar order for its directory.\n`
+          : `2. For each page group (${groups}), write or update the _meta.ts file in its content/<group>/ directory. ` +
+            `Each _meta.ts exports a default object mapping filenames (without ext) to their display titles. ` +
+            `The root content/_meta.ts should list the top-level sections in order.\n`) +
+        (scaffoldMode === 'add-to-existing'
+          ? `3. UPDATE ${outDir}/theme.config.tsx: patch docsRepositoryBase, project.link, and logo only if missing. ` +
+            `Preserve existing navigation and footer configuration.\n`
+          : `3. Write or repair ${outDir}/theme.config.tsx: export default { docsRepositoryBase: '', ` +
+            `project: { link: '' }, logo: <b>title from brief</b>, useNextSeoProps() { return { titleTemplate: '%s - <title>' } } }. ` +
+            `Ensure ${outDir}/next.config.mjs wraps the config with nextra({theme: 'nextra-theme-docs', themeConfig: './theme.config.tsx'}).\n`) +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      buildCmd: (outDir, scaffoldMode) => {
+        if (scaffoldMode === 'full-project') {
+          return `npm install --prefix "${outDir}" && npx next build "${outDir}"`
+        }
+        return `npx next build "${outDir}"`
+      },
+      prerequisiteNote: 'has package.json with next and node_modules present',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /error|Error|Failed to compile|Type error|✗/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // --- Mintlify (mintlify/mintlify v4.x) -------------------------------------------------------
+  // SaaS-hosted docs platform. Content lives in the repo root (or a configured directory) as .mdx.
+  // Config: mint.json (or docs.json in newer versions) at the repo root.
+  // No inline contract: authors fetch current Mintlify docs via find-docs/context7.
+  mintlify: {
+    contentRoot: '.',
+    assetDir: 'images',
+    configFiles: ['mint.json'],
+    contract: null,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // Mintlify has no configurable basePath in mint.json; SaaS routing controls it.
+      const baseNote = basePath
+        ? `   NOTE: Mintlify is SaaS-hosted; basePath ("${basePath}") is set in the Mintlify dashboard, ` +
+          `not in mint.json. No config key to write here.\n`
+        : ''
+      // Mintlify localization.
+      const i18nNote = i18n
+        ? `   Add "localization": { "defaultLocale": "${i18n.defaultLocale}", "locales": [${i18n.locales.map(l => `"${l}"`).join(', ')}] } ` +
+          `to mint.json. Create <locale>/ directories for translated pages.\n`
+        : ''
+      // Mintlify versioning.
+      const versioningNote = versioning
+        ? `   NOTE: Mintlify versioning is SaaS-managed. Versioning (current="${versioning.current}") is noted ` +
+          `but NOT configured in mint.json — use version tags in the Mintlify dashboard.\n`
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE ${outDir}/mint.json: patch the "navigation" array to include the admitted page groups ` +
+            `(${groups}). Each group is {"group":"<name>","pages":["path/to/page",...]}. ` +
+            `Preserve existing groups and the name/logo/colors blocks.\n`
+          : `2. Write or repair ${outDir}/mint.json: include name (from the brief), logo (object with light/dark paths or omit), ` +
+            `colors (primary, light, dark), and a navigation array grouping the admitted pages (${groups}). ` +
+            `Each navigation entry: {"group":"<group>","pages":["<path without .mdx>",...]}. ` +
+            `If it already exists, update name and navigation only.\n`) +
+        `3. (Mintlify content-collection step not applicable — mint.json is the sole config.)\n` +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      // mintlify CLI: `npx mintlify dev` starts a local server; no static build output.
+      // Use `mintlify broken-links` for a headless check when available.
+      buildCmd: (_outDir, _scaffoldMode) => null,
+      skipReason: 'mintlify is SaaS-hosted; no offline build step (use mintlify CLI for local preview)',
+      parseErrors: (_output) => [],
+    },
+  },
+
+  // --- Docsy (google/docsy Hugo theme v0.11.x) -------------------------------------------------
+  // Hugo-based documentation theme. Content lives in content/en/ as .md or .html.
+  // Config: hugo.toml (or config.toml) at project root; Docsy module in go.mod.
+  // No inline contract: authors fetch current Docsy docs via find-docs/context7.
+  docsy: {
+    contentRoot: 'content/en',
+    assetDir: 'static/images',
+    configFiles: ['hugo.toml', 'go.mod'],
+    contract: null,
+    assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath -> Hugo baseURL in hugo.toml.
+      const baseNote = basePath
+        ? `   Set baseURL = '${basePath}' in hugo.toml (or preserve an existing baseURL if already set).\n`
+        : ''
+      // i18n -> Hugo multilingual config in hugo.toml.
+      const i18nNote = i18n
+        ? `   Add [languages] blocks to hugo.toml for each locale: ` +
+          `${i18n.locales.map(l => `[languages.${l}] { languageName = '${l}'${l === i18n.defaultLocale ? ', weight = 1' : ''} }`).join('; ')}. ` +
+          `Create content/<locale>/ directories for each non-default locale. Docsy picks up multilingual ` +
+          `routes automatically when [languages] is configured.\n`
+        : ''
+      // Docsy/Hugo has no built-in versioning.
+      const versioningNote = versioning
+        ? `   NOTE: Docsy/Hugo has no built-in versioning. Versioning (current="${versioning.current}") is noted ` +
+          `but NOT configured — use a version dropdown in config/menus.toml or subpath deploys if needed.\n`
+        : ''
+      return (
+        (scaffoldMode === 'add-to-existing'
+          ? `2. UPDATE ${outDir}/hugo.toml: patch [params] title and [[menus.main]] entries only if missing. ` +
+            `Preserve existing module, markup, and taxonomies blocks.\n`
+          : `2. Write or repair ${outDir}/hugo.toml: set [module] imports = [{path:"github.com/google/docsy"}], ` +
+            `[params] with ui.breadcrumb_disable=false, ui.sidebar_menu_compact=true, ` +
+            `title (from the brief), and [languages.en]. ` +
+            `Add [[menus.main]] entries for top-level page groups (${groups}). ` +
+            `If it already exists, update title and menus.main only.\n`) +
+        `3. Each content group goes in ${outDir}/content/en/<group>/_index.md with frontmatter title and weight for ordering. ` +
+        `Admitted pages live at ${outDir}/content/en/<group>/<page>.md.\n` +
+        baseNote + i18nNote + versioningNote
+      )
+    },
+    validate: {
+      buildCmd: (outDir, _scaffoldMode) => `hugo --source "${outDir}"`,
+      prerequisiteNote: 'hugo binary available and go.mod references github.com/google/docsy',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /ERROR|WARN.*ref|error:|panic/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // --- Scalar (scalar/scalar v1.x) ----------------------------------------------------------------
+  // OpenAPI reference renderer. Not a prose-page authoring tool: the "pages" contract is replaced
+  // by a single renderer config (scalar.config.json or similar) that points at an OpenAPI spec.
+  // The assemblePrompt skips the per-page MDX authoring and instead writes the renderer config.
+  // args.sources should include the OpenAPI spec path (e.g. openapi.yaml).
+  // No inline contract: authors work from current Scalar docs (find-docs / context7).
+  scalar: {
+    contentRoot: '.',
+    assetDir: null, // API renderer; no prose asset directory
+    configFiles: ['scalar.config.json'],
+    contract: null,
+    assemblePrompt: (outDir, _groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath/i18n/versioning: not applicable for API renderers (Scalar is a client-side spec renderer).
+      const notesNote = [
+        basePath ? `NOTE: basePath ("${basePath}") is not configurable in scalar.config.json; set it in the serving proxy/CDN.` : '',
+        i18n ? `NOTE: Scalar has no i18n config; locale (${i18n.defaultLocale}) not applied.` : '',
+        versioning ? `NOTE: Scalar has no versioning config; version (${versioning.current}) not applied.` : '',
+      ].filter(Boolean).map(n => `   ${n}\n`).join('')
+      const specNote = `Use the OpenAPI spec provided in sources (e.g. openapi.yaml / openapi.json) as the spec path.`
+      return (
+        `2. Write ${outDir}/scalar.config.json: a Scalar renderer config referencing the OpenAPI spec. ` +
+        `Minimum shape: {"openapi":"<path-to-spec>","info":{"title":"<API title from spec or brief>"},"servers":[]}. ` +
+        `If the spec is a URL, use the url field instead of a file path. ${specNote}\n` +
+        `3. (No content-collection step — Scalar renders directly from the OpenAPI spec; do NOT author MDX prose pages.)\n` +
+        notesNote
+      )
+    },
+    validate: {
+      // Scalar is a browser renderer; no static build. CLI validate only available with @scalar/cli.
+      buildCmd: (_outDir, _scaffoldMode) => null,
+      skipReason: 'scalar renders client-side (serve with any static file server or the scalar CLI)',
+      parseErrors: (_output) => [],
+    },
+  },
+
+  // --- Redocly (Redocly/redoc v2.x + redocly CLI) -----------------------------------------------
+  // OpenAPI reference renderer. Not a prose-page authoring tool: the "pages" contract is replaced
+  // by redocly.yaml (the Redocly CLI config) that points at an OpenAPI spec and controls theming.
+  // The assemblePrompt skips per-page MDX authoring and instead writes the Redocly config.
+  // args.sources should include the OpenAPI spec path (e.g. openapi.yaml).
+  // No inline contract: authors work from current Redocly docs (find-docs / context7).
+  redocly: {
+    contentRoot: '.',
+    assetDir: null, // API renderer; no prose asset directory
+    configFiles: ['redocly.yaml'],
+    contract: null,
+    assemblePrompt: (outDir, _groups, scaffoldMode = 'content-only', opts = {}) => {
+      const { basePath, i18n, versioning } = opts
+      // basePath/i18n/versioning: not applicable for API renderers (Redocly is a spec-driven renderer).
+      const notesNote = [
+        basePath ? `NOTE: basePath ("${basePath}") is not configurable in redocly.yaml; set it in the serving proxy/CDN.` : '',
+        i18n ? `NOTE: Redocly has no i18n config in redocly.yaml; locale (${i18n.defaultLocale}) not applied.` : '',
+        versioning ? `NOTE: Redocly versioning is handled via separate API definitions in the apis block; version (${versioning.current}) not applied here.` : '',
+      ].filter(Boolean).map(n => `   ${n}\n`).join('')
+      const specNote = `Use the OpenAPI spec provided in sources (e.g. openapi.yaml) as the spec path.`
+      return (
+        `2. Write ${outDir}/redocly.yaml: a Redocly CLI config referencing the OpenAPI spec. ` +
+        `Minimum shape:\n` +
+        `  apis:\n` +
+        `    main@latest:\n` +
+        `      root: <path-to-spec>  # relative to redocly.yaml\n` +
+        `  theme:\n` +
+        `    openapi:\n` +
+        `      generateCodeSamples:\n` +
+        `        languages: [curl, JavaScript, Python]\n` +
+        `${specNote}\n` +
+        `If the brief names a theme or custom logo, add a [theme.colors] or [theme.logo] section. ` +
+        `If it already exists, patch the apis root path and theme block only; do NOT clobber other keys.\n` +
+        `3. (No content-collection step — Redocly renders directly from the OpenAPI spec; do NOT author MDX prose pages.)\n` +
+        notesNote
+      )
+    },
+    validate: {
+      buildCmd: (outDir, scaffoldMode) => {
+        if (scaffoldMode === 'full-project') {
+          return `npm install --prefix "${outDir}" && npx @redocly/cli lint "${outDir}/redocly.yaml"`
+        }
+        return `npx @redocly/cli lint "${outDir}/redocly.yaml"`
+      },
+      prerequisiteNote: '@redocly/cli available (npx resolves it) and redocly.yaml exists in outDir',
+      parseErrors: (output) =>
+        output.split('\n')
+          .filter(l => /error|Error|\[error\]|✗|warning:/.test(l))
+          .map(l => l.trim())
+          .filter(Boolean),
+    },
+  },
+
+  // Fallback entry for any framework not yet registered above. Authors work from current official
+  // docs (find-docs / context7) rather than an inline contract. contentRoot/configFiles/validate
+  // are null because they are framework-specific and unknown at author time.
   _unfilled: {
     contentRoot: null,
-    configFiles: [],
     assetDir: null,
+    configFiles: [],
     contract: null,
     // scaffoldMode is plumbed through for consistency; full-project is unsupported for unfilled frameworks.
     assemblePrompt: (outDir, groups, scaffoldMode = 'content-only', opts = {}) => {
       const { basePath, i18n, versioning } = opts
+      // For unknown frameworks: pass the values through as plain instructions; the agent consults current docs.
       const baseNote = basePath
         ? `   If the framework has a config key for the serving subpath, set it to '${basePath}'.\n`
         : ''
       const i18nNote = i18n
-        ? `   If the framework supports i18n, configure defaultLocale="${i18n.defaultLocale}" ` +
-          `and locales=[${i18n.locales.join(', ')}] per current framework docs.\n`
+        ? `   If the framework supports i18n, configure the default locale ("${i18n.defaultLocale}") ` +
+          `and additional locales (${i18n.locales.join(', ')}) per current framework docs.\n`
         : ''
       const versioningNote = versioning
         ? `   If the framework supports versioning, set the current version to "${versioning.current}" per current framework docs.\n`
         : ''
       return (
         (scaffoldMode === 'add-to-existing'
-          ? `1. UPDATE (do NOT clobber) the primary config — patch nav/sidebar to reflect groups: ${groups}; ` +
+          ? `2. UPDATE (do NOT clobber) the primary config — patch nav/sidebar to reflect the page groups: ${groups}; ` +
             `update the title only if missing. Use current framework config syntax.\n`
-          : `1. Write or repair the primary config (nav/sidebar reflecting groups: ${groups}; title from repo/brief), ` +
-            `using current framework config syntax; update rather than clobber an existing config.\n`) +
-        `2. (no Astro content collection step for this framework.)\n` +
-        `3. EMPIRICAL CHECK: set buildResult to "skipped: framework build not run".\n` +
+          : `2. Write or repair the primary config (nav/sidebar reflecting the page groups: ${groups}; title derived from the brief). ` +
+            `Use current framework config syntax; if a config already exists, update nav/title rather than clobbering unrelated config.\n`) +
+        `3. (no Astro content collection step for this framework.)\n` +
         baseNote + i18nNote + versioningNote
       )
     },
+    // _unfilled: no validate config — runBuildRepairLoop returns "skipped: no validate config".
     validate: null,
   },
 }
 
-// --- resolveLinksAndAssets (shared helper; mirrored from docs-create.js) -----------------------
-// Runs after authoring, before the quality gate. Scans each written page for local asset
-// references (markdown images, HTML img src), copies found files to the framework's assetDir,
-// and rewrites the page's src/href to the framework-correct route.
-// Returns { copied, rewritten, skipped }. Skips cleanly when fwEntry.assetDir is null.
+// --- resolveLinksAndAssets (shared helper) -----------------------------------------------------
+// Runs after Author, before Quality gate. Scans each written page for local asset references
+// (markdown images, HTML img src), copies found files to the framework's assetDir, and rewrites
+// the page's src/href to the framework-correct route.
+//
+// WHY a scripted agent step rather than leaving it to the quality gate:
+//   - The quality gate should DROP broken links, not fix them. Fixing before the gate means
+//     the gate sees a clean slate and can catch REAL authoring errors, not copy-omissions.
+//   - One Haiku agent per batch (all pages together) is cheaper than per-page author ops.
+//   - The gate already checks that paths resolve; this step ensures they do.
+//
+// Returns { copied: [{src, dest}], rewritten: [{page, from, to}], skipped: string[] }.
+// Skips cleanly when fwEntry.assetDir is null (API renderers: Scalar, Redocly).
+//
+// Usage: const linkResult = await resolveLinksAndAssets(written, outDir, fwEntry, framework)
 async function resolveLinksAndAssets(writtenNotes, outDir, fwEntry, framework) {
   if (!fwEntry.assetDir) {
     return { copied: [], rewritten: [], skipped: [`${framework} has no assetDir; link resolution skipped`] }
@@ -1132,6 +5417,12 @@ async function resolveLinksAndAssets(writtenNotes, outDir, fwEntry, framework) {
        framework === 'docusaurus' ? 'Docusaurus: use an absolute path from the site root, e.g. /img/image.png (maps to static/img/).' :
        framework === 'mkdocs' ? 'MkDocs: use a relative path from the page to assets/, e.g. ../assets/image.png.' :
        framework === 'vitepress' ? 'VitePress: use an absolute path, e.g. /image.png (maps to docs/public/).' :
+       framework === 'mdbook' ? 'mdBook: use a relative path from the page to images/, e.g. ../images/image.png.' :
+       framework === 'docsify' ? 'Docsify: use an absolute path, e.g. /_media/image.png.' :
+       framework === 'sphinx' ? 'Sphinx: use a path relative to _static/, e.g. ../_static/image.png.' :
+       framework === 'nextra' ? 'Nextra: use an absolute path from public/, e.g. /image.png.' :
+       framework === 'mintlify' ? 'Mintlify: use a path under images/, e.g. /images/image.png.' :
+       framework === 'docsy' ? 'Hugo/Docsy: use an absolute path, e.g. /images/image.png (maps to static/images/).' :
        `use a path relative to the framework's asset directory.`}\n` +
     `   Use the Edit tool to rewrite the reference in the page file.\n` +
     `3. If the source file does NOT exist at the referenced path, record it in "skipped" with the reason ` +
@@ -1139,11 +5430,13 @@ async function resolveLinksAndAssets(writtenNotes, outDir, fwEntry, framework) {
     `4. External URLs (http/https/ftp) and root-relative paths that already point into the asset dir ` +
     `   are SKIPPED (no action needed).\n\n` +
     `PAGES:\n${pageList}\n\n` +
-    `Return: copied (array of {src, dest}), rewritten (array of {page, from, to}), ` +
-    `skipped (array of strings), summary (one sentence).`,
+    `Return: copied (array of {src, dest} for each file copied), ` +
+    `rewritten (array of {page, from, to} for each link rewritten), ` +
+    `skipped (array of strings explaining what was skipped and why), ` +
+    `summary (one sentence).`,
     {
       label: 'resolve-links-assets',
-      phase: 'Resolve links/assets',
+      phase: 'Author',
       model: 'haiku',
       schema: {
         type: 'object', required: ['copied', 'rewritten', 'skipped', 'summary'], additionalProperties: false,
@@ -1164,7 +5457,7 @@ async function resolveLinksAndAssets(writtenNotes, outDir, fwEntry, framework) {
   )
   return result ?? { copied: [], rewritten: [], skipped: ['resolve-links-assets agent returned null'], summary: 'skipped' }
 }
-
+// @generated-end docs-contracts/frameworks
 // --- args / guards -----------------------------------------------------------------------------
 const root = typeof args === 'string' ? args : args?.root ?? '.'
 const outDir = typeof args?.outDir === 'string' ? args.outDir : null
@@ -1931,13 +6224,10 @@ if (admittedPages.length) {
 //     checks the structural/shape concerns the grounding gate does not cover.
 if (admittedPages.length) {
   phase('Quality gate')
-  const starlightLeakPatterns = [
-    '@astrojs/starlight', '<Aside', '<Card', '<CardGrid', '<FileTree',
-    '<Steps', '<Tabs', '<TabItem', '<LinkCard', '<LinkButton', '<Badge',
-  ]
-  const leakNote = framework !== 'starlight' && starlightLeakPatterns.length
+  // STARLIGHT_LEAK_PATTERNS comes from the shared frameworks substrate (generated block above).
+  const leakNote = framework !== 'starlight' && STARLIGHT_LEAK_PATTERNS.length
     ? `SYNTAX LEAK CHECK — REJECT any page that contains Starlight-specific patterns. These must NOT ` +
-      `appear in ${framework} output:\n${starlightLeakPatterns.map((p) => `  - ${p}`).join('\n')}\n`
+      `appear in ${framework} output:\n${STARLIGHT_LEAK_PATTERNS.map((p) => `  - ${p}`).join('\n')}\n`
     : ''
   const docsGate = await agent(
     `You are the quality gate for a ${framework} docs site at "${outDir}". The grounding gate already ` +
@@ -1973,6 +6263,17 @@ if (admittedPages.length) {
 //     + astro.config sidebar), write the durable .docs-plan.md, and run astro check ONLY if buildable.
 //     Per-page grounding already happened in the loop gate; this is config + light shape + empirical build.
 const assembleGroups = [...new Set(admittedPages.map((p) => p.group))].join(', ') || '(none)'
+// Empirical-check step. The shared assemblePrompt is config-only (the build step lives here so it is
+// framework-general, driven by fwEntry.validate.buildCmd which the shared registry now provides for
+// all frameworks — not just Starlight's astro check). content-only/add-to-existing run the build only
+// if the project is already installable; full-project's buildCmd installs first.
+const assembleBuildCmd = fwEntry.validate?.buildCmd?.(outDir, scaffoldMode)
+const buildStep = assembleBuildCmd
+  ? `6. EMPIRICAL CHECK: if "${outDir}" is a buildable project (${fwEntry.validate.prerequisiteNote ?? 'build deps installed'}), ` +
+    `run \`${assembleBuildCmd}\` and summarize pass/fail in buildResult. If it is NOT buildable` +
+    `${scaffoldMode === 'full-project' ? '' : ' (and scaffoldMode is not full-project)'}, set buildResult to ` +
+    `"skipped: not a buildable project" — do NOT install deps yourself.\n`
+  : `6. EMPIRICAL CHECK: set buildResult to "skipped: ${fwEntry.validate?.skipReason ?? 'framework build not run'}".\n`
 const final = admittedPages.length
   ? await agent(
       `You are the finalizer for a ${framework} docs site at "${outDir}". These pages were authored and passed ` +
@@ -1983,7 +6284,8 @@ const final = admittedPages.length
         `mismatches in place with Edit, note them in decisions. (Deep grounding already happened upstream.)\n` +
         `5. Write ${outDir}/.docs-plan.md: the admitted page list + sidebar structure + decisions + the deferred ` +
         `pages below (needs human brief). This is the durable record.\n` +
-        `   deferred: ${JSON.stringify(deferred)}\n\n` +
+        `   deferred: ${JSON.stringify(deferred)}\n` +
+        buildStep + `\n` +
         `Return configWritten, buildResult, planPath, decisions, summary.\n\n` +
         `IA CONTRACT\n${IA_CONTRACT}\n\nAUTHORING CONTRACT\n${authoringContract}`,
       { label: 'assemble', model: 'sonnet', schema: FINAL_SCHEMA },

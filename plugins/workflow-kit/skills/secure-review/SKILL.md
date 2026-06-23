@@ -15,7 +15,81 @@ or step-by-step exploitation — only evidence-backed findings and remediation g
 
 Artifacts: `.security-audit/` baselines can be safely git ignored unless the user wants audit state tracked.
 
-## What to look for (map to the lane's focus)
+## Set up deterministic recon (do this first)
+
+`scripts/recon.py` builds a JSON index (symbols, resolved constants, caller↔callee graph, entry points)
+so every later step reads ground truth instead of re-grepping. Run it from the skill's `scripts/` dir:
+
+```bash
+# 1. One-time, idempotent: build the cached venv for the OPTIONAL tree-sitter backend INTO this skill
+#    folder (scripts/.venv). recon.py also works without it (stdlib + heuristics), just less precise.
+PY=$(bash setup_venv.sh) || PY=python3        # prints scripts/.venv/bin/python on success
+
+# 2. Build the index for the target tree (any language).
+"$PY" recon.py index <target-path> --out .security-audit/recon.json
+
+# 3. Query it while reviewing (preferred over ad-hoc grep):
+"$PY" recon.py const  <NAME>            --index .security-audit/recon.json   # resolved value
+"$PY" recon.py callers <fn>             --index .security-audit/recon.json   # reachability
+"$PY" recon.py extract <file#fn|file:line> --index .security-audit/recon.json   # exact body
+"$PY" recon.py map --focus <file> --hops 2 --index .security-audit/recon.json  # module map (below)
+```
+
+`map` prints a compressed, cheap-to-read internal module graph: per file its exports and the in-scope
+files it references (via imports AND cross-file calls, labelled by the symbols crossing the edge),
+bounded to N hops from the focus files (default: entry-point files). External libraries/headers are
+listed once and NOT traversed, so the graph stays internal and small. Use it to understand a codebase's
+shape and to bound how far untrusted input can flow from an entry point. Resolution is real for Python,
+JS/TS, Go, C/C++; other languages list imports as external. (Imports embedded in string literals can
+inflate the external list — they never affect internal edges.)
+
+The venv lives in `scripts/.venv` (git-ignored) and is cached across runs. If `setup_venv.sh` can't
+install (no network/pip), recon.py falls back to the stdlib backend automatically — never blocks.
+
+### recon.py command reference
+
+All subcommands except `index` read a prebuilt index via `--index <recon.json>` (without it, `callers`/
+`const`/`extract` fall back to a live ripgrep/parse of the current dir).
+
+| Command | Args / flags | What it returns |
+|---|---|---|
+| `index <scope>` | `--out <f>` (else stdout), `--files <list>` (newline paths, for diff mode), `--max-bytes <n>` (skip larger files, default 1_000_000), `--compact` | Builds + writes the JSON artifact |
+| `extract <target>` | `target` = `file#fn` \| `file:line` \| `fn`; `--index` | Exact function body (replaces brace-window slicing) |
+| `callers <symbol>` | `--index` | Direct callers; `no DIRECT callers but referenced as a VALUE` = handler/callback; `NO callers and not referenced` = dead code |
+| `const <NAME>` | `--index` | Resolved constant value(s) + defining file |
+| `map` | `--index`; `--focus <a,b>` (default: entry-point files); `--hops <n>` (default 2); `--max <n>` (default 80) | Compressed internal module graph (imports + cross-file calls), external libs collapsed |
+| `shard` | `--index`; `--i <i>` `--n <n>` (required); `--by dir\|name` (default dir) | Deterministic file slice i-of-n (drives file-partition lanes) |
+| `summary` | `--index` | Counts, languages, tree-sitter on/off, first 50 entry points |
+
+### Index JSON shape (what each agent reads)
+
+`files[]` (path, language, loc, function/entrypoint counts), `symbols{name:[{file,start,end}]}`,
+`constants{NAME:[{file,value}]}`, `callees{fn:[callees]}`, `callers{fn:[callers]}` (empty list = no
+direct caller), `referenced[]` (names used as a value somewhere — not dead), `exports{file:[names]}`,
+`imports_external{file:[libs/headers]}` (NOT graph nodes), `filegraph{file:{depfile:[via names]}}`
+(internal edges only), `entrypoints[{file,line,kind}]`, `languages{}`, `treesitter` (bool — false =
+degraded heuristic backend), `summary{file_count,function_count,entrypoint_count,constant_count,edge_count}`.
+
+### Backend + resolution flow (precision varies, results never hard-fail)
+
+- Functions/calls: Python via stdlib `ast` (precise); other langs via tree-sitter if the venv is present,
+  else regex/brace heuristics. `treesitter:false` in the index means the degraded backend ran.
+- Call graph is scoped by language and a local definition shadows (a call resolves to the caller's own
+  file before any other), so same-named helpers across files do not create false edges.
+- Module-map import resolution is real for Python (incl. relative `from .x`), JS/TS (relative specifiers;
+  bare = external), Go (`go.mod` module prefix = internal, else stdlib/3rd-party), and C/C++ (`"local"`
+  internal, `<system>` external). Other languages list imports as external. Imports written inside string
+  literals can inflate the external list but never affect internal edges.
+
+## Brief yourself first
+
+Before flagging anything, establish for your scope: trust boundaries; where untrusted input enters
+(network / file / CLI args / API / IPC); which variables carry attacker-controlled data and how they
+flow to each sink; and any fixed-size buffers or named size constants. Resolve each named constant to
+its numeric value (grep its definition) and state the value — "a bound exists" is not "the bound is
+sufficient".
+
+## What to look for (language-agnostic — adapt sinks to the language in scope)
 
 - **Injection** — untrusted input reaching a shell, SQL, eval, template, or command sink without
   parameterization or escaping. Trace the input from entry point to sink before flagging.
@@ -25,11 +99,22 @@ Artifacts: `.security-audit/` baselines can be safely git ignored unless the use
 - **Path / file handling** — traversal, unsafe joins on user input, symlink following, zip-slip.
 - **Deserialization / SSRF / XXE** — untrusted data into deserializers, server-side fetchers, or XML parsers.
 - **Supply chain** — unpinned or known-bad dependencies, install/postinstall hooks, lockfile drift.
+- **Memory safety (native languages)** — buffer overflow, integer overflow/wrap used as a size or
+  index, NULL/None deref on malformed input, use-after-free / double-free, type confusion on tagged
+  unions/variants, unchecked return from a fallible call.
 
 ## Discipline (the part that keeps the gate's job honest)
 
 - **Trace reachability.** A pattern is not a vulnerability until untrusted input can reach it in
   context. Put that path in the evidence. A bare grep hit is a weak finding — say so.
+- **Resolve constants, find callers.** Resolve a named constant to its numeric value and do the
+  arithmetic before citing a bound; confirm the code is reachable by finding its callers. Never guess.
+  When the security-audit workflow runs, `scripts/recon.py` (with a prebuilt `recon.json` index) gives
+  these deterministically — `recon.py const <NAME>`, `recon.py callers <fn>` ("NO callers" = dead code),
+  `recon.py extract <file#fn>` for the exact body — preferred over ad-hoc grep. Fall back to grep when
+  no index exists.
+- **Default to not flagging under uncertainty.** The gate defaults INVALID — an over-eager,
+  unreachable, or unverified finding just gets dropped, so don't pad with maybes.
 - **Cite, don't summarize.** `where` is `file:line`; `evidence` is the actual code plus why it is a
   risk. The gate re-reads your citation, so a vague one gets dropped.
 - **Respect read-only constraints.** Trust boundaries and `ACCEPTED:` items come from the map stage —

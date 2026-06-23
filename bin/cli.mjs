@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Installer/bundler: pick workflows from a menu, copy each one plus the skills/agents
-// it depends on into the user's .claude/ (project or user scope).
-import { cp, mkdir, readFile, rm } from 'node:fs/promises'
+// Installer/uninstaller: pick workflows from a menu, copy each one plus the skills/agents
+// it depends on into the user's .claude/ (user or project scope). Every install writes a
+// receipt so uninstall removes ONLY what we placed and restores any user file we displaced.
+import { cp, mkdir, readFile, writeFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
@@ -11,6 +12,9 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SKILLS_DIR = path.join(ROOT, 'plugins', 'workflow-kit', 'skills')
 const AGENTS_DIR = path.join(ROOT, 'plugins', 'workflow-kit', 'agents')
 
+const RECEIPT = '.rabbit-flows-receipt.json' // per-scope install ledger, lives in scopeRoot
+const BACKUP_ROOT = '.rabbit-flows-backups' // displaced user files land here, restored on uninstall
+
 // --- args ---------------------------------------------------------------
 const argv = process.argv.slice(2)
 const flag = (name) => {
@@ -18,6 +22,8 @@ const flag = (name) => {
   return i === -1 ? undefined : argv[i + 1]
 }
 const has = (name) => argv.includes(`--${name}`)
+const parseList = (s) => s.split(',').map((x) => x.trim()).filter(Boolean)
+const NO_TTY = 'no TTY: pass --workflow <name> or --all (optionally --scope user|project).'
 
 async function loadManifest() {
   const raw = await readFile(path.join(ROOT, 'installer', 'manifest.json'), 'utf8')
@@ -94,30 +100,150 @@ export async function copyInto(src, dest, force) {
   return existsSync(dest) ? 'copied' : 'skipped'
 }
 
-async function install(chosen, scopeRoot, force) {
-  const done = []
-  const installedSkills = new Set() // dedupe skills shared across workflows
-  const installedAgents = new Set()
-  for (const w of chosen) {
-    const wfDest = path.join(scopeRoot, 'workflows', path.basename(w.file))
-    done.push([await copyInto(path.join(ROOT, w.file), wfDest, force), rel(scopeRoot, wfDest)])
-    for (const s of w.skills ?? []) {
-      if (installedSkills.has(s)) continue
-      installedSkills.add(s)
-      const dest = path.join(scopeRoot, 'skills', s)
-      done.push([await copyInto(path.join(SKILLS_DIR, s), dest, force), rel(scopeRoot, dest)])
-    }
-    for (const a of w.agents ?? []) {
-      if (installedAgents.has(a)) continue
-      installedAgents.add(a)
-      const dest = path.join(scopeRoot, 'agents', `${a}.md`)
-      done.push([await copyInto(path.join(AGENTS_DIR, `${a}.md`), dest, force), rel(scopeRoot, dest)])
-    }
+// --- receipt ------------------------------------------------------------
+// { version, workflows: [name...], files: { "<posix-rel>": { type, name, backup:<rel|null> } } }
+// Keys are POSIX-relative and the entry carries its own type/name so uninstall never re-parses paths.
+export async function readReceipt(scopeRoot) {
+  const p = path.join(scopeRoot, RECEIPT)
+  if (!existsSync(p)) return { version: 1, workflows: [], files: {} }
+  try {
+    const r = JSON.parse(await readFile(p, 'utf8'))
+    return { version: 1, workflows: r.workflows ?? [], files: r.files ?? {} }
+  } catch {
+    return { version: 1, workflows: [], files: {} }
   }
+}
+
+async function writeReceipt(scopeRoot, data) {
+  await mkdir(scopeRoot, { recursive: true })
+  await writeFile(path.join(scopeRoot, RECEIPT), JSON.stringify(data, null, 2) + '\n')
+}
+
+const isEmptyReceipt = (r) => !r.workflows.length && !Object.keys(r.files).length
+
+// YYYYMMDD-HHMMSS local stamp for the per-run backup dir (plain Node, not the workflow VM).
+function stamp() {
+  const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+}
+
+// Union of skill/agent deps across a set of workflows.
+export function depsOf(workflows) {
+  const skills = new Set()
+  const agents = new Set()
+  for (const w of workflows) {
+    for (const s of w.skills ?? []) skills.add(s)
+    for (const a of w.agents ?? []) agents.add(a)
+  }
+  return { skills, agents }
+}
+
+// Receipt keys are POSIX-relative so they round-trip on Windows (path.relative emits OS separators).
+const REL = (scopeRoot, p) => path.relative(scopeRoot, p).split(path.sep).join('/')
+const resolveScope = (scope) =>
+  scope === 'project' ? path.join(process.cwd(), '.claude') : path.join(homedir(), '.claude')
+
+// --- install ------------------------------------------------------------
+export async function install(chosen, scopeRoot, force) {
+  const receipt = await readReceipt(scopeRoot)
+  const backupDir = path.posix.join(BACKUP_ROOT, stamp())
+  const done = []
+  const seen = new Set() // dedupe skills/agents copied across the chosen workflows this run
+
+  // Place one src->dest, backing up a displaced FOREIGN file and recording our own in the receipt.
+  // type/name let uninstall classify the entry without re-parsing the path. Returns true if it's ours now.
+  const place = async (src, dest, dedupe, type, name) => {
+    const relPath = REL(scopeRoot, dest)
+    if (dedupe) {
+      if (seen.has(relPath)) return relPath in receipt.files
+      seen.add(relPath)
+    }
+    const isOurs = relPath in receipt.files
+    let backup = isOurs ? receipt.files[relPath].backup : null
+    // Only a --force overwrite of a file that isn't already ours can destroy user data: back it up.
+    if (force && existsSync(dest) && !isOurs) {
+      const bdest = path.join(scopeRoot, backupDir, relPath)
+      await mkdir(path.dirname(bdest), { recursive: true })
+      await cp(dest, bdest, { recursive: true })
+      backup = path.posix.join(backupDir, relPath)
+    }
+    const status = await copyInto(src, dest, force)
+    // Record only files we actually own now: freshly copied, or a prior install of ours.
+    const owned = status === 'copied' || isOurs
+    if (owned) receipt.files[relPath] = { type, name, backup }
+    done.push([status, relPath])
+    return owned
+  }
+
+  for (const w of chosen) {
+    let owned = await place(path.join(ROOT, w.file), path.join(scopeRoot, 'workflows', path.basename(w.file)), false, 'workflow', w.name)
+    for (const s of w.skills ?? []) owned = (await place(path.join(SKILLS_DIR, s), path.join(scopeRoot, 'skills', s), true, 'skill', s)) || owned
+    for (const a of w.agents ?? []) owned = (await place(path.join(AGENTS_DIR, `${a}.md`), path.join(scopeRoot, 'agents', `${a}.md`), true, 'agent', a)) || owned
+    // Claim the workflow if we own ANY of its files (the .js, or a freshly-copied dep). A foreign .js
+    // collision still leaves the .js the user's, but its installed skills stay selectively removable.
+    if (owned && !receipt.workflows.includes(w.name)) receipt.workflows.push(w.name)
+  }
+
+  await writeReceipt(scopeRoot, receipt)
   return done
 }
 
-const rel = (root, p) => path.relative(path.dirname(root), p)
+// --- uninstall ----------------------------------------------------------
+// Remove only paths the receipt says we placed; restore any backed-up foreign file.
+// Selective removal prunes a shared skill/agent only once no remaining workflow needs it.
+export async function uninstall(chosenNames, scopeRoot, manifest, all) {
+  const receipt = await readReceipt(scopeRoot)
+  if (isEmptyReceipt(receipt)) return { empty: true, done: [] }
+
+  let toRemove
+  let remainingWorkflows
+  if (all) {
+    toRemove = new Set(Object.keys(receipt.files))
+    remainingWorkflows = []
+  } else {
+    const removeNames = new Set(chosenNames)
+    remainingWorkflows = receipt.workflows.filter((n) => !removeNames.has(n))
+    const keep = depsOf(manifest.filter((w) => remainingWorkflows.includes(w.name)))
+    // Classify from the receipt entry, never by parsing the path: drop a workflow file we own for a
+    // removed name, and an owned skill/agent once no remaining workflow's deps still need it.
+    toRemove = new Set()
+    for (const [rel, e] of Object.entries(receipt.files)) {
+      if (e.type === 'workflow') {
+        if (removeNames.has(e.name)) toRemove.add(rel)
+      } else if (e.type === 'skill') {
+        if (!keep.skills.has(e.name)) toRemove.add(rel)
+      } else if (e.type === 'agent') {
+        if (!keep.agents.has(e.name)) toRemove.add(rel)
+      }
+    }
+  }
+
+  const done = []
+  for (const rel of toRemove) {
+    const dest = path.join(scopeRoot, rel)
+    const backup = receipt.files[rel]?.backup
+    if (existsSync(dest)) await rm(dest, { recursive: true, force: true })
+    const bsrc = backup ? path.join(scopeRoot, backup) : null
+    if (bsrc && existsSync(bsrc)) {
+      await cp(bsrc, dest, { recursive: true }) // restore the user's displaced file
+      await rm(bsrc, { recursive: true, force: true })
+      done.push(['restored', rel])
+    } else {
+      done.push(['removed', rel])
+    }
+    delete receipt.files[rel]
+  }
+  receipt.workflows = remainingWorkflows
+
+  if (isEmptyReceipt(receipt)) {
+    await rm(path.join(scopeRoot, RECEIPT), { force: true })
+    await rm(path.join(scopeRoot, BACKUP_ROOT), { recursive: true, force: true }) // nothing of ours left
+  } else {
+    await writeReceipt(scopeRoot, receipt)
+  }
+  return { empty: false, done }
+}
 
 // --- main ---------------------------------------------------------------
 async function main() {
@@ -126,14 +252,44 @@ async function main() {
   if (has('check')) return check(workflows)
   if (has('list')) return list(workflows)
 
-  // Non-interactive path: --workflow a,b [--scope project|user] [--force]
-  let chosen
-  let scope = flag('scope')
+  const verb = ['install', 'uninstall'].includes(argv[0]) ? argv[0] : null
+  const scope = flag('scope')
   const force = has('force')
+  const all = has('all')
 
+  if (all && flag('workflow')) {
+    console.error('--all and --workflow are mutually exclusive.')
+    process.exit(1)
+  }
+
+  // No verb, no --workflow, but a TTY: ask install-or-uninstall.
+  let action = verb
+  if (!action && !flag('workflow') && process.stdin.isTTY) {
+    const p = await import('@clack/prompts')
+    action = await p.select({
+      message: 'rabbit-flows:',
+      options: [
+        { value: 'install', label: 'Install', hint: 'add workflows to .claude' },
+        { value: 'uninstall', label: 'Uninstall', hint: 'remove what rabbit-flows installed' },
+      ],
+    })
+    if (p.isCancel(action)) return p.cancel('cancelled')
+  }
+  action = action ?? 'install'
+
+  if (action === 'uninstall') return runUninstall(workflows, scope, all)
+  return runInstall(workflows, scope, force, all)
+}
+
+async function runInstall(workflows, scopeArg, force, all) {
+  let chosen
+  let scope = scopeArg
   const wfArg = flag('workflow')
-  if (wfArg) {
-    const names = wfArg.split(',').map((s) => s.trim())
+
+  if (all) {
+    chosen = workflows
+  } else if (wfArg) {
+    const names = parseList(wfArg)
     chosen = workflows.filter((w) => names.includes(w.name))
     const unknown = names.filter((n) => !workflows.some((w) => w.name === n))
     if (unknown.length) {
@@ -142,16 +298,13 @@ async function main() {
     }
   }
 
-  // Interactive menu only when the workflow choice is unresolved AND we have a TTY.
-  // scope has a sane default below, so a non-TTY --workflow run never needs the menu.
   if (!chosen) {
     if (!process.stdin.isTTY) {
-      console.error('no TTY: pass --workflow <name> (optionally --scope project|user).')
+      console.error(NO_TTY)
       process.exit(1)
     }
     const p = await import('@clack/prompts')
-    p.intro('rabbit-flows')
-
+    p.intro('rabbit-flows · install')
     const picked = await p.multiselect({
       message: 'Pick workflows to install (their skills/agents come along):',
       options: workflows.map((w) => ({ value: w.name, label: w.name, hint: w.description })),
@@ -164,8 +317,8 @@ async function main() {
       scope = await p.select({
         message: 'Install scope:',
         options: [
-          { value: 'project', label: 'project', hint: './.claude (this repo only)' },
           { value: 'user', label: 'user', hint: '~/.claude (all your projects)' },
+          { value: 'project', label: 'project', hint: './.claude (this repo only)' },
         ],
       })
       if (p.isCancel(scope)) return p.cancel('cancelled')
@@ -173,9 +326,8 @@ async function main() {
     p.outro('installing...')
   }
 
-  scope = scope ?? 'project'
-  const scopeRoot =
-    scope === 'user' ? path.join(homedir(), '.claude') : path.join(process.cwd(), '.claude')
+  scope = scope ?? 'user'
+  const scopeRoot = resolveScope(scope)
 
   const results = await install(chosen, scopeRoot, force)
   console.log(`\nInstalled to ${scopeRoot} (${scope} scope):`)
@@ -183,13 +335,59 @@ async function main() {
     console.log(`  ${status === 'copied' ? '+' : '.'} ${status}  ${where}`)
   }
   const skipped = results.filter(([s]) => s === 'skipped').length
-  if (skipped) console.log(`\n${skipped} skipped (already present). Re-run with --force to overwrite.`)
+  if (skipped) console.log(`\n${skipped} skipped (already present). Re-run with --force to overwrite (a backup is kept).`)
 
   console.log(
     `\nNext: enable "Dynamic workflows" in /config (off by default on Pro),\n` +
       `then run a workflow by name, e.g. /${chosen[0].name}.\n` +
-      `Installed: ${chosen.map((w) => w.name).join(', ')}`,
+      `Installed: ${chosen.map((w) => w.name).join(', ')}\n` +
+      `Remove later: rabbit-flows uninstall --scope ${scope} (--all for everything).`,
   )
+}
+
+async function runUninstall(workflows, scopeArg, all) {
+  const scope = scopeArg ?? 'user'
+  const scopeRoot = resolveScope(scope)
+  const receipt = await readReceipt(scopeRoot)
+  if (isEmptyReceipt(receipt)) {
+    console.log(`Nothing installed by rabbit-flows in ${scopeRoot} (${scope} scope).`)
+    return
+  }
+
+  let chosenNames
+  const wfArg = flag('workflow')
+  if (all) {
+    chosenNames = receipt.workflows.slice()
+  } else if (wfArg) {
+    chosenNames = parseList(wfArg)
+    const unknown = chosenNames.filter((n) => !receipt.workflows.includes(n))
+    if (unknown.length) {
+      console.error(`not installed in ${scope} scope: ${unknown.join(', ')}`)
+      process.exit(1)
+    }
+  } else {
+    if (!process.stdin.isTTY) {
+      console.error(NO_TTY)
+      process.exit(1)
+    }
+    const p = await import('@clack/prompts')
+    p.intro('rabbit-flows · uninstall')
+    const picked = await p.multiselect({
+      message: 'Pick workflows to uninstall (shared skills are kept if still needed):',
+      options: receipt.workflows.map((n) => ({ value: n, label: n })),
+      required: true,
+    })
+    if (p.isCancel(picked)) return p.cancel('cancelled')
+    chosenNames = picked
+    p.outro('uninstalling...')
+  }
+
+  const res = await uninstall(chosenNames, scopeRoot, workflows, all)
+  console.log(`\nUninstalled from ${scopeRoot} (${scope} scope):`)
+  for (const [status, where] of res.done) {
+    console.log(`  ${status === 'restored' ? '~' : '-'} ${status}  ${where}`)
+  }
+  if (!res.done.length) console.log('  (nothing to remove for that selection)')
 }
 
 // Only run when invoked as a script, not when imported (e.g. by tests).
