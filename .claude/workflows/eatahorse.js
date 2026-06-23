@@ -54,6 +54,7 @@ export const meta = {
   description:
     'Decompose a goal into an Eatahorse Kanban board and gate the plan; optionally work it unattended one bite at a time in a Ralph-style loop, a fresh-context completion-gated worker each iteration, then write back the decisions.',
   phases: [
+    { title: 'Probe' },
     { title: 'Decompose' },
     { title: 'Seed' },
     { title: 'Plan-gate' },
@@ -127,13 +128,32 @@ const VERIFY_SCHEMA = {
   },
 }
 
+// Pre-flight probe: does the target board dir already hold a board, and how many cards are still active?
+// Drives the resume-vs-fresh-vs-bail branch BEFORE any decompose, so we never silently re-seed onto (or
+// no-op against) an occupied dir. exists=false when `report` errors (no board there yet).
+const PROBE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['exists', 'active', 'project'],
+  properties: {
+    exists: { type: 'boolean' },     // is there a board at the dir (report --json succeeded)
+    active: { type: 'integer' },     // active cards (not done/dropped); 0 if none or no board
+    project: { type: 'string' },     // the existing board's project name ("" if none)
+  },
+}
+
 // ---- args ----
 const goal =
   typeof args === 'string'
     ? args
     : args?.goal ?? 'Describe a goal to break into bite-sized tasks. (Pass args.goal.)'
 const execute = args?.execute ?? false
-const board = args?.board ?? '.eatahorse'
+// Default to a GOAL-derived dir (.eatahorse-<slug>), not the shared ".eatahorse" — that generic name
+// collides with any prior generic board (a cleared one makes the run silently no-op as "board cleared").
+// Mirrors the siblings (eatahorse-research -> .eatahorse-research, docs-from-code -> .eatahorse-docs).
+const slugify = (s) =>
+  (String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'board')
+const board = args?.board ?? '.eatahorse-' + slugify(goal)
 // Default to the bundled skill copy (works when run in this repo / after npx install into .claude). The
 // worker is told to `find` it if the default is absent, so a relocated install still resolves.
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
@@ -167,66 +187,123 @@ const CMD = {
 const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
 const CARD_RULE = `Card model: each card = one outcome / next 1-3 bites / what proves it done. Keep <=2 cards in "doing".`
 
-// 1. Decompose — Opus (sets the trajectory). Goal -> outcome-oriented cards with small bites + checkable
-//    acceptance. Returns STRUCTURED cards; the mechanical CLI writes happen in Seed (cheap), not here.
-phase('Decompose')
-const plan = await agent(
-  `Break this goal into a small set of outcome-oriented task cards for a one-bite-at-a-time Kanban board.\n` +
-    `Goal: ${goal}\n\n` +
-    `Rules: each card targets ONE meaningful outcome (not a trivial command); give it 1-3 small executable ` +
-    `bites (the next concrete steps) and 1-3 acceptance checks that concretely PROVE the card is done ` +
-    `(a command that passes, a file that exists, an observable behavior — not "looks good"). Order by ` +
-    `priority (P0 highest). Prefer fewer, well-scoped cards; if a card would need a long checklist, split it. ` +
-    `Return a short project name and the cards.`,
-  { label: 'decompose', schema: CARDS_SCHEMA },
+// 0. Probe — Haiku (mechanical, read-only). Look at the target board dir BEFORE decomposing so we never
+//    silently re-seed onto / no-op against an occupied dir. Three outcomes below: resume an in-progress
+//    board, bail LOUD on a cleared/foreign board, or proceed fresh when the dir is empty.
+phase('Probe')
+const probe = await agent(
+  `Probe an Eatahorse board dir, READ-ONLY. Run \`python3 "${scriptPath}" --board "${board}" report --json\`. ` +
+    `If it ERRORS (no board there yet), return exists=false, active=0, project="". Otherwise return ` +
+    `exists=true, active = the report's "active" count, and project = the board's project name. Do NOT ` +
+    `create or modify anything.\n\n${cli('report')}`,
+  { label: 'probe', model: 'haiku', schema: PROBE_SCHEMA },
 )
-if (!plan?.cards?.length) return { goal, error: 'decompose produced no cards', written: false }
+const resume = !!probe && probe.exists && probe.active > 0
 
-// 2. Seed — Haiku (mechanical). One agent creates the board (if absent) and adds every card via the CLI.
-//    Deterministic mapping from the decompose JSON; no judgment, so cheapest model.
-phase('Seed')
-const seed = await agent(
-  `Create an Eatahorse board and seed it with the cards below. Steps:\n` +
-    `1. Ensure the board exists: run \`python3 "${scriptPath}" --board "${board}" report --json\`; if it ` +
-    `errors (no board), run \`init "${plan.project || 'Eatahorse Project'}" --goal "${goal.replace(/"/g, "'")}"\`.\n` +
-    `2. For EACH card below, run one \`add\` with --priority, -d (description), a --bite per bite, and a ` +
-    `--accept per acceptance check. Put the highest-priority card(s) in --status ready, the rest backlog.\n` +
-    `3. Run \`sync\`, then \`report --json\` and report the resulting counts.\n` +
-    // seed only creates cards: init/add + sync/report (+ CARD_RULE for well-shaped cards).
-    `Do NOT start working any task. Only create cards.\n\n${cli('report', 'init', 'add', 'sync')}\n${CARD_RULE}\n\n` +
-    `Cards (JSON):\n${JSON.stringify(plan.cards)}`,
-  { label: 'seed', model: 'haiku' },
-)
+// Existing board with nothing active = the collision trap (complete or foreign board). Fail LOUD instead
+// of sweeping into the loop and reporting "board cleared" as if the run succeeded.
+if (probe && probe.exists && probe.active <= 0) {
+  return {
+    goal,
+    board,
+    error:
+      `Board at "${board}" exists but has 0 active cards (project="${probe.project}"). It is complete or ` +
+      `belongs to another goal. Pass a fresh args.board (convention: .eatahorse-<topic>) or remove the stale board.`,
+    written: false,
+  }
+}
 
-// 3. Plan gate — Opus, FRESH context (admission gate for the plan). Reads the seeded board, drops/splits
-//    cards that aren't independent or whose acceptance isn't checkable, and reports the active count. The
-//    execute loop depends on this plan, so it must not rubber-stamp — strong model (model-routing.md).
-phase('Plan-gate')
-const gate = await agent(
-  `You are a plan admission gate. Inspect the freshly seeded Eatahorse board at "${board}" ` +
-    `(\`list --json\`, \`show <id>\`, read board.md). For EACH card judge: is the outcome clear and ` +
-    `independent, are the bites genuinely small, and is the acceptance CHECKABLE (a real, observable ` +
-    `proof)? Fix problems IN PLACE via the CLI: split an overloaded card into smaller cards, drop a ` +
-    `meaningless one (\`remove\`), or tighten bites/acceptance (\`add-bite\` / re-add). REJECT any card ` +
-    `with no acceptance check (or only a vague/non-checkable one): add a concrete, observable one before ` +
-    `passing it, since a card with no real acceptance auto-completes on a single check with nothing proving it. Then run \`sync\` ` +
-    `and \`report --json\`. Return: ready (is the plan coherent enough to execute), the adjustments you ` +
-    // plan-gate inspects + edits in place: list/show to read, remove/addbite/add to fix, sync/report.
-    `applied, and activeRemaining (the report's "active" count).\n\n${cli('list', 'show', 'remove', 'addbite', 'add', 'sync', 'report')}\n${CARD_RULE}`,
-  { label: 'plan-gate', schema: PLAN_GATE_SCHEMA },
-)
-if (!gate) return { goal, board, error: 'plan gate returned nothing', written: false }
+let plan = null
+let gate = null
+if (resume) {
+  // Existing board mid-flight: skip decompose/seed/plan-gate and work the cards already on it.
+  log(`Resuming board "${board}": ${probe.active} active card(s). Skipping decompose/seed/plan-gate.`)
+} else {
+  // 1. Decompose — Opus (sets the trajectory). Goal -> outcome-oriented cards with small bites + checkable
+  //    acceptance. Returns STRUCTURED cards; the mechanical CLI writes happen in Seed (cheap), not here.
+  phase('Decompose')
+  plan = await agent(
+    `Break this goal into a small set of outcome-oriented task cards for a one-bite-at-a-time Kanban board.\n` +
+      `Goal: ${goal}\n\n` +
+      `Rules: each card targets ONE meaningful outcome (not a trivial command); give it 1-3 small executable ` +
+      `bites (the next concrete steps) and 1-3 acceptance checks that concretely PROVE the card is done ` +
+      `(a command that passes, a file that exists, an observable behavior — not "looks good"). Order by ` +
+      `priority (P0 highest). Prefer fewer, well-scoped cards; if a card would need a long checklist, split it. ` +
+      `Return a short project name and the cards.`,
+    { label: 'decompose', schema: CARDS_SCHEMA },
+  )
+  if (!plan?.cards?.length) return { goal, board, error: 'decompose produced no cards', written: false }
 
-// Plan-only (default): stop here. The board is written; nothing was executed.
+  // 2. Seed — Haiku (mechanical). One agent creates the board (probe proved it's absent) and adds every card.
+  //    Deterministic mapping from the decompose JSON; no judgment, so cheapest model.
+  phase('Seed')
+  await agent(
+    `Create an Eatahorse board and seed it with the cards below. Use EXACTLY the board dir "${board}" for ` +
+      `every command — do NOT invent, switch to, or improvise a different dir even if one already exists. ` +
+      `Steps:\n` +
+      `1. Create the board: run ` +
+      `\`python3 "${scriptPath}" --board "${board}" init "${(plan.project || 'Eatahorse Project').replace(/"/g, "'")}" --goal "${goal.replace(/"/g, "'")}"\`. ` +
+      `If it reports the board already exists, skip this step (do not --force).\n` +
+      `2. For EACH card below, run one \`add\` with --priority, -d (description), a --bite per bite, and a ` +
+      `--accept per acceptance check. Put the highest-priority card(s) in --status ready, the rest backlog.\n` +
+      `3. Run \`sync\`, then \`report --json\` and report the resulting counts.\n` +
+      // seed only creates cards: init/add + sync/report (+ CARD_RULE for well-shaped cards). The init line
+      // is spelled out WITH --board so a cheap agent can't drop the flag (which would let resolve_board walk
+      // up to a parent board, diverging from where add/report write).
+      `Do NOT start working any task. Only create cards.\n\n${cli('report', 'init', 'add', 'sync')}\n${CARD_RULE}\n\n` +
+      `Cards (JSON):\n${JSON.stringify(plan.cards)}`,
+    { label: 'seed', model: 'haiku' },
+  )
+
+  // 3. Plan gate — Opus, FRESH context (admission gate for the plan). Reads the seeded board, drops/splits
+  //    cards that aren't independent or whose acceptance isn't checkable, and reports the active count. The
+  //    execute loop depends on this plan, so it must not rubber-stamp — strong model (model-routing.md).
+  phase('Plan-gate')
+  gate = await agent(
+    `You are a plan admission gate. Inspect the freshly seeded Eatahorse board at "${board}" ` +
+      `(\`list --json\`, \`show <id>\`, read board.md). For EACH card judge: is the outcome clear and ` +
+      `independent, are the bites genuinely small, and is the acceptance CHECKABLE (a real, observable ` +
+      `proof)? Fix problems IN PLACE via the CLI: split an overloaded card into smaller cards, drop a ` +
+      `meaningless one (\`remove\`), or tighten bites/acceptance (\`add-bite\` / re-add). REJECT any card ` +
+      `with no acceptance check (or only a vague/non-checkable one): add a concrete, observable one before ` +
+      `passing it, since a card with no real acceptance auto-completes on a single check with nothing proving it. Then run \`sync\` ` +
+      `and \`report --json\`. Return: ready (is the plan coherent enough to execute), the adjustments you ` +
+      // plan-gate inspects + edits in place: list/show to read, remove/addbite/add to fix, sync/report.
+      `applied, and activeRemaining (the report's "active" count).\n\n${cli('list', 'show', 'remove', 'addbite', 'add', 'sync', 'report')}\n${CARD_RULE}`,
+    { label: 'plan-gate', schema: PLAN_GATE_SCHEMA },
+  )
+  if (!gate) return { goal, board, error: 'plan gate returned nothing', written: false }
+
+  // Fresh-seed loud guard: decompose produced cards but the gate left nothing active (dropped them all, or
+  // seed failed). Bail clearly rather than entering the loop and reporting "board cleared" as success.
+  if ((gate.activeRemaining ?? 0) <= 0) {
+    return {
+      goal,
+      board,
+      project: plan.project,
+      error: 'Plan gate left 0 active cards after seeding — nothing to execute. Inspect the gate adjustments.',
+      adjustments: gate.adjustments,
+      written: true,
+    }
+  }
+}
+
+// Resume-safe locals: on resume there is no plan/gate, so fall back to the probe.
+const project = plan?.project ?? probe.project ?? 'Eatahorse'
+const cardsSeeded = plan?.cards?.length ?? 0
+
+// Plan-only (default): stop here. The board is written; nothing was executed. (On resume the board already
+// existed; planReady/adjustments come from the gate only on the fresh path.)
 if (!execute) {
   return {
     goal,
     board,
-    project: plan.project,
-    cardsSeeded: plan.cards.length,
-    planReady: gate.ready,
-    adjustments: gate.adjustments,
-    activeRemaining: gate.activeRemaining,
+    project,
+    cardsSeeded,
+    resumed: resume,
+    planReady: gate?.ready ?? null,
+    adjustments: gate?.adjustments ?? [],
+    activeRemaining: gate?.activeRemaining ?? probe.active,
     executed: false,
     written: true, // the board exists on disk
   }
@@ -240,7 +317,7 @@ if (!execute) {
 //    Termination: board clear (active==0) OR stall (no progress N times) OR iteration cap OR budget floor.
 const STALL_CAP = 3
 const BUDGET_FLOOR = 50_000 // stop opening new iterations if fewer than this many output tokens remain
-let active = gate.activeRemaining ?? 1
+let active = (gate?.activeRemaining ?? probe.active) ?? 1
 let stall = 0
 let iter = 0
 const completed = []
@@ -344,9 +421,10 @@ await agent(
 return {
   goal,
   board,
-  project: plan.project,
-  cardsSeeded: plan.cards.length,
-  planReady: gate.ready,
+  project,
+  cardsSeeded,
+  resumed: resume,
+  planReady: gate?.ready ?? null,
   executed: true,
   iterations: iter,
   completed,

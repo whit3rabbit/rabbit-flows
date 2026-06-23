@@ -155,8 +155,14 @@ no user IO, so gather these here first):
 2. Use `AskUserQuestion` to confirm the **execute** toggle — `false` (default) plans and organizes
    the board only; `true` makes **unattended edits** to the project. Default to `false` unless the
    user clearly opted into autonomous execution.
-3. Launch: `Workflow({ name: "eatahorse", args: { goal, execute, board } })` (`board` defaults to
-   `.eatahorse`; omit args you did not gather — the workflow defaults them).
+3. Launch: `Workflow({ name: "eatahorse", args: { goal, execute, board } })`. `board` defaults to a
+   goal-derived dir (`.eatahorse-<slug>`), **not** the shared `.eatahorse`, so a new goal can't collide
+   with a prior board; omit args you did not gather — the workflow defaults them.
+   - **Resume:** point `board` at an existing board that still has active cards → the workflow skips
+     decompose/seed/plan-gate and works the cards already there (use this to continue an interrupted run).
+   - **Collision guard:** if `board` points at a board that exists but has 0 active cards (complete, or a
+     different project), the run **bails loud** instead of silently re-seeding or no-opping. Pass a fresh
+     `board` (convention: `.eatahorse-<topic>`) or remove the stale one.
 4. Hand back the workflow's board summary (counts, what's blocked, the written CLAUDE.md note).
 
 The skill name (`eatahorse`) and the workflow `meta.name` (`eatahorse`) live in separate
