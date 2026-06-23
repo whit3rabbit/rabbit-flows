@@ -18,7 +18,7 @@
     {
       "name": "docs-create",
       "file": ".claude/workflows/docs-create.js",
-      "description": "Author an Astro Starlight documentation site from a brief: plan pages, fan out authors, verify + assemble config.",
+      "description": "Author a documentation site from a brief: plan pages, fan out authors, verify + assemble config. Targets Starlight, Docusaurus, MkDocs, VitePress, Fumadocs, mdBook, or Docsify via the framework arg.",
       "skills": ["docs-site-builder", "document"],
       "agents": []
     },
@@ -46,7 +46,7 @@
     {
       "name": "docs-from-code",
       "file": ".claude/workflows/docs-from-code.js",
-      "description": "Document a whole codebase into a Starlight site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back.",
+      "description": "Document a whole codebase into a docs site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks via the framework arg.",
       "skills": ["eatahorse", "docs-site-builder", "document-codebase", "document"],
       "agents": []
     },
