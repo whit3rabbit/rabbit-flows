@@ -67,6 +67,24 @@ web_modules/
 # Optional REPL history
 .node_repl_history
 
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
+.eggs/
+*.egg-info/
+pip-wheel-metadata/
+
 # Output of 'npm pack'
 *.tgz
 
