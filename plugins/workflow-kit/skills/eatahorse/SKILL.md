@@ -142,7 +142,11 @@ For a large goal that should be decomposed and (optionally) worked through unatt
 `eatahorse` dynamic workflow instead of driving the CLI by hand. It runs the spine
 decompose → seed cards → plan-gate, and — only when `execute: true` — a Ralph-style loop that
 takes one bite at a time with a fresh-context worker each iteration, gating completions and
-syncing the board, until the board is clear or the budget/iteration cap is hit.
+syncing the board, until the board is clear or the budget/iteration cap is hit. "Gating
+completions" means each card a worker marks done is re-checked by an independent fresh-context
+verifier against real evidence (it runs the proving command or inspects the file), and if the
+acceptance is not genuinely met the verifier `reopen`s the card to `doing` with the gap noted, so a
+"done" card can bounce back.
 
 Front-door steps (this skill is the conversational entry; the workflow runs in the background with
 no user IO, so gather these here first):

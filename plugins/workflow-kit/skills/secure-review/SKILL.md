@@ -30,8 +30,8 @@ PY=$(bash setup_venv.sh) || PY=python3        # prints scripts/.venv/bin/python 
 
 # 3. Query it while reviewing (preferred over ad-hoc grep):
 "$PY" recon.py const  <NAME>            --index .security-audit/recon.json   # resolved value
-"$PY" recon.py callers <fn>             --index .security-audit/recon.json   # reachability
-"$PY" recon.py extract <file#fn|file:line> --index .security-audit/recon.json   # exact body
+"$PY" recon.py callers <fn|file#fn[:line]> --index .security-audit/recon.json   # reachability
+"$PY" recon.py extract <file#fn[:line]|file:line> --index .security-audit/recon.json   # exact body
 "$PY" recon.py map --focus <file> --hops 2 --index .security-audit/recon.json  # module map (below)
 ```
 
@@ -39,9 +39,11 @@ PY=$(bash setup_venv.sh) || PY=python3        # prints scripts/.venv/bin/python 
 files it references (via imports AND cross-file calls, labelled by the symbols crossing the edge),
 bounded to N hops from the focus files (default: entry-point files). External libraries/headers are
 listed once and NOT traversed, so the graph stays internal and small. Use it to understand a codebase's
-shape and to bound how far untrusted input can flow from an entry point. Resolution is real for Python,
-JS/TS, Go, C/C++; other languages list imports as external. (Imports embedded in string literals can
-inflate the external list — they never affect internal edges.)
+shape and to bound how far untrusted input can flow from an entry point. Import resolution is real for
+Python, JS/TS, Go, C/C++, Ruby (`require_relative`), PHP (`require`/`include`), Java (package→path,
+basename fallback), and Rust (`mod`); C# and remaining languages still get internal edges from
+cross-file calls even without import resolution. (Imports embedded in string literals can inflate the
+external list — they never affect internal edges.)
 
 The venv lives in `scripts/.venv` (git-ignored) and is cached across runs. If `setup_venv.sh` can't
 install (no network/pip), recon.py falls back to the stdlib backend automatically — never blocks.
@@ -54,32 +56,49 @@ All subcommands except `index` read a prebuilt index via `--index <recon.json>` 
 | Command | Args / flags | What it returns |
 |---|---|---|
 | `index <scope>` | `--out <f>` (else stdout), `--files <list>` (newline paths, for diff mode), `--max-bytes <n>` (skip larger files, default 1_000_000), `--compact` | Builds + writes the JSON artifact |
-| `extract <target>` | `target` = `file#fn` \| `file:line` \| `fn`; `--index` | Exact function body (replaces brace-window slicing) |
-| `callers <symbol>` | `--index` | Direct callers; `no DIRECT callers but referenced as a VALUE` = handler/callback; `NO callers and not referenced` = dead code |
+| `extract <target>` | `target` = `file#fn[:line]` \| `file:line` \| `fn`; `--index` | Exact function body (replaces brace-window slicing) |
+| `callers <symbol>` | `symbol` = `fn` \| `file#fn[:line]`; `--index` | Direct callers; `no DIRECT callers but referenced as a VALUE` = handler/callback; `NO callers and not referenced` = dead code |
 | `const <NAME>` | `--index` | Resolved constant value(s) + defining file |
 | `map` | `--index`; `--focus <a,b>` (default: entry-point files); `--hops <n>` (default 2); `--max <n>` (default 80) | Compressed internal module graph (imports + cross-file calls), external libs collapsed |
 | `shard` | `--index`; `--i <i>` `--n <n>` (required); `--by dir\|name` (default dir) | Deterministic file slice i-of-n (drives file-partition lanes) |
-| `summary` | `--index` | Counts, languages, tree-sitter on/off, first 50 entry points |
+| `summary` | `--index` | Counts, languages, tree-sitter on/off, per-language `backends`, first 50 entry points |
+
+A bare `<symbol>`/`<fn>` that is defined in more than one place is **ambiguous** for `callers`/`extract`:
+they exit non-zero and print candidate ids instead of a result. Re-run with the printed `file#fn` form,
+or `file#fn:line` when one file contains duplicate or overloaded function names. `const` is not
+function-keyed; it lists every defining file's value.
 
 ### Index JSON shape (what each agent reads)
 
-`files[]` (path, language, loc, function/entrypoint counts), `symbols{name:[{file,start,end}]}`,
-`constants{NAME:[{file,value}]}`, `callees{fn:[callees]}`, `callers{fn:[callers]}` (empty list = no
-direct caller), `referenced[]` (names used as a value somewhere — not dead), `exports{file:[names]}`,
+`files[]` (path, language, loc, function/entrypoint counts),
+`symbols{name:[{id,file,start,end,language,key}]}` (`id` = `file#name`, or `file#name:line` for duplicate names in one file; `key` = bare name when unique, else that id),
+`function_keys{key:{id,file,start,end,language,name}}` (every defined function, keyed by graph key),
+`constants{NAME:[{file,value}]}`, `callees{key:[callee keys]}`, `callers{key:[caller keys]}` (keys are
+the bare name when unique, else the function id; empty list = no direct caller),
+`referenced[]` (names used as a value somewhere — not dead), `exports{file:[names]}`,
 `imports_external{file:[libs/headers]}` (NOT graph nodes), `filegraph{file:{depfile:[via names]}}`
 (internal edges only), `entrypoints[{file,line,kind}]`, `languages{}`, `treesitter` (bool — false =
-degraded heuristic backend), `summary{file_count,function_count,entrypoint_count,constant_count,edge_count}`.
+degraded heuristic backend), `backends{lang:{ast|treesitter|regex:file_count}}` (which parser ran per
+language; a non-python language showing only `regex` while `treesitter:true` = a missing/broken grammar,
+i.e. that language ran degraded), `summary{file_count,function_count,entrypoint_count,constant_count,edge_count}`.
 
 ### Backend + resolution flow (precision varies, results never hard-fail)
 
 - Functions/calls: Python via stdlib `ast` (precise); other langs via tree-sitter if the venv is present,
-  else regex/brace heuristics. `treesitter:false` in the index means the degraded backend ran.
+  else regex/brace heuristics. `treesitter:false` in the index means the degraded backend ran. The
+  tree-sitter backend covers C-like grammars plus Ruby (`def`/`def self.`), C# (incl. local functions),
+  Rust, Go, Java, PHP, Swift, Kotlin, Scala, Bash; a single unbuildable grammar is isolated and does NOT
+  disable tree-sitter for the rest of the run.
 - Call graph is scoped by language and a local definition shadows (a call resolves to the caller's own
   file before any other), so same-named helpers across files do not create false edges.
 - Module-map import resolution is real for Python (incl. relative `from .x`), JS/TS (relative specifiers;
-  bare = external), Go (`go.mod` module prefix = internal, else stdlib/3rd-party), and C/C++ (`"local"`
-  internal, `<system>` external). Other languages list imports as external. Imports written inside string
-  literals can inflate the external list but never affect internal edges.
+  bare = external), Go (`go.mod` module prefix = internal, else stdlib/3rd-party), C/C++ (`"local"`
+  internal, `<system>` external), Ruby (`require_relative`), PHP (`require`/`include` path literals),
+  Java (package path, unique-basename fallback), and Rust (`mod foo;`). C# `using` namespaces and any
+  remaining languages list imports as external, but still get internal edges from cross-file calls.
+  Imports written inside string literals can inflate the external list but never affect internal edges.
+- Entry-point detection (heuristic) spans CLI mains, Python/Flask, Express/Node, Go HTTP, plus
+  Spring/JAX-RS (Java), ASP.NET (C#), actix/axum (Rust), Rails/Sinatra (Ruby), and PHP superglobals/Laravel.
 
 ## Brief yourself first
 

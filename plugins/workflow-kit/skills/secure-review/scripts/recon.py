@@ -62,7 +62,7 @@ LANGUAGES: Dict[str, Tuple[str, Optional[str]]] = {
     ".cxx": ("cpp", "cpp"),
     ".hpp": ("cpp", "cpp"),
     ".hxx": ("cpp", "cpp"),
-    ".cs": ("c_sharp", "c_sharp"),
+    ".cs": ("c_sharp", "csharp"),  # label c_sharp (internal), grammar csharp (the pack's name)
     ".rb": ("ruby", "ruby"),
     ".php": ("php", "php"),
     ".swift": ("swift", "swift"),
@@ -94,18 +94,37 @@ ENTRYPOINT_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("lambda-handler", re.compile(r'\b(?:exports\.handler|def\s+handler|func\s+Handler)\b')),
     ("event-listener", re.compile(r'addEventListener\s*\(')),
     ("cli-main", re.compile(r'\b(?:def|func|fn|function|public\s+static\s+void)\s+[mM]ain\b')),
+    # Java: Spring MVC + JAX-RS route annotations.
+    ("spring-route", re.compile(r'@(?:Rest)?Controller\b|@(?:Request|Get|Post|Put|Delete|Patch)Mapping\b')),
+    ("jaxrs-route", re.compile(r'@(?:Path|GET|POST|PUT|DELETE|HEAD)\b')),
+    # C#: ASP.NET attribute routing + minimal-API endpoint mapping.
+    ("aspnet-route", re.compile(r'\[(?:ApiController|Http(?:Get|Post|Put|Delete|Patch)|Route)\b')),
+    ("aspnet-minimal", re.compile(r'\.Map(?:Get|Post|Put|Delete|Patch|Methods)\s*\(')),
+    # Rust: actix/rocket route macros + axum router.
+    ("rust-route", re.compile(r'#\[(?:get|post|put|delete|patch|route)\s*\(')),
+    ("rust-axum", re.compile(r'\bRouter::new\b|\.route\s*\(')),
+    # Ruby: Rails/Sinatra route DSL (line-anchored verb + path literal).
+    ("rails-sinatra", re.compile(r'^\s*(?:get|post|put|patch|delete)\s+[\'"]/')),
+    # PHP: request superglobals + Laravel route facade.
+    ("php-superglobal", re.compile(r'\$_(?:GET|POST|REQUEST|COOKIE|FILES|SERVER)\b')),
+    ("laravel-route", re.compile(r'\bRoute::(?:get|post|put|patch|delete|any|match)\s*\(')),
 ]
 
 # --------------------------------------------------------------------------- optional tree-sitter
 
-_TS_PARSERS: Dict[str, Any] = {}
-_TS_AVAILABLE: Optional[bool] = None
+_TS_PARSERS: Dict[str, Any] = {}     # grammar -> Parser, or None if THAT grammar failed (isolated)
+_TS_AVAILABLE: Optional[bool] = None  # the tree_sitter LIBRARY importable at all (None = untried)
 
 
 def _ts_parser(grammar: str):
-    """Return a cached tree-sitter parser for a grammar, or None if tree-sitter is unavailable."""
+    """Return a cached tree-sitter parser for a grammar, or None if unavailable.
+
+    Per-grammar failures are ISOLATED: a single bad or unbuildable grammar (e.g. a wrong grammar
+    name) caches None for itself and never disables tree-sitter for the other languages in the same
+    run. Only a failed import of the tree_sitter library (it isn't installed) flips the global off —
+    previously any one grammar exception poisoned `_TS_AVAILABLE` and silently degraded the whole index."""
     global _TS_AVAILABLE
-    if _TS_AVAILABLE is False or grammar is None:
+    if grammar is None or _TS_AVAILABLE is False:
         return None
     if grammar in _TS_PARSERS:
         return _TS_PARSERS[grammar]
@@ -114,26 +133,30 @@ def _ts_parser(grammar: str):
         # .parse() rejects bytes in this version, so construct the Parser explicitly.
         from tree_sitter_language_pack import get_language  # type: ignore
         from tree_sitter import Parser  # type: ignore
-        p = Parser(get_language(grammar))
-        _TS_AVAILABLE = True
-        _TS_PARSERS[grammar] = p
-        return p
     except Exception:
-        _TS_AVAILABLE = False
-        _TS_PARSERS[grammar] = None
+        _TS_AVAILABLE = False  # library absent -> no tree-sitter backend at all
         return None
+    _TS_AVAILABLE = True
+    try:
+        p = Parser(get_language(grammar))
+    except Exception:
+        _TS_PARSERS[grammar] = None  # this grammar only; siblings stay available
+        return None
+    _TS_PARSERS[grammar] = p
+    return p
 
 
 # --------------------------------------------------------------------------- file model
 
 class FileInfo:
     __slots__ = ("path", "language", "loc", "functions", "constants", "entrypoints", "idents",
-                 "imports", "exports")
+                 "imports", "exports", "backend")
 
     def __init__(self, path: str, language: str):
         self.path = path
         self.language = language
         self.loc = 0
+        self.backend = "regex"  # which parser ran: "ast" | "treesitter" | "regex" (per-file)
         self.functions: List[Dict[str, Any]] = []   # {name, start, end, calls:[]}
         self.constants: Dict[str, str] = {}
         self.entrypoints: List[Dict[str, Any]] = []  # {kind, line}
@@ -146,28 +169,23 @@ class FileInfo:
 
 def parse_python(path: str, src: str) -> FileInfo:
     fi = FileInfo(path, "python")
+    fi.backend = "ast"
     fi.loc = src.count("\n") + 1
     try:
         tree = ast.parse(src)
     except SyntaxError:
-        return parse_regex(path, src, "python")
+        return parse_regex(path, src, "python")  # FileInfo.backend defaults to "regex"
 
     lines = src.splitlines()
 
     class V(ast.NodeVisitor):
         def _fn(self, node):
-            calls: List[str] = []
-            for sub in ast.walk(node):
-                if isinstance(sub, ast.Call):
-                    name = _call_name(sub.func)
-                    if name and name not in _NOT_CALLS:
-                        calls.append(name)
+            calls = _python_calls_in_own_body(node)
             end = getattr(node, "end_lineno", node.lineno)
             fi.functions.append({
                 "name": node.name, "start": node.lineno, "end": end,
                 "calls": sorted(set(calls)),
             })
-            # do not recurse into nested defs as separate top-level visits; walk() above covers calls
 
         def visit_FunctionDef(self, node):
             self._fn(node)
@@ -190,6 +208,23 @@ def parse_python(path: str, src: str) -> FileInfo:
     V().visit(tree)
     _detect_entrypoints(fi, lines)
     return fi
+
+
+def _python_calls_in_own_body(root) -> List[str]:
+    # Collect calls in this function's OWN body — stop descending at a nested def/class/lambda so an
+    # inner helper's calls aren't attributed to the outer one. Stack walk mirrors tree-sitter calls_in().
+    calls: List[str] = []
+    stack = list(ast.iter_child_nodes(root))  # children only; the root def header isn't a call site
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue  # nested scope, not this function's body
+        if isinstance(n, ast.Call):
+            name = _call_name(n.func)
+            if name and name not in _NOT_CALLS:
+                calls.append(name)
+        stack.extend(ast.iter_child_nodes(n))
+    return calls
 
 
 def _call_name(func) -> Optional[str]:
@@ -221,6 +256,7 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
     except Exception:
         return None
     fi = FileInfo(path, language)
+    fi.backend = "treesitter"
     fi.loc = src.count("\n") + 1
     data = src.encode("utf-8", "replace")
 
@@ -277,7 +313,9 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
     # double-counting. Anonymous function values are "function_expression" / "arrow_function".
     FN_TYPES = ("function_definition", "function_declaration", "method_definition",
                 "method_declaration", "function_item", "constructor_declaration",
-                "function_expression", "arrow_function")
+                "function_expression", "arrow_function",
+                "method", "singleton_method",   # ruby (`def x`, `def self.x`) — else ruby yields 0 fns
+                "local_function_statement")      # c# nested local function
     ANON = ("arrow_function", "function_expression")
     stack = [tree.root_node]
     while stack:
@@ -465,6 +503,16 @@ _C_INCLUDE_LOCAL = re.compile(r'#\s*include\s*"([^"]+)"')
 _C_INCLUDE_SYS = re.compile(r"#\s*include\s*<([^>]+)>")
 _GO_IMPORT_SINGLE = re.compile(r'^\s*import\s+(?:[\w.]+\s+)?"([^"]+)"')
 _GO_IMPORT_LINE = re.compile(r'^\s*(?:[\w.]+\s+)?"([^"]+)"')
+# Tier-B languages: relative-path requires are internal; package/namespace specs are external.
+_RUBY_REQUIRE_REL = re.compile(r"""\brequire_relative\s+['"]([^'"]+)['"]""")
+_RUBY_REQUIRE = re.compile(r"""\brequire\s+['"]([^'"]+)['"]""")
+# NOTE: the `^`-anchored patterns scan whole files via findall, so they need re.M (per-line `^`).
+_JAVA_IMPORT = re.compile(r'^\s*import\s+(?:static\s+)?([\w.]+)\s*;', re.M)
+_CS_USING = re.compile(r'^\s*using\s+(?:static\s+)?([\w.]+)\s*;', re.M)
+_PHP_REQUIRE = re.compile(r"""\b(?:require|include)(?:_once)?\s*\(?\s*['"]([^'"]+)['"]""")
+_PHP_USE = re.compile(r'^\s*use\s+([\w\\]+)', re.M)
+_RUST_MOD = re.compile(r'^\s*(?:pub\s+)?mod\s+(\w+)\s*;', re.M)
+_RUST_USE = re.compile(r'^\s*(?:pub\s+)?use\s+([\w:]+)', re.M)
 
 
 def _imports_exports(src: str, language: str):
@@ -501,6 +549,29 @@ def _imports_exports(src: str, language: str):
                 m = _GO_IMPORT_SINGLE.match(line)
                 if m:
                     imports.append({"spec": m.group(1), "names": [], "level": 0, "system": False})
+    elif language == "ruby":
+        for spec in _RUBY_REQUIRE_REL.findall(src):
+            imports.append({"spec": spec, "names": [], "level": 0, "system": False, "rel": True})
+        for spec in _RUBY_REQUIRE.findall(src):
+            imports.append({"spec": spec, "names": [], "level": 0, "system": True})
+    elif language == "java":
+        for spec in _JAVA_IMPORT.findall(src):
+            imports.append({"spec": spec, "names": [spec.rsplit(".", 1)[-1]], "level": 0, "system": False})
+    elif language == "c_sharp":
+        for spec in _CS_USING.findall(src):  # `using` = namespace, not a file -> external only
+            imports.append({"spec": spec, "names": [], "level": 0, "system": True})
+    elif language == "php":
+        for spec in _PHP_REQUIRE.findall(src):
+            imports.append({"spec": spec, "names": [], "level": 0, "system": False, "rel": True})
+        for spec in _PHP_USE.findall(src):
+            imports.append({"spec": spec.replace("\\", "/"), "names": [], "level": 0, "system": True})
+    elif language == "rust":
+        for spec in _RUST_MOD.findall(src):  # `mod foo;` = the reliable file edge
+            imports.append({"spec": spec, "names": [], "level": 0, "system": False, "kind": "mod"})
+        for spec in _RUST_USE.findall(src):
+            if spec.startswith(("crate::", "super::", "self::")):
+                continue  # internal use: the cross-file call resolver supplies the edge, skip it here
+            imports.append({"spec": spec, "names": [], "level": 0, "system": True})  # std/3rd-party
     return imports, [e for e in dict.fromkeys(exports) if e]
 
 
@@ -639,7 +710,36 @@ def _resolve_import(imp, current_rel, language, fileset, bybase, module_prefix) 
                     return r
             return None
         return None  # stdlib (fmt, net/http) or third-party
-    return None
+    if language == "ruby":
+        if imp.get("rel"):  # require_relative is path-relative; bare require = gem/stdlib (external)
+            base = os.path.normpath(os.path.join(cur_dir, spec))
+            for cand in (base + ".rb", base + "/index.rb"):
+                if cand in fileset:
+                    return cand
+        return None
+    if language == "php":
+        if imp.get("rel"):  # require/include of a path literal; `use` namespaces stay external
+            base = os.path.normpath(os.path.join(cur_dir, spec))
+            if base in fileset:
+                return base
+            hits = bybase.get(os.path.basename(spec))
+            return hits[0] if hits and len(hits) == 1 else None
+        return None
+    if language == "java":
+        # well-formed repos mirror the package in the dir tree; fall back to a UNIQUE basename match
+        cand = spec.replace(".", "/") + ".java"
+        if cand in fileset:
+            return cand
+        hits = bybase.get(spec.rsplit(".", 1)[-1] + ".java")
+        return hits[0] if hits and len(hits) == 1 else None
+    if language == "rust":
+        if imp.get("kind") == "mod":  # `mod foo;` -> foo.rs | foo/mod.rs (the reliable file edge)
+            base = os.path.join(cur_dir, spec)
+            for cand in (base + ".rs", base + "/mod.rs", spec + ".rs"):
+                if cand in fileset:
+                    return cand
+        return None  # `use crate::...` edges come from the cross-file call resolver instead
+    return None  # c_sharp + others: internal edges come from cross-file calls, not import specs
 
 
 def _resolve_py(imp, current_rel, fileset) -> Optional[str]:
@@ -665,16 +765,48 @@ def _resolve_py(imp, current_rel, fileset) -> Optional[str]:
     return None
 
 
+def _function_id(file: str, name: str, line: Optional[int] = None) -> str:
+    base = f"{file}#{name}"
+    return f"{base}:{line}" if line is not None else base
+
+
+def _graph_key(name: str, file: str, symbols: Dict[str, List[Dict[str, Any]]],
+               line: Optional[int] = None) -> str:
+    locs = symbols.get(name, [])
+    if len(locs) == 1:
+        return name
+    if line is not None:
+        for loc in locs:
+            if loc.get("file") == file and loc.get("start") == line and loc.get("id"):
+                return loc["id"]
+    for loc in locs:
+        if loc.get("file") == file and loc.get("id"):
+            return loc["id"]
+    return _function_id(file, name, line)
+
+
+def _resolve_call_target(name: str, caller: Dict[str, Any],
+                         symbols: Dict[str, List[Dict[str, Any]]]) -> Optional[Dict[str, Any]]:
+    candidates = [loc for loc in symbols.get(name, [])
+                  if loc.get("language") == caller.get("language")]
+    same_file = [loc for loc in candidates if loc.get("file") == caller.get("file")]
+    if len(same_file) == 1:
+        return same_file[0]
+    if len(same_file) > 1:
+        return None
+    return candidates[0] if len(candidates) == 1 else None
+
+
 def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[str, Any]:
     scope_abs = os.path.abspath(scope)
     rels = walk_files(scope, max_bytes, only)
     files: List[Dict[str, Any]] = []
     symbols: Dict[str, List[Dict[str, Any]]] = {}
-    symbol_langs: Dict[str, set] = {}
     constants: Dict[str, List[Dict[str, str]]] = {}
     entrypoints: List[Dict[str, Any]] = []
     languages: Dict[str, int] = {}
-    all_funcs: List[Dict[str, Any]] = []  # {name, file, language, calls}
+    backends: Dict[str, Dict[str, int]] = {}  # language -> {backend: file_count}
+    all_funcs: List[Dict[str, Any]] = []  # {name, file, start, end, language, calls}
     tokens: Dict[str, int] = {}
     imports_map: Dict[str, List[Dict[str, Any]]] = {}
     exports_map: Dict[str, List[str]] = {}
@@ -685,6 +817,8 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
         if fi is None:
             continue
         languages[fi.language] = languages.get(fi.language, 0) + 1
+        backends.setdefault(fi.language, {})
+        backends[fi.language][fi.backend] = backends[fi.language].get(fi.backend, 0) + 1
         lang_of[rel] = fi.language
         imports_map[rel] = fi.imports
         for t, n in (fi.idents or {}).items():
@@ -694,9 +828,9 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
         exports = list(fi.exports)
         for fn in fi.functions:
             symbols.setdefault(fn["name"], []).append(
-                {"file": rel, "start": fn["start"], "end": fn["end"]})
-            symbol_langs.setdefault(fn["name"], set()).add(fi.language)
-            all_funcs.append({"name": fn["name"], "file": rel, "language": fi.language, "calls": fn["calls"]})
+                {"file": rel, "start": fn["start"], "end": fn["end"], "language": fi.language})
+            all_funcs.append({"name": fn["name"], "file": rel, "start": fn["start"],
+                              "end": fn["end"], "language": fi.language, "calls": fn["calls"]})
             if fi.language == "go" and fn["name"][:1].isupper():
                 exports.append(fn["name"])  # Go: capitalized identifiers are exported
         exports_map[rel] = sorted(dict.fromkeys(exports))
@@ -705,26 +839,48 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
         for ep in fi.entrypoints:
             entrypoints.append({"file": rel, "line": ep["line"], "kind": ep["kind"]})
 
-    # Call-graph edges, built only AFTER all symbols are known, and SCOPED BY LANGUAGE: a call name
-    # links to a callee only if a function of that name is defined in the SAME language. This kills the
-    # cross-language collision where e.g. Python's `subprocess.run(...)` (an attribute call) would
-    # otherwise be recorded as a caller of an unrelated Go `func run`.
+    function_keys: Dict[str, Dict[str, Any]] = {}
+    key_by_span: Dict[Tuple[str, str, int, int], str] = {}
+    for name, locs in symbols.items():
+        base_counts: Dict[str, int] = {}
+        for loc in locs:
+            base = _function_id(loc["file"], name)
+            base_counts[base] = base_counts.get(base, 0) + 1
+        for loc in locs:
+            base = _function_id(loc["file"], name)
+            loc["id"] = base if base_counts[base] == 1 else _function_id(loc["file"], name, loc["start"])
+            key = _graph_key(name, loc["file"], symbols, loc["start"])
+            loc["key"] = key
+            key_by_span[(loc["file"], name, loc["start"], loc["end"])] = key
+            function_keys[key] = dict(loc, name=name)
+
+    # Call-graph edges are conservative: same-file definitions shadow other files, exactly one
+    # same-language cross-file candidate is allowed, and ambiguous names are skipped. Resolve each
+    # call ONCE here; cross-file hits are stashed in cross_calls so the filegraph below never re-resolves.
     callees: Dict[str, List[str]] = {}
     callers: Dict[str, List[str]] = {}
+    cross_calls: List[Tuple[str, str, str]] = []  # (src_file, dst_file, via) for the filegraph
     for f in all_funcs:
-        callees.setdefault(f["name"], [])
+        caller_key = key_by_span[(f["file"], f["name"], f["start"], f["end"])]
+        callees.setdefault(caller_key, [])
         for c in f["calls"]:
-            if c in symbol_langs and f["language"] in symbol_langs[c]:
-                if c not in callees[f["name"]]:
-                    callees[f["name"]].append(c)
-                callers.setdefault(c, [])
-                if f["name"] not in callers[c]:
-                    callers[c].append(f["name"])
+            target = _resolve_call_target(c, f, symbols)
+            if target is None:
+                continue
+            callee_key = target["key"]
+            if callee_key not in callees[caller_key]:
+                callees[caller_key].append(callee_key)
+            callers.setdefault(callee_key, [])
+            if caller_key not in callers[callee_key]:
+                callers[callee_key].append(caller_key)
+            if target["file"] != f["file"]:
+                cross_calls.append((f["file"], target["file"], c))  # local def shadows -> not an edge
     # Every DEFINED function gets a callers entry (empty list = no DIRECT caller). Combined with
     # `referenced` below, an empty list + not-referenced = genuinely dead; empty + referenced = reached
     # indirectly (handler/callback/route table), which the static call graph cannot see as an edge.
-    for name in symbols:
-        callers.setdefault(name, [])
+    for loc in function_keys.values():
+        callers.setdefault(loc["key"], [])
+        callees.setdefault(loc["key"], [])
     referenced = sorted(n for n in symbols if tokens.get(n, 0) > len(symbols[n]))
 
     # File-level module map: edges file -> {dep_file: [via names]}, plus the external libs each file pulls
@@ -755,31 +911,22 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
                 external.setdefault(rel, [])
                 if tag not in external[rel]:
                     external[rel].append(tag)
-    # cross-file calls (same language only) add public-call edges. A LOCAL definition shadows: if the
-    # caller's own file defines that name, the call resolves locally — no cross-file edge. This avoids
-    # spurious edges between files that happen to define same-named helpers (e.g. two scripts each with a
-    # local `buildCmd`).
-    for f in all_funcs:
-        for c in f["calls"]:
-            if c not in symbol_langs or f["language"] not in symbol_langs[c]:
-                continue
-            locs = symbols.get(c, [])
-            if any(loc["file"] == f["file"] for loc in locs):
-                continue  # local def shadows
-            for loc in locs:
-                if loc["file"] != f["file"]:
-                    _edge(f["file"], loc["file"], c)
+    # Cross-file calls reuse the edges the call graph already resolved above (no second resolution pass).
+    for src_file, dst_file, via in cross_calls:
+        _edge(src_file, dst_file, via)
 
     return {
         "scope": scope_abs,
         "treesitter": bool(_TS_AVAILABLE),
         "files": files,
         "languages": languages,
+        "backends": backends,  # per-language parser used: {lang: {ast|treesitter|regex: file_count}}
         "symbols": symbols,
         "constants": constants,
         "callees": {k: sorted(set(v)) for k, v in callees.items()},
-        "callers": callers,
+        "callers": {k: sorted(set(v)) for k, v in callers.items()},
         "referenced": referenced,
+        "function_keys": function_keys,
         "exports": exports_map,
         "imports_external": external,
         "filegraph": {k: {d: sorted(v) for d, v in deps.items()} for k, deps in filegraph.items()},
@@ -796,14 +943,16 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
 
 # --------------------------------------------------------------------------- subcommands
 
-def _load_index(path: Optional[str]) -> Optional[Dict[str, Any]]:
-    if not path or not os.path.isfile(path):
-        return None
+def _load_index_arg(path: Optional[str]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    if path is None:
+        return None, None
+    if not os.path.isfile(path):
+        return None, f"recon: index not found: {path}"
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
+            return json.load(f), None
+    except Exception as e:
+        return None, f"recon: invalid index {path}: {e}"
 
 
 def cmd_index(args) -> int:
@@ -815,9 +964,14 @@ def cmd_index(args) -> int:
         with open(args.out, "w", encoding="utf-8") as f:
             f.write(out)
         s = idx["summary"]
+        # Non-python languages that fell ENTIRELY to regex while the library is on = a missing/broken
+        # grammar — surface it so a precise audit isn't silently running degraded for that language.
+        degraded = sorted(l for l, b in idx.get("backends", {}).items()
+                          if l != "python" and "treesitter" not in b and "regex" in b)
+        note = f"  [degraded (regex) for: {', '.join(degraded)}]" if idx["treesitter"] and degraded else ""
         print(f"recon: {s['file_count']} files, {s['function_count']} functions, "
               f"{s['entrypoint_count']} entry points, {s['constant_count']} constants "
-              f"(tree-sitter: {'on' if idx['treesitter'] else 'off — degraded'}) -> {args.out}")
+              f"(tree-sitter: {'on' if idx['treesitter'] else 'off — degraded'}){note} -> {args.out}")
     else:
         print(out)
     return 0
@@ -828,22 +982,89 @@ def _read_list(path: str) -> List[str]:
         return [ln.strip() for ln in f if ln.strip()]
 
 
-def cmd_extract(args) -> int:
-    idx = _load_index(args.index)
-    target = args.target
-    file = None
-    fn = None
-    line = None
+def _target_name_file(target: str) -> Tuple[Optional[str], str, Optional[int]]:
     if "#" in target:
-        file, fn = target.split("#", 1)
-    elif ":" in target and target.rsplit(":", 1)[1].isdigit():
+        file, name = target.split("#", 1)
+        line = None
+        if ":" in name and name.rsplit(":", 1)[1].isdigit():
+            name, lstr = name.rsplit(":", 1)
+            line = int(lstr)
+        return file, name, line
+    return None, target, None
+
+
+def _loc_candidates(idx: Dict[str, Any], name: str, file: Optional[str],
+                    line: Optional[int] = None) -> List[Dict[str, Any]]:
+    locs = list(idx.get("symbols", {}).get(name, []))
+    if file:
+        needle = file.lstrip("./")
+        locs = [loc for loc in locs if loc.get("file", "").endswith(needle)]
+    if line is not None:
+        locs = [loc for loc in locs if loc.get("start") == line]
+    return locs
+
+
+def _candidate_lines(name: str, locs: List[Dict[str, Any]]) -> str:
+    lines = []
+    for loc in locs:
+        target = loc.get("id") or _function_id(loc.get("file", "?"), name)
+        lines.append(f"  - {target} ({loc.get('file', '?')}:{loc.get('start', '?')})")
+    return "\n".join(lines)
+
+
+def _resolve_index_target(idx: Dict[str, Any], target: str) -> Tuple[Optional[str], Optional[str],
+                                                                     Optional[Dict[str, Any]],
+                                                                     Optional[str]]:
+    file, name, line = _target_name_file(target)
+    locs = _loc_candidates(idx, name, file, line)
+    if not locs:
+        return None, None, None, f"recon: no function found for {target!r}"
+    if len(locs) > 1:
+        return None, None, None, (
+            f"recon: ambiguous function {name!r}; use file#function or file#function:line:\n"
+            f"{_candidate_lines(name, locs)}"
+        )
+    loc = locs[0]
+    return (loc.get("key") or _graph_key(name, loc["file"], idx.get("symbols", {}), loc.get("start")),
+            name, loc, None)
+
+
+def _loc_for_key(idx: Dict[str, Any], key: str) -> Optional[Dict[str, Any]]:
+    loc = idx.get("function_keys", {}).get(key)
+    if loc:
+        return loc
+    if key in idx.get("symbols", {}) and idx["symbols"][key]:
+        return dict(idx["symbols"][key][0], name=key)
+    if "#" in key:
+        file, name, line = _target_name_file(key)
+        locs = _loc_candidates(idx, name, file, line)
+        if len(locs) == 1:
+            return dict(locs[0], name=name)
+    return None
+
+
+def cmd_extract(args) -> int:
+    idx, err = _load_index_arg(args.index)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    target = args.target
+    file = fn = line = None
+    if "#" not in target and ":" in target and target.rsplit(":", 1)[1].isdigit():
         file, lstr = target.rsplit(":", 1)
         line = int(lstr)
     else:
-        fn = target
+        file, fn, _ = _target_name_file(target)  # file#fn[:line] or bare fn
 
     scope = idx["scope"] if idx else os.path.abspath(".")
-    span = _find_span(idx, file, fn, line, scope)
+    if idx and fn:
+        _, _, loc, err = _resolve_index_target(idx, target)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        span = (loc["file"], loc["start"], loc["end"])
+    else:
+        span = _find_span(idx, file, fn, line, scope)
     if not span:
         print(f"recon: no function found for {target!r}", file=sys.stderr)
         return 1
@@ -861,12 +1082,6 @@ def cmd_extract(args) -> int:
 
 
 def _find_span(idx, file, fn, line, scope) -> Optional[Tuple[str, int, int]]:
-    if idx and fn and fn in idx.get("symbols", {}):
-        locs = idx["symbols"][fn]
-        if file:
-            locs = [l for l in locs if l["file"].endswith(file.lstrip("./"))] or locs
-        l = locs[0]
-        return (l["file"], l["start"], l["end"])
     if idx and file and line is not None:
         cand = [l for name in idx.get("symbols", {}) for l in idx["symbols"][name]
                 if l["file"].endswith(file.lstrip("./")) and l["start"] <= line <= l["end"]]
@@ -885,25 +1100,34 @@ def _find_span(idx, file, fn, line, scope) -> Optional[Tuple[str, int, int]]:
 
 
 def cmd_callers(args) -> int:
-    idx = _load_index(args.index)
-    name = args.symbol
-    if idx and name in idx.get("callers", {}):
-        callers = idx["callers"][name]
+    idx, err = _load_index_arg(args.index)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
+    target = args.symbol
+    file, name, _ = _target_name_file(target)
+    if idx:
+        key, name, loc, err = _resolve_index_target(idx, target)
+        if err:
+            print(err, file=sys.stderr)
+            return 1
+        callers = idx.get("callers", {}).get(key, [])
         referenced = name in idx.get("referenced", [])
+        label = key or target
         if callers:
-            print(f"{name}: {len(callers)} direct caller(s):")
+            print(f"{label}: {len(callers)} direct caller(s):")
             for c in callers:
-                where = idx["symbols"].get(c, [{}])[0]
+                where = _loc_for_key(idx, c) or {}
                 print(f"  - {c}  ({where.get('file','?')}:{where.get('start','?')})")
         elif referenced:
-            print(f"{name}: no DIRECT callers, but its name is referenced as a VALUE elsewhere "
+            print(f"{label}: no DIRECT callers, but its name is referenced as a VALUE elsewhere "
                   f"(handler/callback/route table?) — treat as potentially reachable; verify the "
                   f"registration before discarding.")
         else:
-            print(f"{name}: NO callers and not referenced anywhere — likely dead code or an external "
+            print(f"{label}: NO callers and not referenced anywhere — likely dead code or an external "
                   f"entry point.")
         return 0
-    # live rg fallback
+    # live rg fallback, only when --index was omitted
     hits = _rg(rf"\b{re.escape(name)}\s*\(", idx["scope"] if idx else ".")
     if hits:
         print(f"{name}: rg call-site hits (no index — unverified):")
@@ -914,11 +1138,17 @@ def cmd_callers(args) -> int:
 
 
 def cmd_const(args) -> int:
-    idx = _load_index(args.index)
+    idx, err = _load_index_arg(args.index)
+    if err:
+        print(err, file=sys.stderr)
+        return 1
     name = args.name
     if idx and name in idx.get("constants", {}):
         for d in idx["constants"][name]:
             print(f"{name} = {d['value']}   ({d['file']})")
+        return 0
+    if idx:
+        print(f"{name}: not found in index")
         return 0
     hits = _rg(rf"\b{re.escape(name)}\b", idx["scope"] if idx else ".")
     defs = [h for h in hits if re.search(r"#define|const|=", h)]
@@ -934,9 +1164,15 @@ def cmd_const(args) -> int:
 
 
 def cmd_shard(args) -> int:
-    idx = _load_index(args.index)
-    if not idx:
-        print("recon: shard needs --index", file=sys.stderr)
+    if args.n <= 0:
+        print("recon: shard --n must be > 0", file=sys.stderr)
+        return 1
+    if args.i < 0 or args.i >= args.n:
+        print("recon: shard --i must satisfy 0 <= i < n", file=sys.stderr)
+        return 1
+    idx, err = _load_index_arg(args.index)
+    if err:
+        print(err, file=sys.stderr)
         return 1
     files = [f["path"] for f in idx["files"]]
     if args.by == "dir":
@@ -949,9 +1185,9 @@ def cmd_shard(args) -> int:
 
 
 def cmd_map(args) -> int:
-    idx = _load_index(args.index)
-    if not idx:
-        print("recon: map needs --index", file=sys.stderr)
+    idx, err = _load_index_arg(args.index)
+    if err:
+        print(err, file=sys.stderr)
         return 1
     graph = idx.get("filegraph", {})
     exports = idx.get("exports", {})
@@ -1018,15 +1254,16 @@ def cmd_map(args) -> int:
 
 
 def cmd_summary(args) -> int:
-    idx = _load_index(args.index)
-    if not idx:
-        print("recon: summary needs --index", file=sys.stderr)
+    idx, err = _load_index_arg(args.index)
+    if err:
+        print(err, file=sys.stderr)
         return 1
     s = idx["summary"]
     print(json.dumps({
         "summary": s,
         "languages": idx["languages"],
         "treesitter": idx["treesitter"],
+        "backends": idx.get("backends", {}),  # which parser ran per language (regex = degraded)
         "entrypoints": idx["entrypoints"][:50],
     }, indent=2))
     return 0

@@ -161,9 +161,11 @@ const reconFiles = '.security-audit/diff-files.txt'
 // Recon command surface injected into lane + gate prompts (sliced: only the read subcommands they call).
 const reconBlock =
   `Deterministic recon — PREFER these over ad-hoc grep. Use "${venvPy}" as PY if it exists, else python3:\n` +
-  `  PY "${reconScript}" callers <symbol> --index "${reconOut}"   -> callers; "NO callers" = dead code or an external entry point\n` +
+  `  PY "${reconScript}" callers <symbol|file#fn[:line]> --index "${reconOut}"   -> callers; "NO callers" = dead code or an external entry point\n` +
   `  PY "${reconScript}" const <NAME> --index "${reconOut}"       -> resolved constant value (then DO THE ARITHMETIC)\n` +
-  `  PY "${reconScript}" extract <file#fn | file:line> --index "${reconOut}"  -> the exact function body\n` +
+  `  PY "${reconScript}" extract <file#fn[:line] | file:line> --index "${reconOut}"  -> the exact function body\n` +
+  `If a query reports "ambiguous function <name>", the symbol has multiple definitions: re-run with ` +
+  `the printed file#fn or file#fn:line form (applies to callers/extract; const lists every defining file).\n` +
   `Entry-point detection is heuristic — treat it as a signal, then confirm the path yourself.`
 
 // 0. Recon — cheap. ONE agent builds the index artifact every later stage reads. Best-effort enables the
@@ -188,6 +190,8 @@ const recon = await agent(
 )
 const fileCount = recon?.file_count ?? 0
 log(`recon: ${fileCount} files indexed, tree-sitter ${recon?.treesitter ? 'on' : 'off (degraded)'}`)
+// Nothing indexed -> the index is missing/empty; Map would read a dead artifact and flail on Opus. Bail.
+if (!fileCount) return { error: 'recon indexed 0 files (bad scope, or recon failed to write the index)', scope, reconPath: reconOut }
 
 // 1. Map — Opus. Reads recon.json + the baseline, fixes shared constraints, and chooses the coverage
 //    model. Small scope -> thematic lanes; large scope -> file-partition so no file is skipped.
@@ -198,8 +202,8 @@ const plan = await agent(
     `Read the recon index at "${reconOut}" (JSON: files[], symbols, callees/callers graph, entrypoints, ` +
     `languages, exports, imports_external, filegraph, summary.file_count). Use it instead of re-walking ` +
     `the tree. For a compressed module map of where untrusted input can flow, run: ` +
-    `"${venvPy}" "${reconScript}" map --hops 2 --index "${reconOut}" (focus defaults to entry-point files; ` +
-    `external libraries are listed but not traversed).\n` +
+    `python3 "${reconScript}" map --hops 2 --index "${reconOut}" (focus defaults to entry-point files; ` +
+    `external libraries are listed but not traversed; reading a prebuilt index never needs the venv).\n` +
     `1. From the recon entrypoints, filegraph (internal cross-file edges), and languages, establish trust ` +
     `boundaries: where untrusted input enters, how it flows across files toward sinks, network/exec/file ` +
     `surface, and what is out of scope. Emit these as "constraints".\n` +
