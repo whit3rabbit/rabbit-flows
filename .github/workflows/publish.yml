@@ -17,6 +17,8 @@ permissions:
 
 jobs:
   publish:
+    # act runs push workflows on branch refs unless given a tag event payload.
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

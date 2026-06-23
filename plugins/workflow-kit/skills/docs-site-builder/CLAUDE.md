@@ -23,3 +23,7 @@ changes. The `frameworks/registry.js` splice fragment references `CONTRACT` and 
 - Starlight is first-class. Other frameworks with a full `frameworks/<fw>/references/` set are
   distilled into `<FW>_CONTRACT` blocks the same way; frameworks without references author from
   current official docs (find-docs / context7) at runtime.
+- Smoke-testing a single page through docs-create/docs-from-code: the quality gate DROPS it for
+  broken internal links (the author cross-links to sibling pages that do not exist in a 1-page site).
+  Put "standalone single page, no links to other pages" in the brief, or seed the sibling pages, so
+  the gate admits and config assembly runs.
