@@ -18,7 +18,6 @@ that missing path.
 
 | Workflow | What it does | Example |
 |---|---|---|
-| `starter` | Reference spine: decompose a question, fan out workers, gate their notes, synthesize a cited answer. | `/starter What are the tradeoffs between SQLite and Postgres for a single-node app?` |
 | `scaffold` | Start a project from scratch and stub+document the whole tree under a per-file line ceiling. | `/scaffold { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }` |
 | `security-audit` | Defensive audit: map the attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation. | `/security-audit { "scope": "src", "focus": ["authz", "ssrf"] }` |
 | `docs-create` | Author a Starlight docs site from a brief: plan pages, fan out authors, verify and assemble config. | `/docs-create { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site" }` |
@@ -26,6 +25,8 @@ that missing path.
 | `docs-scrape` | Ingest an external documentation website into a local markdown corpus. | `/docs-scrape { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }` |
 | `eatahorse` | Decompose a goal into an Eatahorse Kanban board and optionally work it unattended one bite at a time. | `/eatahorse { "goal": "Add OAuth login", "execute": true }` |
 | `eatahorse-research` | Research every file in a folder using the board as a durable, resumable ledger. | `/eatahorse-research { "root": "src", "question": "What does each module do?" }` |
+
+`starter.js` is a heavily-commented **reference example** of the workflow spine (decompose → workers → gate → synthesize). It is not in the installer catalog; clone this repo to read or run it via `/workflows`.
 
 ### Front-door skills (conversational intake → launch a workflow)
 
@@ -74,9 +75,9 @@ enable the **Dynamic workflows** row in `/config`, or `/workflows` does nothing.
 ```bash
 npx @whit3rabbit/rabbit-flows                       # menu: pick Install or Uninstall, then check boxes
 npx @whit3rabbit/rabbit-flows --list               # show the catalog
-npx @whit3rabbit/rabbit-flows install --workflow starter   # non-interactive install
+npx @whit3rabbit/rabbit-flows install --workflow scaffold  # non-interactive install
 npx @whit3rabbit/rabbit-flows install --all        # install every workflow
-npx @whit3rabbit/rabbit-flows uninstall --workflow starter # remove one (kept shared skills stay)
+npx @whit3rabbit/rabbit-flows uninstall --workflow scaffold # remove one (kept shared skills stay)
 npx @whit3rabbit/rabbit-flows uninstall --all      # remove everything this tool installed
 ```
 
@@ -106,7 +107,6 @@ After installing, enable **Dynamic workflows** in `/config`, then run one by nam
 Pass structured inputs as an `args` object:
 
 ```
-/starter         What are the tradeoffs between SQLite and Postgres for a single-node app?
 /scaffold        { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }
 /security-audit  { "scope": "src", "focus": ["authz", "ssrf"] }
 /docs-create     { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site" }

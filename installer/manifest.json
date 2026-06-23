@@ -2,13 +2,6 @@
   "$comment": "Catalog the installer reads. Hand-maintained; `npx ... --check` asserts every referenced file exists. skills[] resolve under plugins/workflow-kit/skills/<name>/, agents[] under plugins/workflow-kit/agents/<name>.md.",
   "workflows": [
     {
-      "name": "starter",
-      "file": ".claude/workflows/starter.js",
-      "description": "Reference workflow: decompose a question, fan out workers, gate their notes, synthesize.",
-      "skills": ["workflow-guardrails"],
-      "agents": []
-    },
-    {
       "name": "security-audit",
       "file": ".claude/workflows/security-audit.js",
       "description": "Defensive code audit: map attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation.",
