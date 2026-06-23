@@ -19,7 +19,7 @@
       "name": "docs-create",
       "file": ".claude/workflows/docs-create.js",
       "description": "Author an Astro Starlight documentation site from a brief: plan pages, fan out authors, verify + assemble config.",
-      "skills": ["docs-site-builder"],
+      "skills": ["docs-site-builder", "document"],
       "agents": []
     },
     {
@@ -47,14 +47,14 @@
       "name": "docs-from-code",
       "file": ".claude/workflows/docs-from-code.js",
       "description": "Document a whole codebase into a Starlight site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back.",
-      "skills": ["eatahorse", "docs-site-builder", "document-codebase"],
+      "skills": ["eatahorse", "docs-site-builder", "document-codebase", "document"],
       "agents": []
     },
     {
       "name": "docs-migrate",
       "file": ".claude/workflows/docs-migrate.js",
       "description": "Migrate a documentation site from one framework to another: acquire source corpus, map pages via crosswalk, fan out conversion workers, gate for syntax leaks, assemble target config.",
-      "skills": ["docs-scraper", "docs-site-builder"],
+      "skills": ["docs-scraper", "docs-site-builder", "document"],
       "agents": []
     }
   ]

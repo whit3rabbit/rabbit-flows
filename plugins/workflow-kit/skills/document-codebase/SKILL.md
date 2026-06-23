@@ -26,7 +26,7 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
    - **framework**: AskUserQuestion allows only 2-4 options, but the registry supports 13 frameworks
      (table below). Offer the four most common as selectable options, with the last being an "Other"
      escape hatch that takes a free-text name:
-       - `Starlight` (default — the only filled inline contract)
+       - `Starlight` (default — baked inline contract; the only one supporting full-project)
        - `Docusaurus`
        - `MkDocs`
        - `Other — name any supported framework` → then ask plainly which one and pass that name
@@ -45,19 +45,20 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
 
    Plain asks (free-text, skippable): **brief** (focus/scope note), **include/exclude** globs.
 
-   **Supported `framework` values (registry-backed).** Pass any of these ids verbatim. Only Starlight
-   ships a baked inline authoring contract; every other id authors from its reference files / current
-   official docs (the work-from-current-docs path), and `full-project` scaffolding is Starlight-only:
+   **Supported `framework` values (registry-backed).** Pass any of these ids verbatim. Seven
+   frameworks ship a baked inline authoring contract (authors get distilled syntax, no runtime docs
+   fetch); the rest author from current official docs at runtime. `full-project` scaffolding is
+   Starlight-only:
 
    | framework id | support tier |
    |---|---|
-   | `starlight` | filled adapter (baked inline contract; default; supports full-project) |
-   | `docusaurus` | work-from-current-docs |
-   | `mkdocs` | work-from-current-docs |
-   | `vitepress` | work-from-current-docs |
-   | `fumadocs` | work-from-current-docs |
-   | `mdbook` | work-from-current-docs |
-   | `docsify` | work-from-current-docs |
+   | `starlight` | baked inline contract (default; supports full-project) |
+   | `docusaurus` | baked inline contract |
+   | `mkdocs` | baked inline contract |
+   | `vitepress` | baked inline contract |
+   | `fumadocs` | baked inline contract |
+   | `mdbook` | baked inline contract |
+   | `docsify` | baked inline contract |
    | `sphinx` | work-from-current-docs |
    | `nextra` | work-from-current-docs |
    | `mintlify` | work-from-current-docs |
