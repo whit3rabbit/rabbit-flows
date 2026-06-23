@@ -161,7 +161,7 @@ const reconFiles = '.security-audit/diff-files.txt'
 // Recon command surface injected into lane + gate prompts (sliced: only the read subcommands they call).
 const reconBlock =
   `Deterministic recon — PREFER these over ad-hoc grep. Use "${venvPy}" as PY if it exists, else python3:\n` +
-  `  PY "${reconScript}" callers <symbol|file#fn[:line]> --index "${reconOut}"   -> callers; "NO callers" = dead code or an external entry point\n` +
+  `  PY "${reconScript}" callers <symbol|file#fn[:line]> --index "${reconOut}"   -> callers; it states when a function with no in-code caller is an ENTRY POINT or referenced-as-a-value (reachable) vs genuinely dead\n` +
   `  PY "${reconScript}" const <NAME> --index "${reconOut}"       -> resolved constant value (then DO THE ARITHMETIC)\n` +
   `  PY "${reconScript}" extract <file#fn[:line] | file:line> --index "${reconOut}"  -> the exact function body\n` +
   `If a query reports "ambiguous function <name>", the symbol has multiple definitions: re-run with ` +
@@ -172,7 +172,8 @@ const reconBlock =
 //    precise tree-sitter backend; degrades to stdlib heuristics. In diff mode, scopes to changed files.
 phase('Recon')
 const diffStep = mode === 'diff'
-  ? `2. List committed files changed since "${since}": ` +
+  ? `2. List committed files changed since "${since}" (create the output dir first — nothing else has yet): ` +
+    `mkdir -p "$(dirname "${reconFiles}")"; ` +
     `git diff --name-only ${since}...HEAD > "${reconFiles}" 2>/dev/null; ` +
     `git diff --name-only ${since} >> "${reconFiles}" 2>/dev/null; sort -u -o "${reconFiles}" "${reconFiles}". ` +
     `Then pass --files "${reconFiles}" to the index command below.\n`
@@ -189,7 +190,7 @@ const recon = await agent(
   { label: 'recon', phase: 'Recon', model: workerModel, schema: RECON_SCHEMA },
 )
 const fileCount = recon?.file_count ?? 0
-log(`recon: ${fileCount} files indexed, tree-sitter ${recon?.treesitter ? 'on' : 'off (degraded)'}`)
+log(`recon: ${fileCount} files indexed, ${recon?.entrypoint_count ?? '?'} entry points, tree-sitter ${recon?.treesitter ? 'on' : 'off (degraded)'}`)
 // Nothing indexed -> the index is missing/empty; Map would read a dead artifact and flail on Opus. Bail.
 if (!fileCount) return { error: 'recon indexed 0 files (bad scope, or recon failed to write the index)', scope, reconPath: reconOut }
 
@@ -206,7 +207,9 @@ const plan = await agent(
     `external libraries are listed but not traversed; reading a prebuilt index never needs the venv).\n` +
     `1. From the recon entrypoints, filegraph (internal cross-file edges), and languages, establish trust ` +
     `boundaries: where untrusted input enters, how it flows across files toward sinks, network/exec/file ` +
-    `surface, and what is out of scope. Emit these as "constraints".\n` +
+    `surface, and what is out of scope. Emit these as "constraints". Recon indexes SOURCE files only — ` +
+    `config/CI/IaC (YAML, Dockerfile, Terraform, GitHub Actions) are NOT in the index, so emit a ` +
+    `constraint that supply-chain / permissive-config coverage is source-read only, not exhaustive.\n` +
     `2. If "${baselinePath}" exists, read it and add each ACCEPTED-RISK or known item to "constraints" ` +
     `as "ACCEPTED: <fingerprint>" so the gate can drop re-discoveries.\n` +
     `3. Choose coverage: if summary.file_count <= ${partitionThreshold}, set coverage "thematic" and return ` +
@@ -268,7 +271,8 @@ const laneResults = await parallel(
           `STEP 3 — flag concrete, evidence-backed risks. For each: type "finding", "where" = file:line, ` +
           `"evidence" = the exact code/pattern, resolved constant values, and the reachability path from ` +
           `the entry point to the sink (use recon \`callers\` to confirm the function is reachable — ` +
-          `"NO callers" means it is dead code, not a finding). A bare grep hit with no reachable path is ` +
+          `"NO callers" means dead code, not a finding, UNLESS callers reports it IS an entry point or ` +
+          `referenced as a value, which means the framework/runtime invokes it and it IS reachable). A bare grep hit with no reachable path is ` +
           `a weak finding — say so. Use "constraint" for scope facts the gate should know (e.g. "no ` +
           `network surface — SSRF N/A here"), and "failure" for anything you could not access. Report ` +
           `risks to be FIXED — never write exploits or payloads.`,
@@ -312,7 +316,9 @@ const verdicts = await parallel(
         `attacker-controlled — NOT trusted/kernel-set, NOT a fixed-size field, and NOT bounded by an ` +
         `upstream check UNLESS that bound still exceeds the destination size (resolve it with recon ` +
         `\`const\` and DO THE ARITHMETIC).\n` +
-        `Mark INVALID if: recon \`callers\` shows no caller (dead code), the value is trusted or ` +
+        `Mark INVALID if: recon \`callers\` shows no caller AND the function is not an entry point and ` +
+        `not referenced as a value (genuinely dead code — a route/handler the framework invokes is NOT ` +
+        `dead even with no in-code caller), the value is trusted or ` +
         `sufficiently bounded, the trigger needs a privileged/local-only actor, it matches an "ACCEPTED:" ` +
         `constraint, it duplicates a known item, or you cannot establish a concrete reachable path.\n\n` +
         `If VALID: set "verdict":"VALID", "entry_point" to the external source the data enters from, and ` +
@@ -336,7 +342,8 @@ const report = await agent(
     `findings below; order by severity. For each: location, the external entry point the attacker ` +
     `reaches it from, why it is a risk, and how to remediate it. ` +
     `State the audited scope, the coverage model (${coverage}), and the constraints (what was and wasn't ` +
-    `covered, incl. whether recon ran with tree-sitter precision) so the reader knows the limits. Do NOT ` +
+    `covered, incl. whether recon ran with tree-sitter precision, and that config/CI/IaC files are outside ` +
+    `recon's index so config/supply-chain coverage is not exhaustive) so the reader knows the limits. Do NOT ` +
     `include exploit code, payloads, or step-by-step exploitation — remediation only.\n\n` +
     `Recon: ${recon?.summary ?? 'n/a'}\n` +
     `Scope / constraints:\n- ${constraints.join('\n- ') || '(none recorded)'}\n\n` +

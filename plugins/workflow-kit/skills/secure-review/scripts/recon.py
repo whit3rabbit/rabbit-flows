@@ -214,7 +214,10 @@ def _python_calls_in_own_body(root) -> List[str]:
     # Collect calls in this function's OWN body — stop descending at a nested def/class/lambda so an
     # inner helper's calls aren't attributed to the outer one. Stack walk mirrors tree-sitter calls_in().
     calls: List[str] = []
-    stack = list(ast.iter_child_nodes(root))  # children only; the root def header isn't a call site
+    # Body statements only — NOT decorator_list / args.defaults / returns annotation, which are
+    # children of the def node but execute in the ENCLOSING scope at def time (so `@cache(...)` and
+    # `def f(x=bar())` are not calls made by f). FunctionDef/AsyncFunctionDef always have a stmt-list body.
+    stack = list(root.body)
     while stack:
         n = stack.pop()
         if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
@@ -293,11 +296,25 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
             p = p.parent
         return None
 
+    # Note: bare "function" is the JS keyword token node, NOT a definition — excluded to avoid
+    # double-counting. Anonymous function values are "function_expression" / "arrow_function".
+    FN_TYPES = ("function_definition", "function_declaration", "method_definition",
+                "method_declaration", "function_item", "constructor_declaration",
+                "function_expression", "arrow_function",
+                "method", "singleton_method",   # ruby (`def x`, `def self.x`) — else ruby yields 0 fns
+                "local_function_statement")      # c# nested local function
+    ANON = ("arrow_function", "function_expression")
+
     def calls_in(node) -> List[str]:
+        # Calls in this function's OWN body only. Seed with children (not `node`) and stop descending
+        # at a nested def/closure/arrow so an inner helper's calls aren't attributed to the outer one
+        # (mirrors _python_calls_in_own_body). FN_TYPES must be defined above for this to see it.
         out: List[str] = []
-        stack = [node]
+        stack = list(node.children)
         while stack:
             n = stack.pop()
+            if n.type in FN_TYPES:
+                continue  # nested scope — its calls belong to it, not to `node`
             if "call" in n.type or "invocation" in n.type:
                 fn = n.child_by_field_name("function") or (n.children[0] if n.children else None)
                 if fn is not None:
@@ -308,15 +325,6 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
                             out.append(nm)
             stack.extend(n.children)
         return sorted(set(out))
-
-    # Note: bare "function" is the JS keyword token node, NOT a definition — excluded to avoid
-    # double-counting. Anonymous function values are "function_expression" / "arrow_function".
-    FN_TYPES = ("function_definition", "function_declaration", "method_definition",
-                "method_declaration", "function_item", "constructor_declaration",
-                "function_expression", "arrow_function",
-                "method", "singleton_method",   # ruby (`def x`, `def self.x`) — else ruby yields 0 fns
-                "local_function_statement")      # c# nested local function
-    ANON = ("arrow_function", "function_expression")
     stack = [tree.root_node]
     while stack:
         n = stack.pop()
@@ -394,6 +402,9 @@ def parse_regex(path: str, src: str, language: str) -> FileInfo:
             start = i + 1
             end = _span_end(lines, i, brace_lang)
             body = "\n".join(lines[i:end])
+            # Degraded-mode limitation: this counts EVERY call token in the span, so calls inside a
+            # nested closure/inner function leak into the outer function's call list (the tree-sitter and
+            # ast backends scope this correctly; the regex fallback has no cheap way to track scope).
             calls = sorted({c for c in _CALL_RE.findall(body)
                             if c not in _NOT_CALLS and c != name})
             fi.functions.append({"name": name, "start": start, "end": end, "calls": calls})
@@ -616,7 +627,11 @@ _IDENT_RE = re.compile(r"[A-Za-z_]\w*")
 def _tokenize(src: str) -> Dict[str, int]:
     """Identifier-token counts, used for the 'referenced as a value' signal. A function whose name
     appears more often than it is defined is referenced somewhere (called, or registered as a
-    handler/callback/route value) — i.e. not dead, even when the call graph shows no direct caller."""
+    handler/callback/route value) — i.e. not dead, even when the call graph shows no direct caller.
+
+    Known blind spots, both biased toward "not dead" (the safe FP direction): 1-2 char names are
+    skipped (len>2) so `f`/`go` always look potentially dead, and tokens in comments/strings are
+    counted so a name mentioned in prose inflates the count."""
     counts: Dict[str, int] = {}
     for tok in _IDENT_RE.findall(src):
         if len(tok) > 2 and tok not in _NOT_CALLS:
@@ -656,6 +671,8 @@ def walk_files(scope: str, max_bytes: int, only: Optional[List[str]]) -> List[st
             if os.path.islink(full):
                 continue
             rel = os.path.relpath(full, scope)
+            # os.sep is correct on this macOS/Linux tool; on Windows git emits "/" so the dir-prefix
+            # arm would miss (won't-fix — recon already shells git + bash setup_venv.sh, Unix-only).
             if any(fnmatch.fnmatch(rel, pat) or rel.startswith(pat.rstrip("/") + os.sep) for pat in ignored):
                 continue
             if Path(fn).suffix.lower() in LANGUAGES:
@@ -839,6 +856,16 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
         for ep in fi.entrypoints:
             entrypoints.append({"file": rel, "line": ep["line"], "kind": ep["kind"]})
 
+    # Link entry-point signals to enclosing functions: a framework-invoked handler (Flask/Express/
+    # Spring/axum route, lambda handler, CLI main) has NO in-code caller, so without this flag the gate
+    # collapses "no caller" -> "dead code" -> INVALID and drops reachable web-app vulns. A function is an
+    # entry point if any detected entrypoint line falls on/just-above its def (decorators sit above the
+    # `def`; Python's lineno points at `def`) or inside its body (argparse-in-main, in-body .get(...)).
+    _EP_GAP = 3  # covers a few stacked decorators above the def line
+    ep_by_file: Dict[str, List[Dict[str, Any]]] = {}
+    for ep in entrypoints:
+        ep_by_file.setdefault(ep["file"], []).append(ep)
+
     function_keys: Dict[str, Dict[str, Any]] = {}
     key_by_span: Dict[Tuple[str, str, int, int], str] = {}
     for name, locs in symbols.items():
@@ -851,6 +878,10 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
             loc["id"] = base if base_counts[base] == 1 else _function_id(loc["file"], name, loc["start"])
             key = _graph_key(name, loc["file"], symbols, loc["start"])
             loc["key"] = key
+            ep_kind = next((ep["kind"] for ep in ep_by_file.get(loc["file"], [])
+                            if loc["start"] - _EP_GAP <= ep["line"] <= loc["end"]), None)
+            if ep_kind:
+                loc["entrypoint"] = ep_kind  # over-flagging errs toward reachable (the safe direction)
             key_by_span[(loc["file"], name, loc["start"], loc["end"])] = key
             function_keys[key] = dict(loc, name=name)
 
@@ -868,6 +899,8 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
             if target is None:
                 continue
             callee_key = target["key"]
+            if callee_key == caller_key:
+                continue  # self-recursion is not a caller edge — else a self-only-called fn looks alive
             if callee_key not in callees[caller_key]:
                 callees[caller_key].append(callee_key)
             callers.setdefault(callee_key, [])
@@ -1119,6 +1152,9 @@ def cmd_callers(args) -> int:
             for c in callers:
                 where = _loc_for_key(idx, c) or {}
                 print(f"  - {c}  ({where.get('file','?')}:{where.get('start','?')})")
+        elif loc and loc.get("entrypoint"):
+            print(f"{label}: NO in-code callers, but it IS an entry point ({loc['entrypoint']}) — the "
+                  f"framework/runtime invokes it with attacker-controlled input. REACHABLE, not dead code.")
         elif referenced:
             print(f"{label}: no DIRECT callers, but its name is referenced as a VALUE elsewhere "
                   f"(handler/callback/route table?) — treat as potentially reachable; verify the "
@@ -1176,10 +1212,14 @@ def cmd_shard(args) -> int:
         return 1
     files = [f["path"] for f in idx["files"]]
     if args.by == "dir":
-        files.sort(key=lambda p: (os.path.dirname(p), p))  # contiguous by directory
+        files.sort(key=lambda p: (os.path.dirname(p), p))  # group same-dir files adjacently
     else:
         files.sort()
-    shard = [f for k, f in enumerate(files) if k % args.n == args.i]
+    # Contiguous chunks, not round-robin: keeps a directory's files together in one shard so a lane
+    # gets related files for context. With n > file count the tail shards are empty (a no-file lane
+    # just reports nothing) — same edge round-robin had.
+    chunk = (len(files) + args.n - 1) // args.n
+    shard = files[args.i * chunk:(args.i + 1) * chunk]
     print("\n".join(shard))
     return 0
 

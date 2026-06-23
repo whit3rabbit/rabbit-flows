@@ -5,6 +5,7 @@ backend, so the suite is valid with or without the cached venv."""
 from __future__ import annotations
 
 import io
+import os
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -232,6 +233,100 @@ def sink():
     idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
     assert "sink" not in idx["callees"]["outer"], idx["callees"]["outer"]
     assert idx["callers"]["sink"] == [], idx["callers"]["sink"]
+
+
+def test_entrypoint_function_is_flagged_reachable_not_dead():
+    # A decorator-registered route handler has NO in-code caller and its name is not referenced as a
+    # value — without the entrypoint flag the gate would call it dead code and drop reachable web vulns.
+    d = tempfile.mkdtemp()
+    (Path(d) / "app.py").write_text('''\
+@app.route('/upload')
+def handle_upload(req):
+    return parse(req)
+''')
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    loc = idx["symbols"]["handle_upload"][0]
+    assert loc.get("entrypoint") == "route", loc
+    assert idx["callers"][loc["key"]] == [], idx["callers"]  # genuinely no in-code caller
+    assert "handle_upload" not in idx["referenced"], idx["referenced"]  # not value-referenced either
+    ipath = _write_index(d, idx)
+    ns = type("A", (), {"index": str(ipath), "symbol": "handle_upload"})
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        recon.cmd_callers(ns)
+    out = buf.getvalue()
+    assert "entry point" in out and "REACHABLE" in out and "likely dead code" not in out, out
+
+
+def test_self_recursion_is_not_a_caller_edge():
+    # quicksort calls only itself; nothing else calls it -> it must read as dead (empty callers),
+    # not kept alive by a phantom self-edge.
+    d = tempfile.mkdtemp()
+    (Path(d) / "a.py").write_text('''\
+def quicksort(arr):
+    return quicksort(arr)
+''')
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    assert idx["callers"]["quicksort"] == [], idx["callers"]["quicksort"]
+    assert "quicksort" not in idx["callees"]["quicksort"], idx["callees"]["quicksort"]
+
+
+def test_python_decorator_and_default_arg_calls_not_attributed_to_body():
+    # @deco(...) and a default-arg call run in the ENCLOSING scope at def time, not in f's body.
+    d = tempfile.mkdtemp()
+    (Path(d) / "a.py").write_text('''\
+def helper():
+    return 1
+
+def logit(x):
+    return x
+
+def deco(fn):
+    return fn
+
+@deco
+def f(y=helper()):
+    return logit(y)
+''')
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    callees = idx["callees"]["f"]
+    assert "logit" in callees, callees          # real body call kept
+    assert "helper" not in callees, callees      # default-arg call dropped
+    assert "deco" not in callees, callees        # decorator call dropped
+
+
+def test_shard_by_dir_keeps_a_directory_together():
+    d = tempfile.mkdtemp()
+    for sub, fn in (("x", "a.py"), ("x", "b.py"), ("y", "c.py"), ("y", "d.py")):
+        (Path(d) / sub).mkdir(exist_ok=True)
+        (Path(d) / sub / fn).write_text("def f():\n    pass\n")
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    ipath = _write_index(d, idx)
+    shards = []
+    for i in range(2):
+        ns = type("A", (), {"index": str(ipath), "i": i, "n": 2, "by": "dir"})
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            recon.cmd_shard(ns)
+        shards.append([ln for ln in buf.getvalue().splitlines() if ln.strip()])
+    # every shard's files share one directory (contiguous-by-dir), and the union is complete
+    for s in shards:
+        assert len({os.path.dirname(p) for p in s}) == 1, s
+    assert sorted(p for s in shards for p in s) == ["x/a.py", "x/b.py", "y/c.py", "y/d.py"], shards
+
+
+def test_treesitter_nested_calls_not_attributed_to_outer():
+    # venv-gated: the tree-sitter calls_in() must skip nested closures/arrows. Skips in the stdlib run
+    # (the regex fallback can't scope nested calls — documented degraded-mode limitation).
+    if recon._ts_parser("javascript") is None:
+        print("   (skip: tree-sitter language pack not installed)")
+        return
+    d = tempfile.mkdtemp()
+    (Path(d) / "a.js").write_text(
+        "function outer() {\n  const helper = () => sink();\n  return 1;\n}\nfunction sink() {}\n")
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    assert "sink" not in idx["callees"].get("outer", []), idx["callees"].get("outer")
+    assert idx["callers"]["sink"] == ["helper"], idx["callers"]["sink"]
 
 
 def test_constant_resolution():
