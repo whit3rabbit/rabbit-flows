@@ -69,23 +69,36 @@ an entry in `installer/manifest.json`. Authoring rules live in `CLAUDE.md` + `.c
 Dynamic workflows need Claude Code **v2.1.154+**. On a Pro plan they are off by default:
 enable the **Dynamic workflows** row in `/config`, or `/workflows` does nothing.
 
-## Install a workflow
+## Install / uninstall a workflow
 
 ```bash
-npx @whit3rabbit/rabbit-flows            # interactive menu
-npx @whit3rabbit/rabbit-flows --list     # show the catalog
-npx @whit3rabbit/rabbit-flows --workflow starter --scope project   # non-interactive
+npx @whit3rabbit/rabbit-flows                       # menu: pick Install or Uninstall, then check boxes
+npx @whit3rabbit/rabbit-flows --list               # show the catalog
+npx @whit3rabbit/rabbit-flows install --workflow starter   # non-interactive install
+npx @whit3rabbit/rabbit-flows install --all        # install every workflow
+npx @whit3rabbit/rabbit-flows uninstall --workflow starter # remove one (kept shared skills stay)
+npx @whit3rabbit/rabbit-flows uninstall --all      # remove everything this tool installed
 ```
 
-The menu lets you pick workflows; each selected workflow copies its `.js` into
-`<scope>/workflows/` and every skill/agent it needs into `<scope>/skills/` and
-`<scope>/agents/`. Scope is **project** (`./.claude`) or **user** (`~/.claude`).
+The menu lets you check off workflows; each selected workflow copies its `.js`
+into `<scope>/workflows/` and every skill/agent it needs into `<scope>/skills/`
+and `<scope>/agents/`. Scope is **user** (`~/.claude`, the default) or
+**project** (`./.claude`).
 
 These are plain file copies, not plugin-managed installs, so there is no
-`/plugin update` for them: re-run with `--force` to overwrite and update.
+`/plugin update`: re-run with `--force` to overwrite and update.
 
-Flags: `--workflow a,b` (skip menu), `--scope project|user` (defaults to `project`
-when omitted non-interactively), `--force` (overwrite existing), `--list`, `--check`.
+**Your configs are safe.** Every install writes a receipt
+(`<scope>/.rabbit-flows-receipt.json`) recording exactly which files it placed,
+so uninstall only ever removes *those* files: it never touches a workflow/skill
+you authored yourself. By default install **skips** any path that already exists.
+A `--force` overwrite first backs up the displaced file to
+`<scope>/.rabbit-flows-backups/<timestamp>/`, and uninstall restores it. Selective
+uninstall keeps a shared skill as long as another installed workflow still needs it.
+
+Flags: verb `install`|`uninstall` (omit for the interactive menu), `--all`,
+`--workflow a,b`, `--scope user|project` (defaults to `user`), `--force` (install
+only), `--list`, `--check`.
 
 ## Run a workflow
 
