@@ -185,6 +185,7 @@ CONSTRAINTS (do not re-walk these without a human brief):
 
 CONSTRAINTS (verified, do not re-implement):
 - `reconBlock` (security-audit.js) is the runtime source for recon command surface; every new flag must be mirrored there.
-- Acceptance gate for any future edit: `test_recon.py` green, `validate.py --strict` on `.claude/workflows`, `npm run check`.
+- Acceptance gate for any future edit: `test_recon.py` green under BOTH stdlib AND the tree-sitter venv (`.venv/bin/python test_recon.py`) — stdlib alone SKIPS the tree-sitter tests and is blind to call-graph/import regressions on the precise backend. Plus `validate.py --strict` on `.claude/workflows`, `npm run check`.
+- recon.py call extraction DIFFERS by backend: tree-sitter emits dotted qualifier heads (`pkg.fn`), the regex fallback emits bare names (`fn`). A call-graph/import fix can pass one backend and regress the other, so always run both. `_ts_imports_exports` only covers JS/TS; every other language MUST fall back to the regex extractor even under tree-sitter.
 - Live smoke (paths mode + diff mode) is empirical only; static gates passing does not substitute for a real run.
 - EH-0005 qualifier representation ripples through all call-graph consumers; regression-test `calls_in` before and after any further recon.py edits near `_resolve_call_target`.
