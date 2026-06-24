@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "workflows": [
+    "security-audit",
+    "scaffold",
+    "docs-create",
+    "docs-scrape",
+    "eatahorse",
+    "eatahorse-research",
+    "docs-from-code",
+    "docs-migrate"
+  ],
+  "files": {
+    "skills/secure-review": {
+      "type": "skill",
+      "name": "secure-review",
+      "backup": null
+    },
+    "skills/architect": {
+      "type": "skill",
+      "name": "architect",
+      "backup": null
+    },
+    "skills/new-project": {
+      "type": "skill",
+      "name": "new-project",
+      "backup": null
+    },
+    "skills/docs-site-builder": {
+      "type": "skill",
+      "name": "docs-site-builder",
+      "backup": null
+    },
+    "skills/document": {
+      "type": "skill",
+      "name": "document",
+      "backup": null
+    },
+    "skills/docs-scraper": {
+      "type": "skill",
+      "name": "docs-scraper",
+      "backup": null
+    },
+    "skills/eatahorse": {
+      "type": "skill",
+      "name": "eatahorse",
+      "backup": null
+    },
+    "skills/document-codebase": {
+      "type": "skill",
+      "name": "document-codebase",
+      "backup": null
+    }
+  }
+}

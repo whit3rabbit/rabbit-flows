@@ -1,0 +1,4 @@
+# Optional heavy dep for scrape.py --render (client-rendered / SPA docs). Installed only when
+# setup_venv.sh is run with --with-playwright, which also downloads the Chromium browser binary.
+# Kept out of requirements.txt so the core path never pulls a ~hundreds-of-MB browser.
+playwright>=1.40,<2

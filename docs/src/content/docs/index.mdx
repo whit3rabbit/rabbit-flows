@@ -1,0 +1,47 @@
+---
+title: rabbit-flows
+description: npx installer that bundles Claude Code dynamic workflows with the skills and agents they depend on.
+template: splash
+hero:
+  title: rabbit-flows
+  tagline: Bundle and install Claude Code dynamic workflows with the skills and agents they depend on.
+  actions:
+    - text: Install
+      link: /guides/install/
+      variant: primary
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/whit3rabbit/rabbit-flows
+      variant: minimal
+      icon: external
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+rabbit-flows is an `npx` installer that copies Claude Code dynamic workflows into `.claude`, along with the skills and agents each workflow requires. It records a receipt so it can uninstall only the files it placed.
+
+**Requirements:** Claude Code v2.1.154+, dynamic workflows enabled in `/config`, Node.js 18+.
+
+**One-line install:**
+
+```bash
+npx @whit3rabbit/rabbit-flows
+```
+
+<CardGrid>
+  <LinkCard
+    title="Install and manage workflows"
+    href="/guides/install/"
+    description="CLI reference: install, uninstall, list, scopes, and flags."
+  />
+  <LinkCard
+    title="Workflows catalog"
+    href="/reference/workflows/"
+    description="All bundled workflows, their args, and usage examples."
+  />
+  <LinkCard
+    title="Skills and scripts"
+    href="/reference/skills/"
+    description="Front-door and specialist skills that ship with each workflow."
+  />
+</CardGrid>
