@@ -58,7 +58,9 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
    - **tier**: automated workflow (needs dynamic workflows enabled) · conversational here. A skill
      can't introspect `/config`, so just ASK, or attempt the workflow and fall back (step 3b).
 
-   Plain asks (free-text, skippable): **brief** (focus/scope note), **include/exclude** globs.
+   Plain asks (free-text, skippable): **brief** (focus/scope note), **include/exclude** globs. Advanced,
+   ask only if the user raises them: **site** (prod URL), **basePath** (serve subpath), **i18n**,
+   **versioning**, **verify** (Starlight-only build gate). Pass each through to the workflow verbatim.
 
    **Supported `framework` values (registry-backed).** Pass any of these ids verbatim. Seven
    frameworks ship a baked inline authoring contract (authors get distilled syntax, no runtime docs
@@ -91,9 +93,12 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
      // scaffoldMode: content-only (default) | add-to-existing | full-project (Starlight only).
      // optional knobs the user may set:
      // include, exclude (globs), board (default .eatahorse-docs),
-     // workerModel (default sonnet), maxRounds (default 3),
+     // workerModel (default sonnet), maxRounds (default 3, clamped to 10),
      // filesPerPage (split modules bigger than this, default 12),
      // pages (explicit page plan, skips the Plan stage)
+     // site (full production URL), basePath (subpath the site is served from),
+     // i18n ({defaultLocale, locales[]}), versioning ({current, versions?[]}),
+     // verify (bool, default false — opt-in end-to-end build gate; Starlight only, needs pinned deps)
      // UPDATE an existing run (see Step 0): mode "update", updateMode "diff"|"refine",
      //   since (git ref, default HEAD~1), refine [{page, ask}], planNewModules (default false)
    }})
@@ -128,7 +133,7 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
 ## Defaults (when the user skips a field)
 
 root=`.` · outDir=`./docs-site` · framework=starlight · scaffoldMode=content-only · includeTutorials=false ·
-board=`.eatahorse-docs` · workerModel=sonnet · maxRounds=3 · filesPerPage=12.
+board=`.eatahorse-docs` · workerModel=sonnet · maxRounds=3 (clamped to 10) · filesPerPage=12 · verify=false.
 
 ## Notes
 

@@ -94,6 +94,7 @@ export const meta = {
     { title: 'Resolve links/assets', detail: 'one Haiku batch call: copy referenced local assets to assetDir, rewrite src/href to framework-correct routes' },
     { title: 'Quality gate', detail: 'one Opus call: per-page Diataxis adherence, link/asset resolution, crosswalk no-leak; drops failures before config assembly' },
     { title: 'Verify', detail: 'opt-in verify=true: ensure package.json, npm install, npm run build; surfaces failure as ok:false' },
+    { title: 'Flag stale', detail: 'update mode: prepend an in-page stale banner to pages whose source was deleted' },
     { title: 'Write-back' },
   ],
 }
@@ -5839,6 +5840,7 @@ const CMD = {
   add:    `add "<title>" --status backlog -d "<desc>" --bite "author it" --accept "page written and grounded in source"`,
   done:   `done <id>  (check all bites + acceptance and move to done; survives sync, unlike a bare --status done)`,
   reopen: `reopen <id> [--gap "<why hollow>"]  (atomic: uncheck acceptance + add gap bite + move doing)`,
+  move:   `move <id> dropped  (set status; "dropped" is terminal and excluded from the active queue + reruns)`,
   sync:   `sync  (reconcile cards <-> state.json + board.md; run after edits)`,
 }
 const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
@@ -6075,7 +6077,7 @@ Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
   // grouped by file. The page joins generatedPages as a pre-authored entry so it flows through Seed + the
   // quality gate like any other generated reference page. Zero gaps -> skip the page (still reported as 0).
   if (docGaps.length) {
-    const gapsPath = `src/content/docs/reference/documentation-gaps.md`   // plain markdown reference; no components needed
+    const gapsPath = `${fwEntry.contentRoot}/reference/documentation-gaps.md`   // contentRoot, not Starlight-hardcoded; plain markdown, no components needed
     // Group by file for a stable, scannable layout.
     const byFile = {}
     for (const g of docGaps) (byFile[g.file] ??= []).push(g)
@@ -6160,7 +6162,7 @@ if (mode === 'update') {
   // Rebuild the page set from the board cards' descriptions (inverse of descOf — the format is the contract).
   const fieldOf = (desc, k) => { const m = String(desc ?? '').match(new RegExp(`${k}=([^|]*)`)); return m ? m[1].trim() : '' }
   const parseCard = (title, desc) => {
-    const path = normPagePath(fieldOf(desc, 'path') || title)
+    const path = fieldOf(desc, 'path') || title   // NOT normalized here: the canonical "normalize EXACTLY ONCE" loop below does it (double-norm over-strips when outDir is a leading path segment)
     const scope = fieldOf(desc, 'scope') ? fieldOf(desc, 'scope').split(',').map((s) => s.trim()).filter(Boolean) : []
     // brief = the first |-segment that is not a known key=… field.
     const brief = String(desc ?? '').split('|').map((s) => s.trim()).find((s) => s && !/^(path|diataxis|scope|generated)=/.test(s)) || ''
@@ -6306,7 +6308,11 @@ while (pending.length && round < maxRounds && (!budget.total || budget.remaining
   const retryable = keepRetryable(pending)
   const retry = retryable.filter((t) => touched.has(t))
   const fresh = retryable.filter((t) => !touched.has(t)).slice(0, Math.max(0, RUN_TOUCH_CAP - touched.size))
-  const batch = [...retry, ...fresh].slice(0, LIVE_CAP)
+  // Reserve a floor of fresh slots so a big retry backlog (many reopened pages) can't starve fresh pages
+  // out of every round: cap retries at LIVE_CAP-freshFloor when fresh work is waiting. freshFloor=0 when
+  // no fresh remain -> full retries (unchanged). ponytail: 25% floor, tune if retries dominate badly.
+  const freshFloor = Math.min(fresh.length, Math.ceil(LIVE_CAP * 0.25))
+  const batch = [...retry.slice(0, LIVE_CAP - freshFloor), ...fresh].slice(0, LIVE_CAP)
   if (!batch.length) break
   round++
   for (const t of batch) {
@@ -6361,9 +6367,12 @@ while (pending.length && round < maxRounds && (!budget.total || budget.remaining
   // page; reopen any whose claims the code doesn't back. This is the REAL verifier (hallucinated-API guard),
   // not shape-checking. Reopened cards re-queue for the next round.
   phase('Gate')
-  await agent(
+  // Scale the grounding sample to the round's batch instead of a flat 8, so coverage tracks the work done
+  // (the headline claim is "grounding is the real gate"). Capped at 12 to keep the single gate agent bounded.
+  const sampleN = Math.max(1, Math.min(batch.length, 12))
+  const gate = await agent(
     `You are a GROUNDING gate for a code->docs board at "${board}"; the site is written under "${outDir}". ` +
-      `Sample up to 8 cards marked done (\`list --status done --json\`, then \`show <id> --json\`). For each ` +
+      `Sample up to ${sampleN} cards marked done (\`list --status done --json\`, then \`show <id> --json\`). For each ` +
       `sampled card: read its "description" to get the page path + scope, READ those scope SOURCE files, and ` +
       `READ the written page at "${outDir}/<path>". Judge whether the page's concrete claims (signatures, ` +
       `exports, config keys, CLI flags, examples) are actually BACKED by the source — not hallucinated, vague, ` +
@@ -6372,6 +6381,7 @@ while (pending.length && round < maxRounds && (!budget.total || budget.remaining
       `TITLES and how many you checked.\n\n${cli('list', 'show', 'reopen', 'sync')}`,
     { label: `gate:${round}`, phase: 'Gate', schema: GATE_SCHEMA },
   )
+  log(`gate round ${round}: grounded ${gate?.checked ?? 0} page(s) (sample target ${sampleN}), reopened ${gate?.hollow?.length ?? 0}`)
 
   // Re-derive the carry queue from the board (source of truth).
   const reload = await agent(
@@ -6381,7 +6391,21 @@ while (pending.length && round < maxRounds && (!budget.total || budget.remaining
   )
   if (reload?.cards?.length) {
     for (const c of reload.cards) cardByTitle.set(c.title, c)
-    pending = keepRetryable(reload.cards.filter(notDone).map((c) => c.title))
+    const active = reload.cards.filter(notDone).map((c) => c.title)
+    // Persist give-ups to the board: a page that failed MAX_ATTEMPTS rounds is moved to "dropped" so a
+    // RERUN's notDone seed filter skips it. The in-memory `attempts` Map evaporates at run end; without
+    // this an ungroundable page (scope unreadable) is re-authored fresh on every rerun, forever.
+    const giveUp = active.filter((t) => (attempts.get(t) ?? 0) >= MAX_ATTEMPTS)
+    if (giveUp.length) {
+      await agent(
+        `On the eatahorse board at "${board}", mark these permanently-failing page cards "dropped" (they ` +
+          `failed ${MAX_ATTEMPTS} grounding rounds — scope unreadable or ungroundable). For each TITLE: find ` +
+          `its card id via \`list --json\`, then \`move <id> dropped\`. Then \`sync\`. Change nothing else.\n` +
+          `TITLES: ${JSON.stringify(giveUp)}\n\n${cli('list', 'move', 'sync')}`,
+        { label: `drop:${round}`, phase: 'Author', model: 'haiku' },
+      )
+    }
+    pending = keepRetryable(active)
   } else {
     pending = []
   }
@@ -6438,6 +6462,24 @@ if (mode === 'update') {
     )
     configWritten = fin?.configWritten === true
     log(`update: patched config for ${uNew.length} new page(s) (configWritten=${configWritten})`)
+  }
+  // Mark stale pages in the built site, not just in CLAUDE.md: a page whose source was DELETED stays
+  // admitted (card still done) and keeps rendering as if current. Prepend a plain blockquote banner so a
+  // reader sees the staleness. Framework-agnostic (no draft:/admonition syntax differences). Cards are NOT
+  // auto-changed/dropped — a human still reviews per the staleByDeletion contract.
+  if (staleByDeletion.length) {
+    phase('Flag stale')
+    await agent(
+      `Some docs pages cite SOURCE that was DELETED; mark each as stale IN PLACE. For each {title, file} below ` +
+        `(title is the page path under "${outDir}"): READ "${outDir}/<title>", and if it does not already carry ` +
+        `a stale banner, insert this line as the FIRST line of the body (immediately AFTER the closing \`---\` of ` +
+        `the frontmatter, before any heading), then save with Write:\n` +
+        `> **Stale:** documents source that was deleted (<file>); pending human review.\n\n` +
+        `Substitute the real deleted <file>. Do NOT change frontmatter, the rest of the body, or any card. ` +
+        `Return nothing structured.\nPAGES: ${JSON.stringify(staleByDeletion)}`,
+      { label: 'flag-stale', model: 'haiku' },
+    )
+    log(`flagged ${staleByDeletion.length} stale page(s) (deleted source) with an in-page banner`)
   }
   // Write-back — update-specific facts + constraints (new modules, deleted-source pages).
   phase('Write-back')
@@ -6583,7 +6625,14 @@ let verifyResult = null
 // Require a CONFIRMED config write (=== true), not "not-false": if the finalizer agent died, `final` is
 // null and `final?.configWritten !== false` would be true, sending the verifier to build a site whose
 // config was never assembled — failing for a reason unrelated to deps and masking the finalizer death.
-if (verify && admittedPages.length && final?.configWritten === true) {
+// Only Starlight ships a pinned package.json in its authoring contract; for other frameworks the verifier
+// has no pinned deps and would improvise versions, defeating the reproducibility the gate exists for. Skip
+// rather than build against guessed versions. ponytail: add pinned package.json to the other framework
+// CONTRACT sources (+ rebuild generated blocks) if non-Starlight verify is ever needed.
+if (verify && admittedPages.length && final?.configWritten === true && framework !== 'starlight') {
+  log(`verify: skipped — no pinned deps for ${framework} (only Starlight has a pinned package.json)`)
+}
+if (verify && admittedPages.length && final?.configWritten === true && framework === 'starlight') {
   phase('Verify')
   verifyResult = await agent(
     `You are the build verifier for the ${framework} docs site at "${outDir}". Make it build end-to-end:\n` +
