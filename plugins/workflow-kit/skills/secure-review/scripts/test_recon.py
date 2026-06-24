@@ -603,6 +603,69 @@ def test_qualified_external_call_does_not_bind_to_in_repo_bare_name():
     )
 
 
+def test_regex_fallback_captures_dotted_call_head():
+    # Degraded (no-venv) backend: the regex call extractor must emit the full dotted head
+    # (os.path.join), NOT the bare tail (join). Otherwise pkg.Join(...) collapses to bare `Join`
+    # and binds to an in-repo same-named helper via _resolve_call_target rule (a) — the exact
+    # false reachable edge the qualifier-aware resolver was built to prevent, reintroduced in
+    # degraded mode. parse_regex IS the regex backend, so this is deterministic on stdlib AND venv.
+    fi = recon.parse_regex(
+        "caller.js",
+        "function my_func(x, y) {\n"
+        "  if (x) { return os.path.join(x, y); }\n"
+        "  return y;\n"
+        "}\n",
+        "javascript",
+    )
+    calls = fi.functions[0]["calls"]
+    assert "os.path.join" in calls, calls          # dotted head captured
+    assert "join" not in calls, calls              # bare tail must NOT leak
+    assert "if" not in calls, calls                # bare keyword still dropped (tail guard)
+
+
+def test_regex_dotted_external_does_not_bind_to_in_repo_bare_name():
+    # End-to-end via the resolver: an unqualified-external dotted call must not resolve to an
+    # in-repo bare-named helper. _resolve_call_target sees the dot, finds the qualifier is not a
+    # proven-internal module, and drops it (rule d) rather than falling back to the bare name.
+    caller = recon.parse_regex(
+        "caller.js",
+        "function my_func(x, y) {\n  return pkg.Join(x, y);\n}\n",
+        "javascript",
+    )
+    call = caller.functions[0]["calls"][0]
+    assert call == "pkg.Join", caller.functions[0]["calls"]
+    # symbols table has an in-repo `Join`; the dotted external call must NOT resolve to it.
+    symbols = {"Join": [{"name": "Join", "file": "utils.js", "language": "javascript"}]}
+    caller_fn = {"name": "my_func", "file": "caller.js", "language": "javascript"}
+    target = recon._resolve_call_target(call, caller_fn, symbols, known_internal_qualifiers=set())
+    assert target is None, f"qualified-external pkg.Join must not bind to in-repo Join, got {target}"
+
+
+def test_source_file_count_excludes_config():
+    # EH-0003 / #4: config files (.json fixtures here) are indexed for grep but must NOT count toward
+    # source_file_count, which drives the thematic-vs-partition decision. file_count stays total.
+    d = tempfile.mkdtemp()
+    (Path(d) / "app.py").write_text("def f():\n    pass\n")
+    (Path(d) / "fixture1.json").write_text('{"a": 1}\n')
+    (Path(d) / "fixture2.json").write_text('{"b": 2}\n')
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    assert idx["summary"]["file_count"] == 3, idx["summary"]          # all three indexed
+    assert idx["summary"]["source_file_count"] == 1, idx["summary"]   # only app.py is source
+
+
+def test_walk_allows_ci_iac_dot_dirs():
+    # EH-0003 / #5: CI/IaC dot-dirs (.circleci etc.) must be walked so supply-chain config is covered;
+    # other dot-dirs stay skipped.
+    d = tempfile.mkdtemp()
+    os.makedirs(Path(d) / ".circleci")
+    (Path(d) / ".circleci" / "config.yml").write_text("version: 2.1\n")
+    os.makedirs(Path(d) / ".secretstuff")
+    (Path(d) / ".secretstuff" / "ignore.yml").write_text("x: 1\n")
+    included, _ = recon.walk_files(d, recon.DEFAULT_MAX_BYTES, None)
+    assert any(p.replace(os.sep, "/") == ".circleci/config.yml" for p in included), included
+    assert not any(".secretstuff" in p for p in included), included
+
+
 def test_walk_skipped_file_accounting():
     """walk_files returns (included, skipped) with symlink, unsupported, and too_large entries."""
     d = tempfile.mkdtemp()
@@ -748,6 +811,33 @@ def test_treesitter_nonjs_imports_still_populated():
     fi = recon.parse_file(str(Path(d) / "main.go"), recon.DEFAULT_MAX_BYTES)
     assert fi.backend == "treesitter", fi.backend
     assert any(i["spec"] == "myrepo/util" for i in fi.imports), fi.imports
+
+
+def test_treesitter_captures_export_const_and_module_exports_object():
+    # EH-0002 regression guard: under tree-sitter, `export const foo = () => {}` and the whole-object
+    # `module.exports = { bar }` form must land in exports[]. The regex backend caught these via
+    # _JS_EXPORT_RES, but JS under tree-sitter skips the regex fallback (ts_covers_imports), so a miss
+    # here made the precise backend strictly worse for very common export patterns. venv-gated.
+    if recon._ts_parser("javascript") is None:
+        print("   (skip: tree-sitter language pack not installed)")
+        return
+    d = tempfile.mkdtemp()
+    (Path(d) / "esm.js").write_text(
+        "export const foo = () => {};\n"
+        "export let alpha = 1, beta = 2;\n"
+        "export function named() {}\n"
+    )
+    (Path(d) / "cjs.js").write_text(
+        "function bar() {}\nfunction baz() {}\n"
+        "module.exports = { bar, qux: baz };\n"
+    )
+    esm = recon.parse_file(str(Path(d) / "esm.js"), recon.DEFAULT_MAX_BYTES)
+    cjs = recon.parse_file(str(Path(d) / "cjs.js"), recon.DEFAULT_MAX_BYTES)
+    assert esm.backend == "treesitter", esm.backend
+    for name in ("foo", "alpha", "beta", "named"):
+        assert name in esm.exports, (name, esm.exports)
+    for name in ("bar", "qux"):
+        assert name in cjs.exports, (name, cjs.exports)
 
 
 def test_strip_comments_preserves_shebang():

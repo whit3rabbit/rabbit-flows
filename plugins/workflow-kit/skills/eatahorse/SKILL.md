@@ -78,6 +78,17 @@ python scripts/eatahorse.py sync
 python scripts/eatahorse.py report
 ```
 
+**Global option ordering:** `--board PATH` is the one global flag and must come **before** the
+subcommand, not after its arguments. Use it to target a non-default board (run several at once):
+
+```bash
+python scripts/eatahorse.py --board .eatahorse-secaudit init "Secaudit round 3" --goal "..."
+```
+
+`python scripts/eatahorse.py init ... --board PATH` fails with
+`unrecognized arguments: --board` — argparse routes a trailing `--board` to the subcommand.
+Default board is `.eatahorse/`; point `--board` at any other dir (e.g. `.eatahorse-<slug>`).
+
 Useful commands:
 
 ```text

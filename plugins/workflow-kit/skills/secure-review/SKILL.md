@@ -80,7 +80,10 @@ the bare name when unique, else the function id; empty list = no direct caller),
 (internal edges only), `entrypoints[{file,line,kind}]`, `languages{}`, `treesitter` (bool — false =
 degraded heuristic backend), `backends{lang:{ast|treesitter|regex:file_count}}` (which parser ran per
 language; a non-python language showing only `regex` while `treesitter:true` = a missing/broken grammar,
-i.e. that language ran degraded), `summary{file_count,function_count,entrypoint_count,constant_count,edge_count}`.
+i.e. that language ran degraded), `summary{file_count,source_file_count,function_count,entrypoint_count,constant_count,edge_count}`.
+`source_file_count` excludes config/IaC files (indexed for grep, not parsed); use it, not `file_count`,
+for any source-size decision so fixture-heavy trees (lots of `.json`) don't skew it. CI/IaC dot-dirs
+(`.github`, `.circleci`, `.gitlab`, `.azure-pipelines`, `.azuredevops`) are walked; other dot-dirs are skipped.
 
 ### Backend + resolution flow (precision varies, results never hard-fail)
 
@@ -90,7 +93,10 @@ i.e. that language ran degraded), `summary{file_count,function_count,entrypoint_
   Rust, Go, Java, PHP, Swift, Kotlin, Scala, Bash; a single unbuildable grammar is isolated and does NOT
   disable tree-sitter for the rest of the run.
 - Call graph is scoped by language and a local definition shadows (a call resolves to the caller's own
-  file before any other), so same-named helpers across files do not create false edges.
+  file before any other), so same-named helpers across files do not create false edges. Qualified-external
+  calls (`os.path.join`, `fs.readFileSync`) are dropped rather than bound to an in-repo bare `join`/`readFileSync`:
+  all three backends (ast, tree-sitter, AND the regex fallback) now capture the dotted head, so this holds
+  in degraded mode too.
 - Module-map import resolution is real for Python (incl. relative `from .x`), JS/TS (relative specifiers;
   bare = external), Go (`go.mod` module prefix = internal, else stdlib/3rd-party), C/C++ (`"local"`
   internal, `<system>` external), Ruby (`require_relative`), PHP (`require`/`include` path literals),

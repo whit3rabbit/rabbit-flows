@@ -472,6 +472,16 @@ def _ts_imports_exports(tree, data: bytes, language: str, text_fn) -> Tuple[List
                             nm = txt(nm_node).strip()
                             if nm and re.fullmatch(r"[A-Za-z_]\w*", nm):
                                 exports.append(nm)
+                        else:
+                            # `export const foo = () => {}` / `export let a, b` -> lexical_declaration:
+                            # no name field on the declaration; each binding is a variable_declarator.
+                            for d in decl.children:
+                                if d.type == "variable_declarator":
+                                    dn = d.child_by_field_name("name")
+                                    if dn is not None and dn.type == "identifier":
+                                        nm = txt(dn).strip()
+                                        if nm and re.fullmatch(r"[A-Za-z_]\w*", nm):
+                                            exports.append(nm)
             # `require("spec")` or `import("spec")` as a call_expression
             elif t == "call_expression":
                 fn_node = n.child_by_field_name("function")
@@ -508,6 +518,21 @@ def _ts_imports_exports(tree, data: bytes, language: str, text_fn) -> Tuple[List
                             m = re.match(r"(?:module\.exports|exports)\.([A-Za-z_]\w*)", raw_left)
                             if m:
                                 exports.append(m.group(1))
+                            # whole-object form: `module.exports = { foo, bar: baz }` / `exports = {...}`
+                            elif re.fullmatch(r"module\.exports|exports", raw_left.strip()):
+                                right = ch.child_by_field_name("right")
+                                if right is not None and "object" in right.type:
+                                    for prop in right.children:
+                                        if "shorthand_property_identifier" in prop.type:
+                                            nm = txt(prop).strip()
+                                            if re.fullmatch(r"[A-Za-z_]\w*", nm):
+                                                exports.append(nm)
+                                        elif prop.type == "pair":
+                                            key = prop.child_by_field_name("key")
+                                            if key is not None:
+                                                nm = txt(key).strip().strip("\"'")
+                                                if re.fullmatch(r"[A-Za-z_]\w*", nm):
+                                                    exports.append(nm)
                 stack.extend(n.children)
                 continue
             stack.extend(n.children)
@@ -541,7 +566,10 @@ _FN_REGEXES["typescript"] = _FN_REGEXES["javascript"]
 _FN_REGEXES["tsx"] = _FN_REGEXES["javascript"]
 _FN_REGEXES["cpp"] = _FN_REGEXES["c"]
 
-_CALL_RE = re.compile(r'\b([A-Za-z_]\w*)\s*\(')
+# Capture the full dotted head (`os.path.join`, not bare `join`) so _resolve_call_target can drop
+# qualified-external calls instead of binding them to an in-repo same-named helper. Mirrors the
+# tree-sitter extractor (see calls_in); without it the no-venv regex fallback recreates that false edge.
+_CALL_RE = re.compile(r'\b([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)\s*\(')
 
 
 def parse_regex(path: str, src: str, language: str) -> FileInfo:
@@ -574,8 +602,10 @@ def parse_regex(path: str, src: str, language: str) -> FileInfo:
             # Degraded-mode limitation: this counts EVERY call token in the span, so calls inside a
             # nested closure/inner function leak into the outer function's call list (the tree-sitter and
             # ast backends scope this correctly; the regex fallback has no cheap way to track scope).
+            # Dotted heads ARE now captured (os.path.join, not bare join); guard the keyword check on the
+            # tail so `if(`/`for(` (bare) still drop while a dotted call survives for the resolver.
             calls = sorted({c for c in _CALL_RE.findall(body)
-                            if c not in _NOT_CALLS and c != name})
+                            if c.rsplit(".", 1)[-1] not in _NOT_CALLS and c != name})
             fi.functions.append({"name": name, "start": start, "end": end, "calls": calls})
             i = end
             continue
@@ -928,8 +958,10 @@ def walk_files(scope: str, max_bytes: int, only: Optional[List[str]]
     ignored = _gitignored(scope)
     out = []
     for dirpath, dirnames, filenames in os.walk(scope):
+        # Allowlist the dot-dirs that hold CI/IaC config (supply-chain / unpinned-action coverage);
+        # everything else dot-prefixed is skipped. .gitlab-ci.yml etc. at root are files, not dirs.
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
-                       or d in (".github",)]
+                       or d in (".github", ".circleci", ".gitlab", ".azure-pipelines", ".azuredevops")]
         for fn in filenames:
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, scope)
@@ -1240,7 +1272,10 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
                 continue  # not in scope -> external
             # The qualifier head is the first name the caller uses to reference this import.
             # For Python: imp["names"] = [alias or first component] from the import statement.
-            # For JS/TS: import name is taken from the spec tail (the variable binding is unavailable here).
+            # For JS/TS: imp["names"] now carries the binding (default/namespace import or
+            # `const X = require(...)`) from both backends (clause_names / require-binding under
+            # tree-sitter, _JS_REQUIRE_BIND et al. under regex); the spec-tail fallback below only
+            # fires when no binding was captured.
             # For other languages: use first name in imp["names"] if present.
             names = imp.get("names") or []
             if names:
@@ -1337,6 +1372,10 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
         "entrypoints": entrypoints,
         "summary": {
             "file_count": len(files),
+            # Config/IaC files (.json fixtures, YAML, etc.) are indexed for grep but carry no analyzable
+            # surface; the coverage-mode (thematic vs partition) decision uses source_file_count so a
+            # fixture-heavy dir does not inflate the count and flip a small source tree into partition mode.
+            "source_file_count": sum(1 for f in files if f["language"] != "config"),
             "function_count": sum(len(v) for v in symbols.values()),
             "entrypoint_count": len(entrypoints),
             "constant_count": len(constants),

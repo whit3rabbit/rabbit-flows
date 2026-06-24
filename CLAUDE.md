@@ -189,3 +189,20 @@ CONSTRAINTS (verified, do not re-implement):
 - recon.py call extraction DIFFERS by backend: tree-sitter emits dotted qualifier heads (`pkg.fn`), the regex fallback emits bare names (`fn`). A call-graph/import fix can pass one backend and regress the other, so always run both. `_ts_imports_exports` only covers JS/TS; every other language MUST fall back to the regex extractor even under tree-sitter.
 - Live smoke (paths mode + diff mode) is empirical only; static gates passing does not substitute for a real run.
 - EH-0005 qualifier representation ripples through all call-graph consumers; regression-test `calls_in` before and after any further recon.py edits near `_resolve_call_target`.
+
+## security-audit review round 3: 2026-06-23
+
+**Goal:** close 9 reviewer findings on the post-hardening `security-audit.js` + `recon.py`.
+**Board:** `.eatahorse-secaudit-r3` (7 cards). **Files:** `security-audit.js`, `recon.py`, `test_recon.py`, `secure-review/SKILL.md`.
+
+- **#1 (blocking) deep gate no longer silently drops serious findings.** It DROPS a deep candidate only when BOTH blind reviewers (or the arbiter) are firmly INVALID; any UNCERTAIN (incl. a dead reviewer, which now defaults UNCERTAIN not INVALID) routes to `residualUncertain` (`gateStage:'deep-demoted'`/`'deep-arbiter'`) and surfaces in the report's Unsettled section. Deep-gate + arbiter prompts now default UNCERTAIN-and-surface, INVALID only with a named contradicting fact (mirrors Escalate). `droppedCount` subtracts `residualUncertain` so surfaced ≠ dropped.
+- **#2 regex call extractor emits dotted heads** (`_CALL_RE` + tail-keyword guard), so the no-venv fallback drops `os.path.join` instead of binding bare `join` — the qualified-external false edge is closed on ALL backends now, not just ast/tree-sitter.
+- **#3** `_ts_imports_exports` captures `export const NAME` (lexical_declaration declarators) and `module.exports = { … }` (object form) under tree-sitter.
+- **#4** recon `summary.source_file_count` (excludes `language=='config'`); the Map coverage decision uses it, not `file_count`, so `.json` fixtures don't flip thematic→partition. **#5** dot-dir walk allowlist widened to `.github,.circleci,.gitlab,.azure-pipelines,.azuredevops`.
+- **#6** `maxFindings` arg (default 150, cap 1000): ranks `deduped` by bug-class keywords in evidence/where (NOTE_SCHEMA findings have NO severity at gate-entry — that's set downstream by the gate) then slices, with a loud `log()` (no silent cap). **#8** `minConfidence` arg (default 0=off): demotes low-confidence VALIDs to unsettled; the self-reported confidence is clamped to [0,1] before comparison so an out-of-range `95` can't defeat the floor. **#9** diff-mode 0-files bail message is now mode-specific.
+- **Round 4 (follow-up):** `deepGateSeverities` is lowercase-normalized + enum-validated (a typo no longer silently no-ops the deep gate); `residualUncertain` is exact-key deduped before the report; `confidence` schema is bounded `[0,1]`.
+
+CONSTRAINTS (verified, do not re-litigate):
+- No new recon CLI flags this round (`source_file_count` is summary output; dot-dirs internal), so `reconBlock` in `security-audit.js` was NOT touched — the EH-0001..0012 mirror rule still holds for future flags.
+- New tests in `test_recon.py`: `test_regex_fallback_captures_dotted_call_head`, `test_regex_dotted_external_does_not_bind_to_in_repo_bare_name` (both backend-agnostic), `test_treesitter_captures_export_const_and_module_exports_object` (venv-gated), `test_source_file_count_excludes_config`, `test_walk_allows_ci_iac_dot_dirs`. Acceptance unchanged: green under BOTH stdlib AND venv, plus `validate.py --strict` + `npm run check`.
+- Live smoke (paths + diff) still empirical-only; static gates passing does not substitute.
