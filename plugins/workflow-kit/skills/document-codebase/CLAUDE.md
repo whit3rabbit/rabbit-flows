@@ -5,7 +5,8 @@ intake, then calls `Workflow({ name: 'docs-from-code', args })`, with a Tier-2 c
 fallback that drives the SAME Eatahorse board by hand when workflows are off / the repo is small.
 
 - **Add / rename a docs-from-code arg → update BOTH** the intake + `args` block here AND
-  `.claude/workflows/docs-from-code.js`.
+  `.claude/workflows/docs-from-code.js`. This includes the UPDATE-mode args (`mode`, `updateMode`, `since`,
+  `refine`, `planNewModules`) and the Step 0 detect/route intake.
 - This skill is bundled by `docs-from-code` in `installer/manifest.json`, so it MUST stay in that
   workflow's `// requires-skills:` header too — the two must set-match or `npm run check` fails.
 - Keep the Tier-2 steps aligned with the workflow's stages (one card per page, scope-grounded

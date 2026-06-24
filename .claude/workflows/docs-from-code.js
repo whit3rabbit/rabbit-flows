@@ -51,6 +51,23 @@
 //     defineConfig (Starlight auto-adds @astrojs/sitemap, which needs it; also fixes canonical URLs),
 //   verify (bool, default false) — opt-in end-to-end build gate: ensure package.json, npm install, npm run
 //     build; surfaces failure as ok:false. Off by default since it pulls deps and builds generated config.
+//   mode ('fresh' default | 'update'), updateMode ('diff' default | 'refine'), since (git ref, default
+//     HEAD~1), refine ([{page, ask}]), planNewModules (bool, default false) — see UPDATE MODE below.
+//
+// UPDATE MODE (args.mode='update') — re-document an EXISTING run instead of planning from scratch. Bounded
+//   branch (mirrors security-audit's mode knob): it REPLACES the fresh front-end (Enumerate/Detect/Generate/
+//   Plan) with a Reopen stage, then re-enters the SAME author->grounding-gate loop. Two sub-modes:
+//     updateMode='diff' (default): git-diff changed files since args.since (default HEAD~1); each page card
+//       whose scope= contains a changed file is reopened (path-EQUAL match, not substring) and re-authored.
+//     updateMode='refine': args.refine=[{page, ask}] reopens named page cards with the ask as the gap note.
+//   Decisions (do not re-litigate): NEW source files covered by no card are FLAGGED, not auto-documented,
+//     unless args.planNewModules=true (then the Plan stage runs scoped to just those files). DELETED source
+//     is FLAGGED (a page citing it can't re-ground -> never reopened; a human reviews). The update back-half
+//     is compact and SEPARATE from the fresh assemble: board-rebuilt page objects carry no `group`, so a full
+//     re-assemble would corrupt the existing sidebar; instead it link-fixes the changed pages and PATCHES
+//     config (add-to-existing) only when genuinely new pages were added. No two-index reachability split is
+//     needed (docs have no call graph; page<->source is a flat scope match). The card description format
+//     (descOf below) is the contract the Reopen parser depends on; keep them in lockstep.
 //
 // requires-skills: eatahorse, docs-site-builder, document-codebase, document
 //   (Bundling only. The eatahorse CLI surface is distilled INLINE as CMD/cli() and sliced per-agent; the
@@ -69,6 +86,7 @@ export const meta = {
     { title: 'Detect', detail: 'classify the gitignore-respecting tracked file set against language rules: 12 languages plus OpenAPI and CLI --help cross-cutting lanes' },
     { title: 'Generate', detail: 'fan out one worker per active lane: run generator or extract public API from source, write reference pages, report undocumented public symbols' },
     { title: 'Plan' },
+    { title: 'Reopen', detail: 'update mode only: reopen page cards for changed source in diff mode or named pages in refine mode' },
     { title: 'Seed' },
     { title: 'Author' },
     { title: 'Gate' },
@@ -5556,6 +5574,20 @@ const normPagePath = (pp) => {
   return s
 }
 
+// --- update mode (re-document changed code, or refine specific pages on request) -----------------
+// mode='update' reopens existing page cards instead of planning from scratch, then re-enters the author
+// loop. updateMode='diff' uses a git ref (since); 'refine' takes args.refine=[{page, ask}]. See header.
+const mode = args?.mode === 'update' ? 'update' : 'fresh'
+const updateMode = args?.updateMode === 'refine' ? 'refine' : 'diff'
+const since = typeof args?.since === 'string' && args.since.trim() ? args.since.trim() : 'HEAD~1'
+const refine = Array.isArray(args?.refine)
+  ? args.refine
+      .filter((r) => r && typeof r.page === 'string' && r.page && typeof r.ask === 'string' && r.ask)
+      .map((r) => ({ page: normPagePath(r.page), ask: r.ask }))
+  : []
+const planNewModules = args?.planNewModules === true
+if (mode === 'update') log(`UPDATE mode (${updateMode})${updateMode === 'diff' ? `, since="${since}"` : `, ${refine.length} refine request(s)`}${planNewModules ? ', planNewModules=on' : ''}`)
+
 const ENUM_CAP = 5000        // hard cap on source files enumerated in one run
 const LIVE_CAP = 40          // max pages authored per ROUND; the rest stay in backlog and carry forward
 const RUN_TOUCH_CAP = 200    // ponytail: per-RUN ceiling on distinct pages authored; keeps authors+sync+gate under the 1000-agent lifetime cap. rerun continues from backlog. raise if a run must cover more pages in one pass.
@@ -5769,6 +5801,30 @@ const DETECT_SCHEMA = {
   },
 }
 
+// Update mode: the Reopen agent maps changed source / user asks to page cards and reopens them, and returns
+// the parsed board cards so JS can rebuild the page set without an LLM plan call (descOf is the contract).
+const REOPEN_SCHEMA = {
+  type: 'object', additionalProperties: false,
+  required: ['reopened', 'cards'],
+  properties: {
+    reopened: { type: 'array', items: { type: 'string' }, description: 'page-path titles reopened this run' },
+    newModules: { type: 'array', items: { type: 'string' }, description: 'changed/added source files covered by NO card scope' },
+    staleByDeletion: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: false, required: ['title', 'file'], properties: { title: { type: 'string' }, file: { type: 'string' } } },
+      description: 'pages whose scope references a DELETED source file (flagged, not reopened)',
+    },
+    unmatched: { type: 'array', items: { type: 'string' }, description: 'requested pages not found on the board' },
+    checked: { type: 'integer' },
+    noBoard: { type: 'boolean', description: 'true if no board exists at the given path' },
+    cards: {
+      type: 'array',
+      items: { type: 'object', additionalProperties: false, required: ['title', 'description'], properties: { title: { type: 'string' }, description: { type: 'string' }, status: { type: 'string' } } },
+      description: 'EVERY board card, verbatim title + description; used to rebuild the page set',
+    },
+  },
+}
+
 // Sliced per-agent: cli(...) hands each board-touching prompt ONLY the commands its steps call. Page
 // authors run NO CLI — they get CARD_MD (markdown layout) only. Keep `reopen` consistent with the sibling
 // CMD in eatahorse{,-research}.js by hand (no runtime sharing in the VM sandbox).
@@ -5792,9 +5848,18 @@ const CARD_MD =
   `"## Acceptance checks" with "- [ ]"/"- [x]" items. In "## Notes" record ONE line: the written page path ` +
   `+ a one-line grounding summary (do NOT paste the page body here). Tick ALL boxes to auto-complete on sync.`
 
+// Shared across fresh + update modes. Update mode leaves these empty (it rebuilds pages from the board).
+let enumed = null
+let files = []
+let activeLanes = []
+let generatedPages = []    // pages produced by lane workers; merged into Plan as pre-authored entries
+let docGaps = []           // aggregated undocumented public symbols across language lanes (doc-coverage)
+
+// 1/2/2b. Enumerate -> Detect -> Generate — FRESH mode only. Update mode skips straight to Reopen (below).
+if (mode === 'fresh') {
 // 1. Enumerate — haiku, mechanical. List the SOURCE files to document. Script can't touch the FS.
 phase('Enumerate')
-const enumed = await agent(
+enumed = await agent(
   `List the source files to document under "${root}". ALWAYS operate ON "${root}", never the current working ` +
     `directory: use \`git -C "${root}" ls-files\` when "${root}" is a git repo, else \`find "${root}" -type f\`. ` +
     `(Do NOT run a bare \`git ls-files\` — that lists the CWD, which may be a different repo.) ` +
@@ -5804,7 +5869,7 @@ const enumed = await agent(
     `Return repo-relative paths. Cap the list at ${ENUM_CAP}; if more exist set truncated=true and report the true total.`,
   { label: 'enumerate', model: 'haiku', schema: ENUM_SCHEMA },
 )
-const files = (enumed?.files ?? []).filter(Boolean)
+files = (enumed?.files ?? []).filter(Boolean)
 if (!files.length) return { root, outDir, error: 'no source files enumerated', written: false }
 if (enumed.truncated) log(`enumerate: capped at ${files.length} of ${enumed.total} files; the rest are not covered this run`)
 
@@ -5853,7 +5918,7 @@ const detection = await agent(
   `an applicable lane.`,
   { label: 'detect', model: 'haiku', schema: DETECT_SCHEMA },
 )
-const activeLanes = (detection?.lanes ?? []).filter((l) => l.applicable)
+activeLanes = (detection?.lanes ?? []).filter((l) => l.applicable)
 if (activeLanes.length) {
   log(`detect: ${activeLanes.length} generator lane(s) applicable: ${activeLanes.map((l) => l.id).join(', ')} (signals: ${(detection?.signals ?? []).join(', ')})`)
 } else {
@@ -5886,8 +5951,7 @@ if (activeLanes.length) {
 //     rust) where the output demands more judgment. (model-routing.md: cheapest that fits.)
 //     No CLI (eatahorse) access: workers only write page files + return structured metadata.
 phase('Generate')
-let generatedPages = []    // pages produced by lane workers; merged into Plan as pre-authored entries
-let docGaps = []           // aggregated undocumented public symbols across all language lanes (doc-coverage)
+// generatedPages / docGaps are hoisted above the fresh-mode guard (update mode leaves them empty).
 if (activeLanes.length && !explicitPages) {
   // Bespoke per-lane contracts for the CROSS-CUTTING (non-language) lanes only. Language lanes use the
   // generic data-driven contract built from LANG_RULES below (sliced per agent).
@@ -6045,12 +6109,87 @@ Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
   }
 }
 
-// 3. Plan — strong model (inherits session; this is the decompose stage where a mistake propagates). One
-//    call frames IA over the tree + entry points and emits the PAGE plan: group by reader task, tag Diátaxis,
-//    attach a file SCOPE, split modules over ~${filesPerPage} files into sub-pages, defer tutorials.
-phase('Plan')
-let pages = explicitPages
+}  // end FRESH front-end (Enumerate/Detect/Generate)
+
+// 3. Plan (fresh) — strong model (the decompose stage where a mistake propagates): frame IA over the tree +
+//    entry points and emit the PAGE plan (group by reader task, tag Diátaxis, attach a file SCOPE, split
+//    god-modules, defer tutorials). UPDATE mode runs the Reopen stage instead: rebuild pages from the board
+//    and reopen the cards for changed source (diff) or user asks (refine).
+let pages = mode === 'update' ? null : explicitPages
 let deferred = []
+let reopened = []          // update: page titles reopened this run
+let newModules = []        // update/diff: changed/added source files covered by no page (flagged)
+let staleByDeletion = []   // update/diff: pages whose scope lost a file (flagged; NOT reopened)
+let unmatched = []         // update/refine: requested pages not found on the board
+let newPlannedPages = []   // update + planNewModules: pages planned for new modules
+if (mode === 'update') {
+  phase('Reopen')
+  const r = await agent(
+    `You are routing an UPDATE to a code->docs board at "${board}" (site under "${outDir}", repo root "${root}"). ` +
+      `Each card's "description" holds: path=<page path> | diataxis=<type> | scope=<comma-separated SOURCE files> | <brief>. ` +
+      `Mode: ${updateMode}.\n\n` +
+      `STEP 1 — read the board. \`list --json\`; if it errors (no board exists) return {noBoard:true, reopened:[], cards:[]} ` +
+      `and stop. Otherwise collect EVERY card as {title, description, status} (use list/show) and return them ALL in ` +
+      `"cards" with the description string VERBATIM.\n\n` +
+      (updateMode === 'diff'
+        ? `STEP 2 — find changed source since "${since}". Run from "${root}":\n` +
+          `  git -C "${root}" diff --name-only ${since}...HEAD\n` +
+          `  git -C "${root}" diff --name-only ${since}\n` +
+          `  git -C "${root}" diff --name-only --diff-filter=D ${since}...HEAD   (DELETED files)\n` +
+          `Union the first two as CHANGED; the third is DELETED.\n` +
+          `STEP 3 — match by EXACT repo-relative path equality (NOT substring: "src/cli.ts" must NOT match ` +
+          `"src/cli_helpers.ts"). Parse each card's scope= (split on ",", trim):\n` +
+          `  - Any card with >=1 scope file in CHANGED: \`reopen <id> --gap "source changed since ${since}: <files>"\`; ` +
+          `add its title to reopened.\n` +
+          `  - CHANGED files in NO card's scope: add to newModules (do NOT reopen anything).\n` +
+          `  - For each DELETED file appearing in some card's scope: add {title, file} to staleByDeletion and do NOT ` +
+          `reopen those cards (the source is gone; the author cannot re-ground — a human reviews).\n`
+        : `STEP 2 — apply the user's refine requests. For each {page, ask} below, find the card whose title EQUALS the ` +
+          `page path; \`reopen <id> --gap "user request: <ask>"\` and add the title to reopened. If no card matches a ` +
+          `requested page, add that page string to unmatched.\n` +
+          `Refine requests: ${JSON.stringify(refine)}\n`) +
+      `STEP 4 — \`sync\`. Return reopened, newModules, staleByDeletion, unmatched, checked (cards examined), cards.\n\n` +
+      cli('list', 'show', 'reopen', 'sync'),
+    { label: 'reopen', schema: REOPEN_SCHEMA },   // strong model (inherits session): a wrong scope-match mis-targets re-authoring
+  )
+  if (!r || r.noBoard) return { root, outDir, board, mode, error: `update mode: no board at "${board}" (run docs-from-code fresh first)`, written: false }
+  reopened = r.reopened ?? []
+  newModules = r.newModules ?? []
+  staleByDeletion = r.staleByDeletion ?? []
+  unmatched = r.unmatched ?? []
+  // Rebuild the page set from the board cards' descriptions (inverse of descOf — the format is the contract).
+  const fieldOf = (desc, k) => { const m = String(desc ?? '').match(new RegExp(`${k}=([^|]*)`)); return m ? m[1].trim() : '' }
+  const parseCard = (title, desc) => {
+    const path = normPagePath(fieldOf(desc, 'path') || title)
+    const scope = fieldOf(desc, 'scope') ? fieldOf(desc, 'scope').split(',').map((s) => s.trim()).filter(Boolean) : []
+    // brief = the first |-segment that is not a known key=… field.
+    const brief = String(desc ?? '').split('|').map((s) => s.trim()).find((s) => s && !/^(path|diataxis|scope|generated)=/.test(s)) || ''
+    const segs = path.split('/').filter(Boolean)
+    const group = segs.length >= 2 ? segs[segs.length - 2] : 'Reference'   // derived; only used if this page is (re)assembled
+    return { path, title: path, kind: 'reference', group, brief, diataxisType: fieldOf(desc, 'diataxis') || 'reference', template: '', scope }
+  }
+  pages = (r.cards ?? []).map((c) => parseCard(c.title, c.description))
+  if (!pages.length) return { root, outDir, board, mode, error: 'update mode: board has no page cards', written: false }
+  log(`update(${updateMode}): reopened ${reopened.length} page(s)` +
+    (newModules.length ? `, ${newModules.length} new module file(s) flagged` : '') +
+    (staleByDeletion.length ? `, ${staleByDeletion.length} page(s) cite deleted source` : '') +
+    (unmatched.length ? `, ${unmatched.length} requested page(s) not found` : ''))
+  if (planNewModules && newModules.length) {
+    phase('Plan')
+    const np = await agent(
+      `Plan ${framework} documentation pages for these NEW source files only (not yet covered by any page). ` +
+        `Group by reader task; one page per module; keep scope <= ~${filesPerPage} files (split bigger modules). ` +
+        `For each page give: path (repo-relative under "${outDir}", e.g. src/content/docs/reference/x.md), title, ` +
+        `kind, group (sidebar group), brief, diataxisType (the one reader need), template (section skeleton), ` +
+        `scope (the source files it documents).\n\nNEW source files:\n${JSON.stringify(newModules)}\n\n` +
+        `IA CONTRACT\n${IA_CONTRACT}\n\nAuthoring contract for reference:\n${authoringContract}`,
+      { label: 'plan-new-modules', schema: PLAN_SCHEMA },
+    )
+    newPlannedPages = (np?.pages ?? []).filter(Boolean)
+    if (newPlannedPages.length) { pages = pages.concat(newPlannedPages); log(`planned ${newPlannedPages.length} new-module page(s)`) }
+  }
+} else {
+phase('Plan')
 if (!pages) {
   // Build the lanes context block injected into the Plan prompt. Only applicable lanes are shown;
   // if none apply, the block is omitted entirely (no token cost).
@@ -6106,6 +6245,7 @@ if (!pages) {
     if (newGenerated.length) log(`merged ${newGenerated.length} generated page(s) not covered by the plan`)
   }
 }
+}  // end Plan (fresh) / Reopen (update) branch
 // Force ONE path convention across planner, explicit, and generated pages before anything keys off
 // p.path (Seed titles, gather-admitted, the gate's `${outDir}/${path}` read). Normalize each page object
 // EXACTLY ONCE: generated pages were already normalized at merge above, and normPagePath is NOT a fixed
@@ -6197,6 +6337,12 @@ while (pending.length && round < maxRounds && (!budget.total || budget.remaining
           `ticking acceptance marks the card done on the next sync. Leave frontmatter and other sections intact.\n\n` +
           `If the scope is unreadable/empty so the page can't be grounded, say so in "## Notes" and do NOT tick ` +
           `acceptance (leave it for the gate).\n\n` +
+          (mode === 'update'
+            ? `THIS IS AN UPDATE. The page already exists at that path — READ it first, then revise it to reflect ` +
+              `the current source. If the card carries gap notes from a reopen (a "source changed since …" or ` +
+              `"user request: …" line in "## Notes" or the bite list), address those specifically. Preserve the ` +
+              `page's existing shape and frontmatter; change only what the source/request requires.\n\n`
+            : '') +
           `Card markdown layout:\n${CARD_MD}\n\nIA CONTRACT\n${IA_CONTRACT}\n\nAUTHORING CONTRACT\n${authoringContract}`,
         { label: `author:${title}`, phase: 'Author', model: workerModel },
       )
@@ -6249,6 +6395,76 @@ const stopReason =
   : round >= maxRounds ? 'round cap'
   : pending.length ? 'budget floor'
   : 'no pending'
+
+// --- UPDATE back-half: compact finalize, distinct from the fresh assemble. Board-rebuilt page objects carry
+//     no `group`, so a full re-assemble would corrupt the existing sidebar. Instead: link-fix the pages that
+//     changed this run, and PATCH config (add-to-existing) ONLY when genuinely new pages were added. See header.
+if (mode === 'update') {
+  phase('Assemble')
+  const uTitles = (await agent(
+    `\`python3 "${scriptPath}" --board "${board}" list --status done --json\` and return the "title" (page path) of ` +
+      `every done card.\n\n${cli('list')}`,
+    { label: 'gather-admitted', model: 'haiku', schema: DONE_TITLES_SCHEMA },
+  ))?.titles ?? []
+  const uDoneSet = new Set(uTitles.map((t) => normPagePath(t)))
+  const uDone = pages.filter((p) => uDoneSet.has(normPagePath(p.path)))
+  const changedSet = new Set([...reopened, ...newPlannedPages.map((p) => p.path)].map((t) => normPagePath(t)))
+  const uChanged = uDone.filter((p) => changedSet.has(normPagePath(p.path)))
+  log(`update: ${uChanged.length} changed page(s) re-admitted; ${uDone.length} done overall`)
+  // Re-authoring may introduce new local asset/link references — fix only the pages that changed.
+  if (uChanged.length) {
+    phase('Resolve links/assets')
+    const lr = await resolveLinksAndAssets(uChanged, outDir, fwEntry, framework)
+    log(`links/assets: ${lr.copied?.length ?? 0} copied, ${lr.rewritten?.length ?? 0} rewritten, ${lr.skipped?.length ?? 0} skipped`)
+  }
+  // Config: PATCH only for genuinely new pages (add-to-existing). Existing pages keep their sidebar entries.
+  let configWritten = false
+  const newSet = new Set(newPlannedPages.map((p) => normPagePath(p.path)))
+  const uNew = uDone.filter((p) => newSet.has(normPagePath(p.path)))
+  if (uNew.length) {
+    phase('Assemble')
+    const groups = [...new Set(uNew.map((p) => p.group))].join(', ') || '(none)'
+    const fin = await agent(
+      `You are patching the ${framework} docs site config at "${outDir}" for an UPDATE run. ADD these NEW pages to ` +
+        `the existing config/sidebar WITHOUT rebuilding or reordering existing entries (scaffoldMode add-to-existing):\n` +
+        `${JSON.stringify(uNew.map((p) => ({ path: p.path, group: p.group, diataxisType: p.diataxisType })), null, 2)}\n\n` +
+        `Do, in order:\n` +
+        fwEntry.assemblePrompt(outDir, groups, 'add-to-existing', { basePath, i18n, versioning, site }) +
+        `4. Update "${outDir}/.docs-plan.md": append these new pages to the admitted list and add a dated UPDATE note ` +
+        `(${updateMode === 'diff' ? `since "${since}"` : 'refine request'}).\n` +
+        `Return configWritten, buildResult, planPath, decisions, summary.\n\n` +
+        `IA CONTRACT\n${IA_CONTRACT}`,
+      { label: 'assemble-update', model: 'sonnet', schema: FINAL_SCHEMA },
+    )
+    configWritten = fin?.configWritten === true
+    log(`update: patched config for ${uNew.length} new page(s) (configWritten=${configWritten})`)
+  }
+  // Write-back — update-specific facts + constraints (new modules, deleted-source pages).
+  phase('Write-back')
+  await agent(
+    `Append a short dated section to the DOCUMENTED repo's CLAUDE.md at "${root}/CLAUDE.md" (NOT the CWD's). ` +
+      `MERGE, do not clobber. This was a DOCS UPDATE run (updateMode=${updateMode}). Record:\n` +
+      (updateMode === 'diff'
+        ? `- updated for code changes since "${since}"\n` +
+          `- pages re-authored: ${JSON.stringify(reopened)}\n` +
+          `- CONSTRAINT — new source not yet documented${planNewModules ? ' (auto-planned this run)' : ' (needs a page; rerun with planNewModules to author)'}: ${JSON.stringify(newModules)}\n` +
+          `- CONSTRAINT — pages citing DELETED source (needs human review; not auto-changed): ${JSON.stringify(staleByDeletion)}\n`
+        : `- pages refined per request: ${JSON.stringify(reopened)}\n` +
+          `- requested pages NOT found on the board: ${JSON.stringify(unmatched)}\n`) +
+      `- docs site: "${outDir}"; board: "${board}"; done pages: ${uDone.length}; new pages this run: ${JSON.stringify(newPlannedPages.map((p) => p.path))}\n` +
+      `Keep it short; do not document the obvious file tree.`,
+    { label: 'write-back', model: 'sonnet' },
+  )
+  return {
+    root, outDir, framework, board, mode, updateMode,
+    since: updateMode === 'diff' ? since : null,
+    reopened, newModules, staleByDeletion, unmatched,
+    newPages: newPlannedPages.map((p) => p.path),
+    admitted: uDone.length, configWritten,
+    touched: touched.size, rounds: round, stopReason,
+    written: true, ok: true, error: null,
+  }
+}
 
 // 6a. Gather admitted — haiku. Read which page cards survived the gate (done) off the durable board, so a
 //     resumed run assembles the WHOLE admitted set, not just this run's slice.

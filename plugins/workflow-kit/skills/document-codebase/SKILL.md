@@ -15,6 +15,21 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
 
 ## Steps
 
+0. **Detect an existing run (fresh vs update).** Check for the board dir (`.eatahorse-docs`, or the `board`
+   the user names) and `${outDir}/.docs-plan.md`. If EITHER exists, this repo was already documented — offer an
+   UPDATE instead of a rebuild. AskUserQuestion: **Re-document changed code** (diff) · **Refine specific
+   pages** (refine) · **Fresh re-run** (ignore the board). The workflow can't ask mid-run, so gather the
+   update inputs HERE:
+   - **diff**: `since` (free-text git ref, default `HEAD~1`) and `planNewModules` (no default — flag new
+     undocumented source vs auto-plan pages for it). Call
+     `Workflow({ name: "docs-from-code", args: { mode:"update", updateMode:"diff", since, planNewModules, root, outDir, framework, board } })`.
+   - **refine**: read `${outDir}/.docs-plan.md` for the admitted page list, let the user pick page paths and
+     state an ask for each, build `refine: [{page, ask}, …]`, then
+     `Workflow({ name: "docs-from-code", args: { mode:"update", updateMode:"refine", refine, root, outDir, framework, board } })`.
+   An update reopens the affected page cards and re-enters the author/grounding loop; new modules are flagged
+   (or planned with `planNewModules:true`), deleted-source pages are flagged for human review. If no board/plan
+   exists, continue with the fresh path below.
+
 1. **Get the target.** The repo root (default `.`) and what to focus on, if anything. Take it from the
    invocation if present; otherwise ask plainly in one question.
 
@@ -79,6 +94,8 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
      // workerModel (default sonnet), maxRounds (default 3),
      // filesPerPage (split modules bigger than this, default 12),
      // pages (explicit page plan, skips the Plan stage)
+     // UPDATE an existing run (see Step 0): mode "update", updateMode "diff"|"refine",
+     //   since (git ref, default HEAD~1), refine [{page, ask}], planNewModules (default false)
    }})
    ```
    Pass only what was gathered; omit the rest (the workflow defaults them). If `Workflow()` errors
@@ -100,6 +117,10 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
      any whose claims aren't in the code.
    - **Assemble**: write `src/content.config.ts` + `astro.config.mjs` sidebar from the admitted pages,
      and `.docs-plan.md`. Run `npx astro check` only if `outDir` is already a buildable Astro project.
+   - **To update (Tier 2)**: don't replan. For changed code, `git diff --name-only <ref>` and `reopen <id>`
+     each card whose scope (in its description) contains a changed file; for a request, `reopen <id> --gap "…"`
+     the named page. Then re-author those pages from scope, `sync`, and only patch the sidebar if you added a
+     new page. Flag new/deleted source for the human; don't auto-delete pages.
 
 4. **Hand back** the result: site location, pages admitted vs planned, deferred pages (need a human
    brief), board path, and the `astro check` status (or "skipped: not a buildable project").
