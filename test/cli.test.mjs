@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { copyInto, install, uninstall, readReceipt, depsOf } from '../bin/cli.mjs'
+import { copyInto, install, uninstall, readReceipt, depsOf, parseSilos, resolveSilo } from '../bin/cli.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -179,6 +179,30 @@ test('install: a pre-existing foreign workflow .js is left alone but its skills 
   } finally {
     await rm(scope, { recursive: true, force: true })
   }
+})
+
+test('parseSilos: maps ccsilo json, drops entries without a configDir, tolerates junk', () => {
+  // Real shape from `ccsilo variant list --json` (trimmed to the fields we read).
+  const json = JSON.stringify([
+    { id: 'zai', name: 'zai', provider: { label: 'Zai Cloud' }, paths: { configDir: '/w/zai/config' } },
+    { id: 'or', provider: { key: 'openrouter' }, paths: { configDir: '/w/or/config' } }, // name falls back to id
+    { id: 'broken', name: 'broken', paths: {} }, // no configDir -> dropped
+    { name: 'noid', paths: { configDir: '/w/x/config' } }, // no id -> dropped
+  ])
+  assert.deepEqual(parseSilos(json), [
+    { id: 'zai', name: 'zai', provider: 'Zai Cloud', configDir: '/w/zai/config' },
+    { id: 'or', name: 'or', provider: 'openrouter', configDir: '/w/or/config' },
+  ])
+  assert.deepEqual(parseSilos('not json'), [], 'parse error -> []')
+  assert.deepEqual(parseSilos('{"not":"array"}'), [], 'non-array -> []')
+})
+
+test('resolveSilo: matches by id, undefined on miss', () => {
+  const silos = parseSilos(
+    JSON.stringify([{ id: 'zai', name: 'zai', paths: { configDir: '/w/zai/config' } }]),
+  )
+  assert.equal(resolveSilo(silos, 'zai').configDir, '/w/zai/config')
+  assert.equal(resolveSilo(silos, 'nope'), undefined)
 })
 
 test('every shipped skill documents git-ignorable artifacts', async () => {

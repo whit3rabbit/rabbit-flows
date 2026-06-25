@@ -54,6 +54,11 @@
 //   write:true, verify:true   -> default: write, run Checks, then run install/build/test and report (the empirical gate).
 //   debate:true               -> one blind rebuttal round before Decide (proposers attack each other). Off by default.
 //   polish:true               -> add a Sonnet once-over after Checks (duplication + consistency + API-match). Off by default.
+//   scale:prototype|standard|production -> ambition tier (default standard). Right-sizes the foundation:
+//                                gates the durable guardrail layer (scripts/check.sh + lint config + CI),
+//                                pre-commit hooks (production only), the resolve-only dep check (standard+
+//                                AND verify:true — it hits the registry), and the default line ceiling
+//                                (prototype 250, else 400). prototype = no ceremony.
 //
 // requires-skills: architect, new-project
 //   (Bundling only — the installer copies these alongside the workflow. `architect` is the portable copy of
@@ -311,7 +316,27 @@ const write = bool(args?.write, true)              // false -> stop after the de
 const runVerify = bool(args?.verify, false)        // SAFE DEFAULT: write the scaffold but don't EXECUTE it; verify is opt-in (runs unreviewed generated code)
 const debate = bool(args?.debate, false)           // true -> one blind rebuttal round before Decide (off: token-lazy)
 const polish = bool(args?.polish, false)           // true -> add a Sonnet once-over after build (off: token-lazy)
-const maxLines = Math.min(Math.max(Math.trunc(Number(args?.maxFileLines)) || 400, 80), 1000) // per-file maintainability ceiling, threaded everywhere
+// Scale tier — the ambition knob. Right-sizes the foundation: over-building a throwaway is itself AI
+// stink, so ceremony (CI, pre-commit hooks, durable check.sh, resolve-only dep check) is a FUNCTION of
+// the tier, not all-or-nothing. prototype = throwaway, standard = a tool you'll maintain, production =
+// a foundation others build on. Default standard. Each persistent guardrail below derives from this.
+const SCALE = { prototype: 0, standard: 1, production: 2 }
+const scaleRaw = String(args?.scale ?? 'standard').trim().toLowerCase()
+// Object.hasOwn, NOT `in`: `in` walks the prototype chain, so scale:"constructor"/"toString" would pass
+// and SCALE[scale] would be a function instead of a rank. Unknown tiers fall back to standard.
+const scale = Object.hasOwn(SCALE, scaleRaw) ? scaleRaw : 'standard'
+const scaleRank = SCALE[scale]
+const wantLintConfig = scaleRank >= 1   // standard+: emit scripts/check.sh + formatter/linter config (max-lines wired to the ceiling)
+const wantCI = scaleRank >= 1           // standard+: CI workflow that calls scripts/check.sh
+const wantHooks = scaleRank >= 2        // production only: pre-commit hook running check.sh
+// Resolve-only dep check CONTACTS THE REGISTRY, so it is gated behind verify (opt-in execution), not just
+// the tier: verify:false must honor the documented "EXECUTE nothing / offline" contract. With verify:true
+// (which already builds/installs) it runs FIRST as a cheap fast-fail on hallucinated pinned versions.
+const wantResolveCheck = scaleRank >= 1 && runVerify
+// Tier-aware line ceiling: prototype tolerates a tighter 250 (small throwaway), standard/production 400.
+// An explicit maxFileLines arg always overrides the tier default.
+const maxLinesDefault = scale === 'prototype' ? 250 : 400
+const maxLines = Math.min(Math.max(Math.trunc(Number(args?.maxFileLines)) || maxLinesDefault, 80), 1000) // per-file maintainability ceiling, threaded everywhere
 
 // Discussion answers (from the `scaffold` skill). All optional; blank-friendly so a bare brief still runs.
 const interface_ = args?.interface ?? 'unspecified'     // cli | tui | gui | library | service
@@ -334,11 +359,19 @@ const discussionBlock =
   `- License: ${license}\n- Will publish: ${willPublish ? 'yes' : 'no'}\n` +
   `- Public API surface: ${apiSurface}\n- Prior art / inspired by: ${priorArt}\n` +
   `- Dependency preferences: ${preferDeps}\n- Frontend involved: ${wantFrontend ? 'yes' : 'no'}\n` +
-  `- Backend involved: ${wantBackend ? 'yes' : 'no'}`
+  `- Backend involved: ${wantBackend ? 'yes' : 'no'}\n` +
+  `- Scale/ambition: ${scale} (prototype=throwaway, standard=maintained tool, production=foundation others build on)`
+// Anti-pattern list folded in (#3): names the literal fingerprints of LLM-generated code so the forward-
+// review lanes and Once-over have a checklist to grep against, not vibes. Threaded EVERYWHERE this const
+// already is (frame/propose/review/tasklist/build), so naming the stink costs one edit.
 const maintainabilityRule =
   `MAINTAINABILITY CONTRACT (hard): prefer well-maintained libraries over reinventing them; design for ` +
   `reuse (clear public API, small focused modules); keep EVERY source file under ${maxLines} lines. If a ` +
-  `module would exceed ${maxLines} lines, split the repo structure into smaller files instead.`
+  `module would exceed ${maxLines} lines, split the repo structure into smaller files instead.\n` +
+  `AVOID these AI-code anti-patterns: speculative generality (no abstraction/interface/factory with a ` +
+  `single caller, no config for a value that never varies); dead/unused exports; comments that restate ` +
+  `the code instead of explaining WHY; more than one error-handling strategy in the same layer; ` +
+  `dependency cycles between modules; copy-pasted blocks that should be one shared function.`
 
 // 1. Frame — strong model. Turns brief + discussion profile into requirements, hard constraints (incl.
 //    the maintainability contract), the irreversible decisions each attempt must make, the candidate
@@ -445,6 +478,7 @@ if (!decision?.chosen) return { error: 'decision stage returned no architecture'
 if (!write) {
   return {
     brief,
+    scale,
     attempts: candidates.length,
     chosen: decision.chosen,
     rationale: decision.rationale,
@@ -466,7 +500,7 @@ phase('Review')
 const lanes = [
   { focus: 'maintainability', ask: `Flag any module in the layout that would plausibly exceed ${maxLines} lines or mixes too many concerns; propose how to split the repo structure. Flag missing separation between layers.` },
   { focus: 'reusability+api', ask: `Critique the public API shape and naming for reusability. Flag anything reinvented that a well-maintained library covers, and anything that should be a clear seam/module instead of inline.` },
-  { focus: 'testability', ask: `Flag designs that will be hard to test (hidden side effects, no seams for dependency injection, global state). Propose the seams the stubs should expose so the smoke tests are real.` },
+  { focus: 'testability', ask: `Flag designs that will be hard to test (hidden side effects, no seams for dependency injection, global state). Propose the seams the stubs should expose so the pending contract tests can target real behavior.` },
   { focus: 'dependency+security', ask: `Cross-check the chosen dependencies against the research: flag pinned versions with advisories, unmaintained libs, or runtime/OS-compat risks for ${targetOS}. Suggest safer alternatives where warranted.` },
 ]
 if (wantFrontend) lanes.push({ focus: 'frontend', ask: `Act as a senior frontend engineer. Review component/state/data-flow structure, accessibility basics, and rendering boundaries for this ${interface_} project. Flag concrete weaknesses and the modules the stubs should expose.` })
@@ -528,8 +562,9 @@ if (badPaths.length || dupePaths.length) {
 }
 
 // 7. Build — DAG. Skeleton/manifest first (DAG root: dirs + manifest + minimal entry that parses), THEN a
-//    parallel worker per file task (each owns a DISTINCT path -> no write race), plus tests/CI/README.
-//    Workers are Haiku: writing one stub from an explicit task is mechanical and checkable.
+//    parallel worker per file task (each owns a DISTINCT path -> no write race), plus tests/README and the
+//    scale-gated guardrails/CI workers. Workers are Haiku: writing one stub from an explicit task is
+//    mechanical and checkable.
 phase('Build')
 const stubContract =
   `STUB CONTRACT: write the file's public surface only — signatures, types/interfaces, and a header ` +
@@ -541,7 +576,7 @@ const stubContract =
 // re-invent them — prevents getThing/fetchThing drift. Verify stays the backstop.
 const sigByPath = new Map(files.map((f) => [f.path, f.publicSymbols ?? []]))
 // Three ordered barriers, not one parallel group: the file stubs assume the skeleton exists, and the
-// tests/CI/README workers assume the stubs + manifest exist (the CI/README prompts literally say so).
+// tests/guardrails/CI/README workers assume the stubs + manifest exist (their prompts literally say so).
 // Firing them all together raced those reads against the writes they depend on.
 const skeleton = await agent(
   `Create the project skeleton on disk under "${dir}" per the chosen layout: the directory structure, the ` +
@@ -572,22 +607,26 @@ const fileStubThunks = files.map((f) => () =>
   ),
 )
 const stubResults = (await parallel(fileStubThunks)).filter(Boolean)
-// Barrier 2: tests/CI/README run ONLY after the stubs + manifest are on disk (they read them).
+// Barrier 2: tests/guardrails/CI/README run ONLY after the stubs + manifest are on disk (they read them).
+// README + honest tests are always written; guardrails + CI are SCALE-GATED (no ceremony on a throwaway).
 const supportThunks = [
+  // HONEST tests (not fake-green): a passing test against a NotImplementedError stub is the canonical
+  // "all green, nothing works" stink. Emit PENDING contract tests per public symbol (xfail/todo/ignore)
+  // so the suite is red until real behavior lands, plus ONE trivial sanity test proving the runner is wired.
   () =>
     agent(
-      `The skeleton + stubs exist under "${dir}". Add a minimal but real test setup wired to the project's ` +
-        `test runner, with at least one passing smoke test against the stubs.\n\n${chosenBlock}\n` +
-        `Test command: ${decision.commands.test}`,
+      `The skeleton + stubs exist under "${dir}". Add a real test setup wired to the project's test runner. ` +
+        `Do NOT write fake-green tests: a test that passes against an unimplemented stub asserts nothing. ` +
+        `Instead, for the project's public symbols, write PENDING contract tests that NAME the intended ` +
+        `behavior but do not pass yet. CRITICAL: use ONLY a pending/skip mechanism that EXITS ZERO (the ` +
+        `runner reports them as expected-fail/skipped/todo, not as a hard failure) — pytest.mark.xfail` +
+        `(strict=True), test.todo / it.skip, #[ignore], t.Skip, etc. Do NOT write a genuinely FAILING ` +
+        `assertion: the test command must exit 0 so CI / scripts/check.sh / the Verify gate stay green ` +
+        `while the contract tests remain pending. The suite goes truly green only as real behavior is ` +
+        `implemented and the pending markers are removed. Add exactly ONE trivial test that genuinely ` +
+        `passes (e.g. asserts a constant) to prove the runner itself is wired and runnable.\n\n` +
+        `${chosenBlock}\nTest command: ${decision.commands.test}`,
       { label: 'tests', phase: 'Build', model: 'haiku' },
-    ),
-  () =>
-    agent(
-      `The manifest exists under "${dir}". Write a CI workflow (.github/workflows/ci.yml). Run ONLY the ` +
-        `non-empty commands below; skip any blank one, do not invent a command for it: ` +
-        `install="${decision.commands.install}", build="${decision.commands.build ?? ''}", ` +
-        `test="${decision.commands.test}".\n\n${chosenBlock}`,
-      { label: 'ci', phase: 'Build', model: 'haiku' },
     ),
   () =>
     agent(
@@ -597,17 +636,64 @@ const supportThunks = [
       { label: 'docs', phase: 'Build', model: 'haiku' },
     ),
 ]
+// Persistent guardrail (#4), standard+ only: convert the one-time Checks into a DURABLE check.sh +
+// formatter/linter config with the line ceiling wired as a real lint rule, so MAX_LINES fails on every
+// future commit, not just at scaffold time. production adds a pre-commit hook calling it.
+if (wantLintConfig) {
+  supportThunks.push(() =>
+    agent(
+      `The skeleton + stubs + manifest exist under "${dir}". Install a PERSISTENT guardrail layer so the ` +
+        `maintainability rules keep firing on every future commit, not just now. Write all of:\n` +
+        `1. scripts/check.sh — a single executable script that runs, in order, the stack's formatter ` +
+        `(check mode), linter, type-checker (if the language has one), and the test command ` +
+        `("${decision.commands.test}"); it exits non-zero if any step fails. Use only tools available for ` +
+        `this stack; skip a step the stack has no tool for (comment why).\n` +
+        `2. Formatter + linter config pinned for the stack, with the per-file LINE CEILING wired as an ` +
+        `actual lint rule set to ${maxLines} (eslint max-lines, ruff/flake8 equivalent, clippy threshold, ` +
+        `golangci-lint, or a tiny line-count check inside check.sh if the linter has no such rule). Also an ` +
+        `.editorconfig.\n` +
+        (wantHooks
+          ? `3. A pre-commit hook (the stack's idiomatic mechanism: husky/lefthook, pre-commit, a git hook, ` +
+            `etc.) that runs scripts/check.sh, so a failing commit is blocked locally.\n`
+          : `3. Do NOT add a pre-commit hook at this tier (${scale}); scripts/check.sh + CI are enough.\n`) +
+        `Wire nothing to network or secrets. ${maintainabilityRule}\n\n${chosenBlock}`,
+      { label: 'guardrails', phase: 'Build', model: 'haiku' },
+    ),
+  )
+}
+if (wantCI) {
+  supportThunks.push(() =>
+    agent(
+      `The manifest${wantLintConfig ? ' and scripts/check.sh' : ''} exist under "${dir}". Write a CI workflow ` +
+        `(.github/workflows/ci.yml). ` +
+        (wantLintConfig
+          ? `It should run "bash scripts/check.sh" as the single source of truth (after installing deps with ` +
+            `"${decision.commands.install}"), so CI and the local hook share one gate.`
+          : `Run ONLY the non-empty commands below; skip any blank one, do not invent a command for it: ` +
+            `install="${decision.commands.install}", build="${decision.commands.build ?? ''}", ` +
+            `test="${decision.commands.test}".`) +
+        `\n\n${chosenBlock}`,
+      { label: 'ci', phase: 'Build', model: 'haiku' },
+    ),
+  )
+}
 const supportResults = (await parallel(supportThunks)).filter(Boolean)
 
-// 8. Checks — deterministic admission of the HARD constraints (Haiku, read-only shell, NO project code run).
-//    Runs on the write path even when verify:false: wc -l vs the line ceiling, docstring/header presence per
-//    public symbol, and a smoke-test file present. Validates the < maxLines hard constraint against ACTUAL
-//    files (Tasklist only enforced it on an estimate). Free: no model judgment, just find/wc -l/grep.
+// 8. Checks — deterministic admission of the HARD constraints (Haiku). Runs on the write path even when
+//    verify:false: wc -l vs the line ceiling, docstring/header presence per public symbol, and a test file
+//    present. Validates the < maxLines hard constraint against ACTUAL files (Tasklist only enforced it on an
+//    estimate). Cheap: no model judgment, just find/wc -l/grep.
+//    SAFETY CONTRACT: file-inspection checks (1-3) execute NO project code and are fully offline. The 4th
+//    check (resolve-only dep validation) is the ONE network exception and runs only when wantResolveCheck =
+//    standard+ AND verify:true — so verify:false honors the documented "EXECUTE nothing / offline" contract.
+//    It invokes the package manager in a code-free resolve mode (--package-lock-only --ignore-scripts /
+//    --dry-run --only-binary=:all: / cargo update --dry-run) that contacts the registry to confirm every
+//    PINNED version exists but runs NO build/post-install/setup.py code. When off, Checks stays offline.
 let checks = null
 if (write) {
   phase('Checks')
   checks = await agent(
-    `Run deterministic, READ-ONLY checks on the scaffold under "${dir}". Do NOT install, build, run, or ` +
+    `Run deterministic checks on the scaffold under "${dir}". For checks 1-3 do NOT install, build, run, or ` +
       `execute any project code — only file inspection (wc -l, grep/cat). Check ONLY the authored source ` +
       `files listed below; NEVER scan node_modules, .git, dist, build, coverage, vendored, or generated ` +
       `files, and ignore lockfiles. Report one results entry per check:\n` +
@@ -615,10 +701,21 @@ if (write) {
       `with the path and count for ANY listed file at or over the ceiling.\n` +
       `2. Docstrings: each listed file's stubbed public symbols have a docstring/header comment stating ` +
       `intent (grep). status "fail" naming any file/symbol missing one.\n` +
-      `3. Smoke test: at least one non-empty test file exists in the project's own test location (NOT under ` +
+      `3. Test file: at least one non-empty test file exists in the project's own test location (NOT under ` +
       `node_modules). status "fail" if absent.\n` +
-      `Set passed=true ONLY if every check passes. step = the check name, status = pass/fail, detail = the ` +
-      `offending path(s) or "ok".\n\n` +
+      (wantResolveCheck
+        ? `4. Dependency resolution (RESOLVE-ONLY): confirm every pinned dependency version actually exists ` +
+          `and resolves, WITHOUT building or executing any package code. Use the package manager's ` +
+          `resolve/dry-run mode ONLY, and one that runs NO arbitrary package code — e.g. ` +
+          `"npm install --package-lock-only --ignore-scripts", ` +
+          `"pip install --dry-run --only-binary=:all: -r ..." (--only-binary refuses to build sdists, so no ` +
+          `setup.py runs; if a dep is sdist-only it will error — report that as "skip", do NOT drop ` +
+          `--only-binary to build it), "cargo update --dry-run", "go mod download". status "fail" naming any ` +
+          `pinned version that does not exist or cannot resolve (the classic hallucinated-version error); ` +
+          `"skip" if the stack has no such code-free resolve mode. Do NOT fall back to a full install.\n`
+        : '') +
+      `Set passed=true ONLY if every check passes. step = the check name, status = pass/fail/skip, detail = ` +
+      `the offending path(s)/version(s) or "ok".\n\n` +
       `Authored source files to check:\n${JSON.stringify(files.map((f) => f.path))}`,
     { label: 'checks', model: 'haiku', schema: VERIFY_SCHEMA },
   )
@@ -665,16 +762,28 @@ if (runVerify) {
 // 11. Write-back — an agent writes the new project's CLAUDE.md (the script can't). Records the durable
 //     decisions a future session would otherwise re-derive/re-litigate: commands, key choices + WHY,
 //     rejected alternatives, plus license/publish/API surface, pinned dep versions, and the line ceiling.
+//     Also writes the actual LICENSE file (#6): the project DOCUMENTED its license but never had the text.
 //     SONNET, not the strong model: it's the last stage, nothing propagates from it (model-routing.md).
 phase('Write-back')
+// Only emit a LICENSE file for a recognized OSS license; proprietary/none/unspecified get no file. Anchor
+// the match at a token boundary (end, version digit, or separator) so a custom license merely STARTING with
+// a known prefix ("MPL-but-modified", "GPL-with-extra-terms") does NOT trip it into writing standard text.
+const ossLicense = /^(mit|apache|bsd|gpl|lgpl|agpl|mpl|isc|unlicense|cc0?|cc-by)([-_.\s]|\d|$)/i.test(String(license).trim())
+const licenseStep = ossLicense
+  ? ` Also write the full LICENSE file at "${dir}/LICENSE" with the standard ${license} license text — but ` +
+    `ONLY if "${license}" is a recognized STANDARD license identifier; if it looks custom/modified, write a ` +
+    `short placeholder LICENSE naming it instead of inventing standard terms. Fill the year and author/owner ` +
+    `from the project context (clear placeholder if unknown). If a LICENSE file already exists, do NOT clobber it.`
+  : ` Do NOT write a LICENSE file (license is "${license}" — proprietary/none/unspecified).`
 await agent(
   `Write a lean CLAUDE.md (under ~200 lines) at "${dir}/CLAUDE.md" for the freshly scaffolded project. If a ` +
     `CLAUDE.md already exists there, do NOT clobber it — read it first and merge the new decisions in. ` +
     `Include: the build/run/test commands; the hard constraints and key architecture choices WITH rationale; ` +
     `the rejected alternatives with why; the license (${license}) and publish intent (${willPublish ? 'will publish' : 'not publishing'}); ` +
-    `the public API surface; the PINNED dependency versions with why; and the maintainability convention ` +
-    `(files under ${maxLines} lines, reuse over reinvention). Do NOT document the obvious file tree or ` +
-    `framework version.\n\n` +
+    `the public API surface; the PINNED dependency versions with why; the scale tier (${scale}); and the ` +
+    `maintainability convention (files under ${maxLines} lines, reuse over reinvention` +
+    `${wantLintConfig ? ', enforced by scripts/check.sh' : ''}). Do NOT document the obvious file tree or ` +
+    `framework version.${licenseStep}\n\n` +
     `Commands: ${JSON.stringify(decision.commands)}\n` +
     `Chosen + rationale: ${JSON.stringify({ chosen: decision.chosen, rationale: decision.rationale }, null, 2)}\n` +
     `Rejected: ${JSON.stringify(decision.rejected, null, 2)}`,
@@ -684,12 +793,13 @@ await agent(
 return {
   brief,
   dir,
+  scale,
   attempts: candidates.length,
   chosen: decision.chosen.stack,
   dependencies: decision.chosen.dependencies?.length ?? 0,
   filesPlanned: files.length,
   stubsWritten: stubResults.length,        // workers that returned (vs files.length planned)
-  supportWritten: supportResults.length,   // tests/CI/README workers that returned (of 3)
+  supportWritten: supportResults.length,   // support workers that returned (tests + README always; guardrails/CI scale-gated)
   reviewNotes: reviewNotes.length,
   rejected: decision.rejected.length,
   debated: debate && candidates.length > 1 ? rebuttals.length : false,

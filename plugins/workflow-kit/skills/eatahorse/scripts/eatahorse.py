@@ -18,10 +18,16 @@ import re
 import shutil
 import sys
 import textwrap
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+try:
+    import fcntl  # POSIX only; on Windows the board lock degrades to a no-op (single-writer as before).
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None  # type: ignore
 
 STATE_VERSION = 1
 DEFAULT_BOARD_DIR = ".eatahorse"
@@ -59,6 +65,17 @@ def coerce_status(value: Optional[str]) -> str:
     if value not in STATUSES:
         raise EatahorseError(f"Invalid status '{value}'. Use one of: {', '.join(STATUSES)}")
     return value
+
+
+def normalize_dep_id(value: str) -> str:
+    # Dep edges may be FORWARD refs at seed time (a card depending on one not created yet), so we
+    # canonicalize the id format here rather than resolve_task_id (which requires the target exist).
+    # `42` / `eh-42` -> `EH-0042`; anything else is kept verbatim (uppercased) for a later lookup.
+    value = value.strip()
+    match = SAFE_ID_RE.match(value)
+    if match:
+        return f"EH-{int(match.group('num')):04d}"
+    return value.upper()
 
 
 def find_board(start: Optional[Path] = None) -> Optional[Path]:
@@ -100,6 +117,27 @@ def atomic_write(path: Path, text: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, path)
+
+
+@contextmanager
+def board_lock(board: Path):
+    # Serialize the brief load->mutate->save commit across CONCURRENT CLI processes (what workflow
+    # agents are) so two writers can't clobber state.json. flock is advisory and per open-file-
+    # description, so this is held ONCE at the main() dispatch boundary, never nested (a second flock
+    # on a fresh fd in the same process would block itself). In-process API callers (tests) aren't
+    # serialized — the real hazard is cross-process. This is NOT the rejected per-tool autosync.
+    # ponytail: board-global lock at CLI dispatch; per-card locks only if commit throughput matters.
+    if fcntl is None:
+        yield
+        return
+    lock_path = board / ".lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
 
 
 def read_json(path: Path, default: Any = None) -> Any:
@@ -225,6 +263,9 @@ def frontmatter(task: Dict[str, Any]) -> str:
         "tags": task.get("tags", []),
         "estimate": task.get("estimate", ""),
         "source": task.get("source", "manual"),
+        # depends_on lives IN frontmatter (unlike state-only external_ids) so a hand-edited
+        # `depends_on: [EH-0001]` round-trips through sync — parse_scalar splits the list.
+        "depends_on": task.get("depends_on", []),
         "path": task.get("path", ""),
         "created_at": task.get("created_at", ""),
         "updated_at": task.get("updated_at", ""),
@@ -310,6 +351,11 @@ def parse_task_markdown(path: Path, board: Path) -> Optional[Dict[str, Any]]:
     if isinstance(tags, str):
         tags = [tag.strip() for tag in tags.split(",") if tag.strip()]
 
+    depends_on = meta.get("depends_on") or []
+    if isinstance(depends_on, str):  # bare `EH-0001` (no brackets) parses as a scalar
+        depends_on = [depends_on] if depends_on.strip() else []
+    depends_on = list(dict.fromkeys(normalize_dep_id(str(d)) for d in depends_on if str(d).strip()))  # dedup, keep order
+
     return {
         "id": task_id,
         "title": title,
@@ -319,6 +365,7 @@ def parse_task_markdown(path: Path, board: Path) -> Optional[Dict[str, Any]]:
         "tags": tags,
         "estimate": str(meta.get("estimate") or ""),
         "source": str(meta.get("source") or "manual"),
+        "depends_on": depends_on,
         "path": current_rel,
         "created_at": str(meta.get("created_at") or utc_now()),
         "updated_at": str(meta.get("updated_at") or utc_now()),
@@ -561,6 +608,7 @@ def create_task(
     estimate: str = "",
     source: str = "manual",
     external_ids: Optional[Dict[str, str]] = None,
+    depends_on: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     state = load_state(board)
     title = title.strip()
@@ -578,6 +626,7 @@ def create_task(
         "estimate": estimate or "",
         "source": source,
         "external_ids": external_ids or {},
+        "depends_on": list(dict.fromkeys(normalize_dep_id(d) for d in (depends_on or []))),  # dedup, keep order
         "description": description.strip(),
         "bites": [{"text": bite, "done": False} for bite in (bites or [])],
         "acceptance": [{"text": item, "done": False} for item in (acceptance or [])],
@@ -778,12 +827,98 @@ def list_tasks(board: Path, status: Optional[str] = None, as_json: bool = False)
         print(f"{task['id']}\t{task.get('status')}\t{task.get('priority', DEFAULT_PRIORITY)}\t{task_progress(task)}\t{task.get('title')}")
 
 
+def deps_satisfied(state: Dict[str, Any], task: Dict[str, Any]) -> bool:
+    # A card is pullable iff every upstream it depends on is done/dropped. An ABSENT dep (purged,
+    # or a forward ref that was never created) is treated SATISFIED so a stale edge can't deadlock
+    # the board; `sync` warns about danglers separately. Deps gate PULLABILITY, not doneness —
+    # apply_completion_rules is untouched, so the two-way acceptance derivation invariant holds.
+    tasks = state.get("tasks", {})
+    for dep_id in task.get("depends_on", []) or []:
+        dep = tasks.get(dep_id)
+        if dep and coerce_status(dep.get("status")) not in {"done", "dropped"}:
+            return False
+    return True
+
+
+def would_cycle(state: Dict[str, Any], src_id: str, dep_id: str) -> bool:
+    # Adding "src depends_on dep" creates a cycle iff dep already reaches src via depends_on edges.
+    if src_id == dep_id:
+        return True
+    tasks = state.get("tasks", {})
+    seen: set[str] = set()
+    stack = [dep_id]
+    while stack:
+        cur = stack.pop()
+        if cur == src_id:
+            return True
+        if cur in seen:
+            continue
+        seen.add(cur)
+        stack.extend((tasks.get(cur, {}) or {}).get("depends_on", []) or [])
+    return False
+
+
+def add_dep(board: Path, task_ref: str, dep_ref: str) -> Tuple[Dict[str, Any], str]:
+    state = load_state(board)
+    task_id = resolve_task_id(state, task_ref)
+    dep_id = resolve_task_id(state, dep_ref)  # both must exist to wire an edge
+    if would_cycle(state, task_id, dep_id):
+        raise EatahorseError(f"Refusing edge {task_id} -> {dep_id}: it would create a dependency cycle")
+    task = state["tasks"][task_id]
+    deps = task.setdefault("depends_on", [])
+    if dep_id not in deps:
+        deps.append(dep_id)
+    old_path = board / task.get("path", "") if task.get("path") else None
+    remember(state, "dep-add", {"id": task_id, "on": dep_id})
+    update_and_write_task(board, state, task, old_path=old_path)
+    append_activity(board, "dep-add", {"id": task_id, "on": dep_id})
+    return task, dep_id  # return the RESOLVED id so callers echo the stored edge, not the raw arg
+
+
+def remove_dep(board: Path, task_ref: str, dep_ref: str) -> Tuple[Dict[str, Any], str]:
+    state = load_state(board)
+    task_id = resolve_task_id(state, task_ref)
+    # Resolve the dep the SAME way add_dep stored it (resolve_task_id handles a title or bare-number ref),
+    # so a dep added by title can be removed by title. Fall back to normalize_dep_id only when the target no
+    # longer exists (a dangling edge to a purged card), which we still want to be able to unlink.
+    try:
+        dep_id = resolve_task_id(state, dep_ref)
+    except EatahorseError:
+        dep_id = normalize_dep_id(dep_ref)
+    task = state["tasks"][task_id]
+    deps = task.get("depends_on") or []
+    task["depends_on"] = [d for d in deps if d != dep_id]
+    old_path = board / task.get("path", "") if task.get("path") else None
+    remember(state, "dep-rm", {"id": task_id, "on": dep_id})
+    update_and_write_task(board, state, task, old_path=old_path)
+    append_activity(board, "dep-rm", {"id": task_id, "on": dep_id})
+    return task, dep_id
+
+
+def show_deps(board: Path, task_ref: str, as_json: bool = False) -> Dict[str, Any]:
+    state = load_state(board)
+    task_id = resolve_task_id(state, task_ref)
+    upstream = list(state["tasks"][task_id].get("depends_on") or [])
+    downstream = [tid for tid, t in state["tasks"].items() if task_id in (t.get("depends_on") or [])]
+    payload = {"id": task_id, "depends_on": upstream, "blocks": sorted(downstream)}
+    if as_json:
+        print(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True))
+    else:
+        print(f"{task_id}")
+        print(f"  depends_on (blocks it): {', '.join(upstream) or '-'}")
+        print(f"  blocks (downstream):    {', '.join(payload['blocks']) or '-'}")
+    return payload
+
+
 def next_task(board: Path, as_json: bool = False) -> Optional[Dict[str, Any]]:
     state = load_state(board)
     # blocked is excluded: a deliberately-parked card must be unblocked with `move <id> ready`,
     # never auto-picked as last resort.
     for status in ["doing", "ready", "backlog"]:
-        candidates = [task for task in state["tasks"].values() if coerce_status(task.get("status")) == status]
+        candidates = [
+            task for task in state["tasks"].values()
+            if coerce_status(task.get("status")) == status and deps_satisfied(state, task)
+        ]
         candidates.sort(key=lambda t: (str(t.get("priority", "P9")), str(t.get("id"))))
         if candidates:
             task = candidates[0]
@@ -851,6 +986,14 @@ def sync_board(board: Path, quiet: bool = False) -> Dict[str, Any]:
     if nums:
         state["next_id"] = max(int(state.get("next_id", 1)), max(nums) + 1)
 
+    # Dangling deps: an edge pointing at a card that no longer exists. deps_satisfied treats these
+    # as satisfied so the board can't deadlock, but a hand-edit pointing at a typo is worth flagging.
+    dangling: List[str] = []
+    for tid, task in state["tasks"].items():
+        for dep_id in task.get("depends_on") or []:
+            if dep_id not in state["tasks"]:
+                dangling.append(f"{tid} -> {dep_id}")
+
     save_state(board, state)
     write_board_file(board, state)
     summary = {
@@ -860,11 +1003,14 @@ def sync_board(board: Path, quiet: bool = False) -> Dict[str, Any]:
         "moved": moved,
         "completed": completed,
         "dropped_missing": dropped_missing,
+        "dangling_deps": len(dangling),
         "tasks": len(state["tasks"]),
     }
     append_activity(board, "sync", summary)
     if not quiet:
         print(json.dumps(summary, indent=2, sort_keys=True))
+        if dangling:
+            print(f"warning: {len(dangling)} dangling dependency edge(s): {', '.join(sorted(dangling))}", file=sys.stderr)
     return summary
 
 
@@ -985,6 +1131,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tag", action="append", default=[])
     p.add_argument("--estimate", default="")
     p.add_argument("--external-id", action="append", default=[], help="External id as namespace:value")
+    p.add_argument("--depends-on", action="append", default=[], help="Upstream card id this depends on. Repeat or separate with semicolons.")
     p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("list", help="List tasks")
@@ -1031,6 +1178,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--group", choices=["bites", "acceptance"], default="bites")
     p.add_argument("--json", action="store_true")
 
+    # Flat dep verbs (dep-add/dep-rm/deps) match the existing add-bite style rather than a nested
+    # `dep add`. depends_on edges order port cards within ONE board; cross-board links stay external_ids.
+    p = sub.add_parser("dep-add", help="Add a dependency edge (rejects cycles)")
+    p.add_argument("task")
+    p.add_argument("--on", required=True, help="Upstream card id this task depends on")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("dep-rm", help="Remove a dependency edge")
+    p.add_argument("task")
+    p.add_argument("--on", required=True, help="Upstream card id to unlink")
+    p.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("deps", help="Show a task's upstream + downstream dependencies")
+    p.add_argument("task")
+    p.add_argument("--json", action="store_true")
+
     p = sub.add_parser("remove", help="Drop or purge a task")
     p.add_argument("task")
     p.add_argument("--purge", action="store_true", help="Remove from state and delete markdown file")
@@ -1071,57 +1234,69 @@ def main(argv: Optional[List[str]] = None) -> int:
 
         board = resolve_board(args.board, require=True)
 
-        if args.command == "add":
-            task = create_task(
-                board,
-                title=args.title,
-                description=args.description,
-                bites=split_lines(args.bite),
-                acceptance=split_lines(args.accept),
-                status=args.status,
-                priority=args.priority,
-                owner=args.owner,
-                tags=args.tag,
-                estimate=args.estimate,
-                external_ids=external_ids_from_args(args.external_id),
-            )
-            print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Added {task['id']}: {task['title']}")
-        elif args.command == "list":
-            list_tasks(board, status=args.status, as_json=args.json)
-        elif args.command == "show":
-            state = load_state(board)
-            task_id = resolve_task_id(state, args.task)
-            task = state["tasks"][task_id]
-            print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else "", end="")
-            if not args.json:
-                print_task(task, board)
-        elif args.command == "next":
-            next_task(board, as_json=args.json)
-        elif args.command == "move":
-            task = move_task(board, args.task, args.status)
-            print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Moved {task['id']} to {task['status']}")
-        elif args.command == "done":
-            task = complete_task(board, args.task, note=args.note)
-            print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Done {task['id']}: {task['title']}")
-        elif args.command == "reopen":
-            task = reopen_task(board, args.task, gap=args.gap)
-            print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Reopened {task['id']} -> {task['status']}")
-        elif args.command == "bite":
-            task = set_checkbox(board, args.task, args.index, done=not args.open, group=args.group)
-            print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Updated {args.group} {args.index} on {task['id']}")
-        elif args.command == "add-bite":
-            task = add_bite(board, args.task, args.text, group=args.group)
-            print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Added {args.group[:-1]} to {task['id']}")
-        elif args.command == "remove":
-            task = remove_task(board, args.task, purge=args.purge)
-            action = "Purged" if args.purge else "Dropped"
-            print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"{action} {task['id']}: {task.get('title')}")
-        elif args.command == "sync":
-            sync_board(board, quiet=args.quiet)
-        elif args.command == "report":
-            report(board, as_json=args.json)
-        else:
-            parser.error(f"Unknown command: {args.command}")
+        # One board-global lock for the whole dispatch: serializes concurrent CLI writers without
+        # nesting (each command's own load->mutate->save runs inside this single held lock).
+        with board_lock(board):
+            if args.command == "add":
+                task = create_task(
+                    board,
+                    title=args.title,
+                    description=args.description,
+                    bites=split_lines(args.bite),
+                    acceptance=split_lines(args.accept),
+                    status=args.status,
+                    priority=args.priority,
+                    owner=args.owner,
+                    tags=args.tag,
+                    estimate=args.estimate,
+                    external_ids=external_ids_from_args(args.external_id),
+                    depends_on=split_lines(args.depends_on),
+                )
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Added {task['id']}: {task['title']}")
+            elif args.command == "list":
+                list_tasks(board, status=args.status, as_json=args.json)
+            elif args.command == "show":
+                state = load_state(board)
+                task_id = resolve_task_id(state, args.task)
+                task = state["tasks"][task_id]
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else "", end="")
+                if not args.json:
+                    print_task(task, board)
+            elif args.command == "next":
+                next_task(board, as_json=args.json)
+            elif args.command == "move":
+                task = move_task(board, args.task, args.status)
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Moved {task['id']} to {task['status']}")
+            elif args.command == "done":
+                task = complete_task(board, args.task, note=args.note)
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Done {task['id']}: {task['title']}")
+            elif args.command == "reopen":
+                task = reopen_task(board, args.task, gap=args.gap)
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Reopened {task['id']} -> {task['status']}")
+            elif args.command == "bite":
+                task = set_checkbox(board, args.task, args.index, done=not args.open, group=args.group)
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Updated {args.group} {args.index} on {task['id']}")
+            elif args.command == "add-bite":
+                task = add_bite(board, args.task, args.text, group=args.group)
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"Added {args.group[:-1]} to {task['id']}")
+            elif args.command == "dep-add":
+                task, dep_id = add_dep(board, args.task, args.on)
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"{task['id']} now depends on {dep_id}")
+            elif args.command == "dep-rm":
+                task, dep_id = remove_dep(board, args.task, args.on)
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"{task['id']} no longer depends on {dep_id}")
+            elif args.command == "deps":
+                show_deps(board, args.task, as_json=args.json)
+            elif args.command == "remove":
+                task = remove_task(board, args.task, purge=args.purge)
+                action = "Purged" if args.purge else "Dropped"
+                print(json.dumps(task, indent=2, ensure_ascii=False, sort_keys=True) if args.json else f"{action} {task['id']}: {task.get('title')}")
+            elif args.command == "sync":
+                sync_board(board, quiet=args.quiet)
+            elif args.command == "report":
+                report(board, as_json=args.json)
+            else:
+                parser.error(f"Unknown command: {args.command}")
         return 0
     except EatahorseError as exc:
         print(f"eatahorse: {exc}", file=sys.stderr)

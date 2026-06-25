@@ -7,6 +7,9 @@ import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+const execFileP = promisify(execFile)
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const SKILLS_DIR = path.join(ROOT, 'plugins', 'workflow-kit', 'skills')
@@ -23,7 +26,8 @@ const flag = (name) => {
 }
 const has = (name) => argv.includes(`--${name}`)
 const parseList = (s) => s.split(',').map((x) => x.trim()).filter(Boolean)
-const NO_TTY = 'no TTY: pass --workflow <name> or --all (optionally --scope user|project).'
+const NO_TTY =
+  'no TTY: pass --workflow <name> or --all (optionally --scope user|project, or --silo <id> for a ccsilo silo).'
 
 async function loadManifest() {
   const raw = await readFile(path.join(ROOT, 'installer', 'manifest.json'), 'utf8')
@@ -144,6 +148,46 @@ const REL = (scopeRoot, p) => path.relative(scopeRoot, p).split(path.sep).join('
 const resolveScope = (scope) =>
   scope === 'project' ? path.join(process.cwd(), '.claude') : path.join(homedir(), '.claude')
 
+// --- ccsilo target ------------------------------------------------------
+// A "silo" is one of ccsilo's managed Claude Code variants. Its paths.configDir is an absolute
+// dir that IS that silo's CLAUDE_CONFIG_DIR (the .claude equivalent), so it works as a scopeRoot.
+
+// Pure: parse `ccsilo variant list --json` stdout into {id,name,provider,configDir}[].
+// Drops entries lacking a configDir; returns [] on parse error (callers treat that as "no silos").
+export function parseSilos(stdout) {
+  let arr
+  try {
+    arr = JSON.parse(stdout)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(arr)) return []
+  return arr
+    .map((v) => ({
+      id: v?.id,
+      name: v?.name ?? v?.id,
+      provider: v?.provider?.label ?? v?.provider?.key,
+      configDir: v?.paths?.configDir,
+    }))
+    .filter((s) => s.id && s.configDir)
+}
+
+export function resolveSilo(silos, id) {
+  return silos.find((s) => s.id === id)
+}
+
+// Enumerate silos by shelling out to ccsilo. Returns [] when ccsilo isn't on PATH (ENOENT),
+// exits non-zero, or reports no silos. ponytail: shell-out is the authoritative source; add a
+// filesystem workspace scan only if a PATH-less ccsilo install becomes a real need.
+async function ccsiloSilos() {
+  try {
+    const { stdout } = await execFileP('ccsilo', ['variant', 'list', '--json'])
+    return parseSilos(stdout)
+  } catch {
+    return []
+  }
+}
+
 // --- install ------------------------------------------------------------
 export async function install(chosen, scopeRoot, force) {
   const receipt = await readReceipt(scopeRoot)
@@ -254,6 +298,7 @@ async function main() {
 
   const verb = ['install', 'uninstall'].includes(argv[0]) ? argv[0] : null
   const scope = flag('scope')
+  const silo = flag('silo') // ccsilo silo id; takes precedence over --scope when set
   const force = has('force')
   const all = has('all')
 
@@ -277,13 +322,60 @@ async function main() {
   }
   action = action ?? 'install'
 
-  if (action === 'uninstall') return runUninstall(workflows, scope, all)
-  return runInstall(workflows, scope, force, all)
+  if (action === 'uninstall') return runUninstall(workflows, scope, silo, all)
+  return runInstall(workflows, scope, silo, force, all)
 }
 
-async function runInstall(workflows, scopeArg, force, all) {
+// Resolve the install/uninstall destination as { scopeRoot, label, removeArgs }.
+// --silo wins over --scope. With a clack module `p` and a TTY (and no flag), it prompts for the
+// target and, if ccsilo is chosen, the silo. Returns null only when the user cancels a prompt.
+async function resolveTarget(scopeArg, siloArg, p) {
+  if (siloArg) {
+    const silos = await ccsiloSilos()
+    if (!silos.length) {
+      console.error('no ccsilo silos found (is ccsilo installed and on PATH?).')
+      process.exit(1)
+    }
+    const s = resolveSilo(silos, siloArg)
+    if (!s) {
+      console.error(`unknown silo: ${siloArg} (known: ${silos.map((x) => x.id).join(', ')})`)
+      process.exit(1)
+    }
+    return { scopeRoot: s.configDir, label: `ccsilo:${s.id}`, removeArgs: `--silo ${s.id}` }
+  }
+  if (scopeArg) {
+    return { scopeRoot: resolveScope(scopeArg), label: scopeArg, removeArgs: `--scope ${scopeArg}` }
+  }
+  if (!p || !process.stdin.isTTY) {
+    return { scopeRoot: resolveScope('user'), label: 'user', removeArgs: '--scope user' }
+  }
+  const silos = await ccsiloSilos()
+  const opts = [
+    { value: 'user', label: 'Claude Code (user)', hint: '~/.claude (all your projects)' },
+    { value: 'project', label: 'Claude Code (project)', hint: './.claude (this repo only)' },
+  ]
+  if (silos.length) opts.push({ value: 'ccsilo', label: 'ccsilo silo', hint: `${silos.length} detected` })
+  const target = await p.select({ message: 'Target:', options: opts })
+  if (p.isCancel(target)) return null
+  if (target !== 'ccsilo') {
+    return { scopeRoot: resolveScope(target), label: target, removeArgs: `--scope ${target}` }
+  }
+  const id = await p.select({
+    message: 'Pick a silo:',
+    options: silos.map((s) => ({
+      value: s.id,
+      label: s.name,
+      hint: [s.provider, s.configDir].filter(Boolean).join(' · '),
+    })),
+  })
+  if (p.isCancel(id)) return null
+  const s = resolveSilo(silos, id)
+  return { scopeRoot: s.configDir, label: `ccsilo:${s.id}`, removeArgs: `--silo ${s.id}` }
+}
+
+async function runInstall(workflows, scopeArg, siloArg, force, all) {
   let chosen
-  let scope = scopeArg
+  let target
   const wfArg = flag('workflow')
 
   if (all) {
@@ -298,13 +390,18 @@ async function runInstall(workflows, scopeArg, force, all) {
     }
   }
 
-  if (!chosen) {
+  if (chosen) {
+    // Flag path: no prompts; resolve the target from flags (default: user scope).
+    target = await resolveTarget(scopeArg, siloArg)
+  } else {
     if (!process.stdin.isTTY) {
       console.error(NO_TTY)
       process.exit(1)
     }
     const p = await import('@clack/prompts')
     p.intro('rabbit-flows · install')
+    target = await resolveTarget(scopeArg, siloArg, p) // target first, then a silo if chosen
+    if (!target) return p.cancel('cancelled')
     const picked = await p.multiselect({
       message: 'Pick workflows to install (their skills/agents come along):',
       options: workflows.map((w) => ({ value: w.name, label: w.name, hint: w.description })),
@@ -312,25 +409,13 @@ async function runInstall(workflows, scopeArg, force, all) {
     })
     if (p.isCancel(picked)) return p.cancel('cancelled')
     chosen = workflows.filter((w) => picked.includes(w.name))
-
-    if (!scope) {
-      scope = await p.select({
-        message: 'Install scope:',
-        options: [
-          { value: 'user', label: 'user', hint: '~/.claude (all your projects)' },
-          { value: 'project', label: 'project', hint: './.claude (this repo only)' },
-        ],
-      })
-      if (p.isCancel(scope)) return p.cancel('cancelled')
-    }
     p.outro('installing...')
   }
 
-  scope = scope ?? 'user'
-  const scopeRoot = resolveScope(scope)
+  const { scopeRoot, label, removeArgs } = target
 
   const results = await install(chosen, scopeRoot, force)
-  console.log(`\nInstalled to ${scopeRoot} (${scope} scope):`)
+  console.log(`\nInstalled to ${scopeRoot} (${label}):`)
   for (const [status, where] of results) {
     console.log(`  ${status === 'copied' ? '+' : '.'} ${status}  ${where}`)
   }
@@ -341,37 +426,44 @@ async function runInstall(workflows, scopeArg, force, all) {
     `\nNext: enable "Dynamic workflows" in /config (off by default on Pro),\n` +
       `then run a workflow by name, e.g. /${chosen[0].name}.\n` +
       `Installed: ${chosen.map((w) => w.name).join(', ')}\n` +
-      `Remove later: rabbit-flows uninstall --scope ${scope} (--all for everything).`,
+      `Remove later: rabbit-flows uninstall ${removeArgs} (--all for everything).`,
   )
 }
 
-async function runUninstall(workflows, scopeArg, all) {
-  const scope = scopeArg ?? 'user'
-  const scopeRoot = resolveScope(scope)
+async function runUninstall(workflows, scopeArg, siloArg, all) {
+  const wfArg = flag('workflow')
+  const interactive = !all && !wfArg
+  let p
+  if (interactive) {
+    if (!process.stdin.isTTY) {
+      console.error(NO_TTY)
+      process.exit(1)
+    }
+    p = await import('@clack/prompts')
+    p.intro('rabbit-flows · uninstall')
+  }
+
+  const target = await resolveTarget(scopeArg, siloArg, p) // target first, then a silo if chosen
+  if (!target) return p.cancel('cancelled')
+  const { scopeRoot, label } = target
+
   const receipt = await readReceipt(scopeRoot)
   if (isEmptyReceipt(receipt)) {
-    console.log(`Nothing installed by rabbit-flows in ${scopeRoot} (${scope} scope).`)
+    console.log(`Nothing installed by rabbit-flows in ${scopeRoot} (${label}).`)
     return
   }
 
   let chosenNames
-  const wfArg = flag('workflow')
   if (all) {
     chosenNames = receipt.workflows.slice()
   } else if (wfArg) {
     chosenNames = parseList(wfArg)
     const unknown = chosenNames.filter((n) => !receipt.workflows.includes(n))
     if (unknown.length) {
-      console.error(`not installed in ${scope} scope: ${unknown.join(', ')}`)
+      console.error(`not installed in ${label}: ${unknown.join(', ')}`)
       process.exit(1)
     }
   } else {
-    if (!process.stdin.isTTY) {
-      console.error(NO_TTY)
-      process.exit(1)
-    }
-    const p = await import('@clack/prompts')
-    p.intro('rabbit-flows · uninstall')
     const picked = await p.multiselect({
       message: 'Pick workflows to uninstall (shared skills are kept if still needed):',
       options: receipt.workflows.map((n) => ({ value: n, label: n })),
@@ -383,7 +475,7 @@ async function runUninstall(workflows, scopeArg, all) {
   }
 
   const res = await uninstall(chosenNames, scopeRoot, workflows, all)
-  console.log(`\nUninstalled from ${scopeRoot} (${scope} scope):`)
+  console.log(`\nUninstalled from ${scopeRoot} (${label}):`)
   for (const [status, where] of res.done) {
     console.log(`  ${status === 'restored' ? '~' : '-'} ${status}  ${where}`)
   }

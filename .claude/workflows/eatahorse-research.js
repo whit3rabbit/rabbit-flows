@@ -35,6 +35,10 @@
 //   maxRounds (default 3), maxTokens (per-run OUTPUT-token ceiling, default none — independent of the
 //   platform "+500k" turn directive; more restrictive of the two wins), budgetFloor (stop opening rounds
 //   below this many remaining tokens, default 50000), out (report path), scriptPath (eatahorse.py).
+//   extract: 'port' makes each per-file worker ALSO emit a structured JSON block (exports/deps/...) in its
+//     card Notes, and adds a Graph phase that folds those into a cross-file inventory.json — the
+//     comprehension artifact a grounded `eatahorse` port/execute run reads instead of planning blind.
+//   inventory: where to write inventory.json in port mode (default: <out> with a .inventory.json suffix).
 //
 // requires-skills: eatahorse
 //   (Bundling only. The eatahorse CLI surface is distilled INLINE as CMD/cli() and sliced per-agent into the
@@ -55,6 +59,7 @@ export const meta = {
     { title: 'Research' },
     { title: 'Gate' },
     { title: 'Gather' },
+    { title: 'Graph' },
     { title: 'Synthesize' },
     { title: 'Write-back' },
   ],
@@ -143,6 +148,21 @@ const GATE_SCHEMA = {
   },
 }
 
+// Graph (port mode only): summary of the inventory.json the Graph agent writes. The full inventory lives
+// on disk (the artifact); this is just what the run logs/returns.
+const GRAPH_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['unitCount', 'layerCount', 'inventoryPath'],
+  properties: {
+    unitCount: { type: 'integer' },   // units with a parseable extraction block
+    layerCount: { type: 'integer' },  // max dependency layer + 1 (P00..P0N band count)
+    cycles: { type: 'array', items: { type: 'array', items: { type: 'string' } } }, // SCCs flagged, not dropped
+    entryPoints: { type: 'array', items: { type: 'string' } },
+    inventoryPath: { type: 'string' },
+  },
+}
+
 // ---- args ----
 const root = typeof args === 'string' ? args : args?.root ?? '.'
 const question = args?.question ?? 'Summarize what each file does and flag anything notable.'
@@ -153,6 +173,19 @@ const workerModel = args?.workerModel ?? 'haiku'
 const maxRounds = Math.min(args?.maxRounds ?? 3, 10)
 const out = args?.out ?? 'eatahorse-research.md'
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
+// Port-comprehension mode: structured per-file extraction + a cross-file inventory.json for a later port.
+const extract = args?.extract ?? '' // '' = prose only (default); 'port' = also emit the structured block + Graph phase
+const inventory = args?.inventory ?? out.replace(/\.md$/i, '') + '.inventory.json'
+// EH-PORT-17: deterministic topo/layer/cycle pass. The Graph agent EXTRACTS edges; this stdlib helper
+// (sibling of eatahorse.py) computes topoOrder/layers/cycles by Kahn so ordering is reproducible, not a
+// judgment call — and cheap to re-run as each comprehension lands (the incremental inventory updater).
+const invBuilder = args?.invBuilder ?? (
+  // For a non-standard scriptPath not ending in eatahorse.py, swap the final path segment so invBuilder
+  // points at a real sibling instead of silently reusing scriptPath itself (the wrong binary).
+  /eatahorse\.py$/.test(scriptPath)
+    ? scriptPath.replace(/eatahorse\.py$/, 'build_inventory.py')
+    : scriptPath.replace(/[^/\\]*$/, 'build_inventory.py')
+)
 // Per-run OUTPUT-token ceiling, independent of the platform "+500k" turn directive (which args cannot
 // set). null = no extra ceiling; the platform budget still applies. budgetFloor was the hardcoded floor.
 const maxTokens = args?.maxTokens ?? null
@@ -189,6 +222,21 @@ const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('
 const CARD_MD =
   `Card markdown: a "## Notes" section + checkbox sections "## One-bite-at-a-time plan" and ` +
   `"## Acceptance checks" with "- [ ]"/"- [x]" items. Tick ALL boxes to auto-complete the card on sync.`
+// Port-mode extraction: an extra worker step that appends a machine-readable record to "## Notes" so the
+// Graph phase can build a cross-file inventory. The block lives in the freeform Notes (no schema/CLI change);
+// the Gather/synthesis path still reads the prose. Empty string = prose-only (default).
+const EXTRACT_BLOCK =
+  extract === 'port'
+    ? `3. ALSO append, at the END of "## Notes", a fenced \`\`\`json code block with EXACTLY this shape, for a ` +
+      `later code port:\n` +
+      `   {"path":"<this file's repo-relative path>","exports":[{"name":"<symbol>","signature":"<sig or type>",` +
+      `"kind":"function|class|const|type"}],"deps":["<repo-relative paths of OTHER files IN THIS REPO it ` +
+      `imports/calls>"],"externalDeps":["<third-party package names>"],"sideEffects":"<io/network/global ` +
+      `state, or none>","entryPoint":<true|false>,"behavior":"<one-line summary>"}\n` +
+      `   Rules: use [] for empty lists; "deps" are INTRA-repo only (paths under the researched root), never ` +
+      `stdlib/third-party (those go in externalDeps); the "path" must equal this card's title. If the file is ` +
+      `unreadable/binary, still emit the block with empty lists and behavior:"unreadable".\n`
+    : ''
 
 // 1. Enumerate — haiku, mechanical. List the files to research. Script can't touch the FS.
 phase('Enumerate')
@@ -278,6 +326,8 @@ while (pending.length && round < maxRounds && tokensLeft() > budgetFloor) {
           `file:area. If the file is unreadable/binary/irrelevant, say so in one line (that is a valid result).\n` +
           `2. Tick EVERY checkbox in the "## One-bite-at-a-time plan" and "## Acceptance checks" sections ` +
           `(change "- [ ]" to "- [x]"). Ticking the acceptance is what marks the card done on the next sync.\n` +
+          // Port mode adds a structured-extraction step 3; empty string in prose-only mode.
+          EXTRACT_BLOCK +
           `Leave the frontmatter and other sections intact.\n\n` +
           // Worker runs no CLI (concurrency-safety invariant): give it ONLY the card layout, not the command surface.
           `Card markdown layout:\n${CARD_MD}`,
@@ -372,6 +422,48 @@ const gatherResults = await parallel(
 )
 const gathered = gatherResults.filter(Boolean).flatMap((g) => g.notes ?? [])
 
+// 6a-bis. Graph (port mode only) — opus. Fold each done card's structured extraction block into a
+//   cross-file inventory.json: API surface, INTRA-repo dependency edges, a dependency-ordered topoOrder,
+//   and any cycles (flagged, never dropped). This is the comprehension artifact a grounded `eatahorse`
+//   port/execute run reads instead of planning blind. The Graph agent writes the file itself (it runs
+//   alone between Gather and Synthesize — no concurrency, and it writes a NEW file, not board state).
+//   EH-PORT-17: the agent EXTRACTS the per-unit records + edges, then a deterministic stdlib Kahn pass
+//   (build_inventory.py) computes topoOrder/layers/cycles — ordering is reproducible, not an agent's
+//   judgment, and re-running it after a fold is the cheap incremental updater. The agent still owns the
+//   FS writes (the script has none): it runs the builder and writes the merged inventory.json itself.
+let inventoryWritten = null
+if (extract === 'port') {
+  phase('Graph')
+  inventoryWritten = await agent(
+    `Build a cross-file inventory for a future code port, from the research board at "${board}". The ` +
+      `dependency ORDER is computed for you by a deterministic helper — do NOT topo-sort by hand.\n` +
+      `1. \`list --status done --json\` for the done card ids, then \`show <id> --json\` (in batches) and read ` +
+      `each card's "notes". Every card whose Notes contains a fenced \`\`\`json block carries one unit record ` +
+      `{path, exports, deps, externalDeps, sideEffects, entryPoint, behavior}. Parse them ALL; ignore cards ` +
+      `with no block.\n` +
+      `2. Build the units array: {"path","apiSurface"(=exports),"deps"(INTRA-repo only: the unit's deps that ` +
+      `are themselves unit paths),"externalDeps","entryPoint","behavior"}.\n` +
+      `3. Compute order DETERMINISTICALLY: write the units to a temp file and run ` +
+      `\`python3 "${invBuilder}" <tmp.json>\` (it reads {"units":[{path,deps}]} and prints ` +
+      `{"topoOrder","layers","cycles"} via a Kahn pass; leaves are layer 0, cycles are flagged as SCCs and ` +
+      `kept in topoOrder, external deps are ignored). If the helper is absent, fall back to sorting by hand ` +
+      `(leaf-first) and note it.\n` +
+      `4. Merge the helper output: set each unit's "layer" from its "layers" map, and assemble ` +
+      `{"units":[...],"topoOrder":[...from helper],"cycles":[...from helper],"invariants":["<cross-cutting ` +
+      `fact: shared type, config, entry point>"...],"entryPoints":["<path>"...]}.\n` +
+      `5. WRITE the inventory as pretty-printed JSON to "${inventory}" (overwrite; it is a generated artifact).\n` +
+      `Return unitCount, layerCount (max layer + 1), cycles, entryPoints, and inventoryPath="${inventory}".\n\n` +
+      `${cli('list', 'show')}`,
+    { label: 'graph', schema: GRAPH_SCHEMA },
+  )
+  if (inventoryWritten)
+    log(
+      `inventory: ${inventoryWritten.unitCount} unit(s), ${inventoryWritten.layerCount} layer(s)` +
+        (inventoryWritten.cycles?.length ? `, ${inventoryWritten.cycles.length} cycle(s)` : '') +
+        ` -> ${inventory}`,
+    )
+}
+
 // 6b. Synthesize — opus, from the notes gathered off the durable board.
 phase('Synthesize')
 const report = await agent(
@@ -414,5 +506,8 @@ return {
   activeRemaining,
   stopReason,
   report: out,
+  extract: extract || undefined,
+  inventory: extract === 'port' ? inventory : undefined,
+  inventoryUnits: inventoryWritten?.unitCount ?? null,
   written: true,
 }

@@ -17,14 +17,20 @@ Artifacts: `scaffold-out/` can be safely git ignored unless the user wants the g
    word, ask the user what they are building in one plain question.
 
 2. **Run the discussion.** Collect the fields below. Use `AskUserQuestion` for the multiple-choice
-   ones (batch them — max 4 questions per call, so ~2 calls); ask the free-text ones plainly. Offer
-   sensible defaults so the user can skip — a one-liner brief must still be runnable. Do NOT
-   interrogate: if the user says "just pick sensible defaults", stop asking and use them.
+   ones (batch them — **max 4 questions per call**, so split the choice questions below across ~2-3
+   calls; do NOT cram more than 4 into one call); ask the free-text ones plainly. Offer sensible
+   defaults so the user can skip — a one-liner brief must still be runnable. Do NOT interrogate: if
+   the user says "just pick sensible defaults", stop asking and use them.
 
-   AskUserQuestion batch A:
+   AskUserQuestion batch A (pick any 4; push the rest to a follow-up call):
    - **interface**: cli · tui · gui · library · service
    - **language**: (offer the obvious candidates for the brief; "you pick" is a valid answer)
    - **targetOS**: macOS · Linux · Windows · cross-platform (multi-select)
+   - **scale**: the one question that dials the whole run — is this a throwaway (`prototype`), a tool
+     you'll maintain (`standard`, the default), or a foundation others build on (`production`)? It
+     right-sizes the scaffold: `prototype` skips CI/hooks/lint config and uses a tighter line ceiling;
+     `standard` adds a durable `scripts/check.sh` + lint config + CI; `production` also adds a pre-commit
+     hook. Over-building a throwaway is itself a kind of stink, so don't default high.
    - **frontend / backend**: does it involve a frontend, a backend, both, or neither. Map the answer
      to two real booleans in `args` (never pass the raw enum string): frontend →
      `frontend:true, backend:false`; backend → `frontend:false, backend:true`; both → both `true`;
@@ -57,12 +63,13 @@ Artifacts: `scaffold-out/` can be safely git ignored unless the user wants the g
    ```
    Workflow({ name: "scaffold", args: {
      brief, language, interface, targetOS,            // targetOS is an array
+     scale,                                           // prototype | standard (default) | production
      frontend, backend, license, publish, apiSurface,
      priorArt, deps,
      // optional knobs the user may set:
      // attempts (blind architecture attempts, default 2 — bump for contested briefs),
      // debate (true = one blind rebuttal round before Decide, default off),
-     // maxFileLines (per-file ceiling, default 400),
+     // maxFileLines (per-file ceiling; default 250 for prototype, else 400),
      // write (false = dry run, decide-only, writes nothing),
      // verify (false = write but do not execute install/build/test),
      // polish (true = add a Sonnet once-over after build),
@@ -76,15 +83,17 @@ Artifacts: `scaffold-out/` can be safely git ignored unless the user wants the g
 
 ## Defaults (when the user skips a field)
 
-interface=unspecified · language="best fit" · targetOS=cross-platform · license=unspecified ·
-publish=false · apiSurface=none · frontend/backend inferred from interface (gui→frontend,
-service→backend) · attempts=2 · debate=false · maxFileLines=400 · write=true · verify=false ·
-polish=false · dir=./scaffold-out.
+interface=unspecified · language="best fit" · targetOS=cross-platform · scale=standard ·
+license=unspecified · publish=false · apiSurface=none · frontend/backend inferred from interface
+(gui→frontend, service→backend) · attempts=2 · debate=false · maxFileLines=250 (prototype) / 400
+(standard, production) · write=true · verify=false · polish=false · dir=./scaffold-out.
 
 ## Notes
 
 - The workflow enforces a maintainability contract: well-maintained libraries over reinvention, design
-  for reuse, every source file under `maxFileLines` (default 400) — oversized modules get split.
+  for reuse, every source file under `maxFileLines` (default 400, or 250 for `scale:prototype`) —
+  oversized modules get split. At `scale:standard`+ the contract is made durable as `scripts/check.sh`
+  + lint config + CI, not just a one-time scaffold-time check; `production` adds a pre-commit hook.
 - For a high-stakes or unfamiliar stack, suggest a **dry run first**: `write:false` returns the
   architecture decision (and dependency research) without writing anything, so the user can review the
   stack before files are created.

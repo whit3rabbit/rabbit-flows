@@ -48,6 +48,27 @@
 //                  decompose + worker + completion gate (the gate reopens a card that violates one) and
 //                  persisted to CLAUDE.md. Run-level, NOT a card field — closes the "satisfied acceptance
 //                  but regressed something the card never mentioned" hole. Default none.
+//   grounding      path to an inventory.json (from `eatahorse-research` with extract:'port'). When set,
+//                  PORT MODE: decompose READS the inventory and seeds one card per source unit in
+//                  dependency order (priority = topo band P00=leaf), instead of planning blind from the
+//                  goal string. The other port knobs shape the target. Default '' (plan from goal).
+//   targetLang/targetDir/preserveApi/testCmd  port target language, output dir, public API to keep stable,
+//                  and the proving command. testCmd also auto-appends "<testCmd> stays green" + "project
+//                  compiles" to constraints, so the completion gate enforces them as run invariants.
+//   verifyEquivalence:false  PORT MODE opt-in. After the loop, differentially verify each ported unit
+//                  (source-as-oracle vs target) via the bundled diff_test.py, write a graded `equivalence`
+//                  record into the card Notes, and REOPEN any card whose outputs diverged. Heavier than the
+//                  per-card gate (needs both toolchains + a source oracle live in the sandbox), hence a
+//                  separate phase. harnessPath overrides the diff_test.py path; srcRunner/tgtRunner are the
+//                  per-unit oracle command TEMPLATES (stdin JSON -> stdout JSON). No proof: differential is
+//                  empirical; smt/bounded-mc are labeled-only, not implemented.
+//
+// NOTED DEVIATION (PORT MODE): grounded decompose reads a FILE (the inventory) via an agent — the script
+//   has no FS. Dependency ordering is now a FIRST-CLASS DAG (v2/EH-PORT-10..12): each port card declares
+//   `dependsOn` (its unit's intra-repo dep paths); Seed resolves those to card ids via the source:
+//   external_id and wires `dep-add` edges, and `next` refuses to offer a card until its upstreams are
+//   done. Zero-padded priority bands (P00..P0N) are kept only as a TIEBREAK among dep-free ready cards
+//   (still lexical-sort-safe). No worker self-block: `next` excludes `blocked` and the DAG handles gating.
 //
 // requires-skills: eatahorse
 //   (Bundling only — the installer copies the eatahorse skill alongside this workflow so the CLI script
@@ -70,6 +91,7 @@ export const meta = {
     { title: 'Plan-gate' },
     { title: 'Execute' },
     { title: 'Verify' },
+    { title: 'Verify-equivalence' },
     { title: 'Write-back' },
   ],
 }
@@ -93,6 +115,38 @@ const CARDS_SCHEMA = {
           priority: { enum: ['P0', 'P1', 'P2', 'P3'] },
           bites: { type: 'array', minItems: 1, items: { type: 'string' } },       // 1-3 small executable steps
           acceptance: { type: 'array', minItems: 1, items: { type: 'string' } },  // what proves the card done (checkable); >=1 so a card can't auto-complete on a single check with nothing verifying it
+        },
+      },
+    },
+  },
+}
+
+// Port-mode decompose output: like CARDS_SCHEMA but priority is a ZERO-PADDED topo band (P00=leaf, deeper
+// = larger) — kept as a TIEBREAK, not the sole ordering. Real dependency gating is now first-class:
+// `dependsOn` lists the unit's intra-repo dep SOURCE PATHS; Seed resolves each to the card that ports it
+// (via its source: external_id) and wires a `dep-add` edge, so `next` never offers a card before its
+// upstreams are done (the band-as-topo proxy is retired in favor of explicit edges; bands still order ties).
+// Each card also carries externalId (source:<path>) linking it back to its source unit.
+const PORT_CARDS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['project', 'cards'],
+  properties: {
+    project: { type: 'string' },
+    cards: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['title', 'description', 'priority', 'bites', 'acceptance'],
+        properties: {
+          title: { type: 'string' },
+          description: { type: 'string' },
+          priority: { type: 'string', pattern: '^P[0-9]{2}$' }, // topo band: P00 ported first
+          bites: { type: 'array', minItems: 1, items: { type: 'string' } },
+          acceptance: { type: 'array', minItems: 1, items: { type: 'string' } },
+          externalId: { type: 'string' }, // e.g. "source:<repo-rel path>" — back-link to the source unit
+          dependsOn: { type: 'array', items: { type: 'string' } }, // intra-repo dep SOURCE PATHS (this unit's deps); Seed wires edges
         },
       },
     },
@@ -138,6 +192,24 @@ const VERIFY_SCHEMA = {
   },
 }
 
+// Per-card differential-equivalence result (EH-PORT-15). The agent runs diff_test.py for one ported unit,
+// writes the record into the card's Notes, and reopens the card if the source and target diverged.
+const EQUIV_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['taskId', 'method', 'counterexamples', 'confidence', 'reopened'],
+  properties: {
+    taskId: { type: 'string' },
+    method: { enum: ['differential', 'manual', 'smt', 'bounded-mc', 'skipped'] },
+    cases: { type: 'integer' },                           // inputs actually tested (diff_test.py "cases")
+    counterexamples: { type: 'integer' },                 // >0 => not equivalent => reopened
+    coverage: { type: ['number', 'null'] },               // target branch coverage 0..1 if measured, else null
+    confidence: { enum: ['proof', 'high', 'medium', 'low'] },
+    reopened: { type: 'boolean' },                         // did this card get reopened on divergence
+    note: { type: 'string' },
+  },
+}
+
 // Pre-flight probe: does the target board dir already hold a board, and how many cards are still active?
 // Drives the resume-vs-fresh-vs-bail branch BEFORE any decompose, so we never silently re-seed onto (or
 // no-op against) an occupied dir. exists=false when `report` errors (no board there yet).
@@ -173,6 +245,36 @@ const workerModel = args?.workerModel ?? 'sonnet'
 // card field, so the pinned CARDS_SCHEMA / eatahorse.py roundtrip / tests are untouched.
 const normList = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((s) => String(s).trim()).filter(Boolean)
 const constraints = normList(args?.constraints)
+// Grounded/port mode: `grounding` = path to an inventory.json from `eatahorse-research` extract:'port'.
+const grounding = args?.grounding ?? ''
+const targetLang = args?.targetLang ?? ''
+const targetDir = args?.targetDir ?? ''
+const preserveApi = args?.preserveApi ?? '' // freeform: the public API surface to keep stable
+const testCmd = args?.testCmd ?? ''         // the proving command; becomes a run constraint + behavior-parity acceptance
+const PORT_MODE = !!grounding
+// EH-PORT-13/14/15: opt-in differential equivalence verification AFTER the port loop. Heavier than the
+// per-card gate (needs BOTH toolchains + an oracle into the source runtime live in the sandbox), so it is
+// a SEPARATE phase, not folded into completion. verifyEquivalence turns it on; harnessPath points at the
+// bundled diff_test.py (sibling of eatahorse.py by default). srcRunner/tgtRunner are command TEMPLATES the
+// agent specializes per unit — each must read a JSON args list on stdin and print a JSON result (see
+// diff_test.py contract). Without runners the agent falls back to a manual check and labels confidence low.
+const verifyEquivalence = (args?.verifyEquivalence ?? false) && PORT_MODE
+// diff_test.py sits beside eatahorse.py. Replace the eatahorse.py filename when scriptPath ends in it;
+// for a non-standard scriptPath (symlink/wrapper not ending eatahorse.py) swap the final path segment so
+// we still point at a real sibling instead of silently reusing the wrong binary.
+const harnessPath = args?.harnessPath ?? (
+  /eatahorse\.py$/.test(scriptPath)
+    ? scriptPath.replace(/eatahorse\.py$/, 'diff_test.py')
+    : scriptPath.replace(/[^/\\]*$/, 'diff_test.py')
+)
+const srcRunner = args?.srcRunner ?? '' // template invoking the SOURCE unit as oracle (stdin JSON -> stdout JSON)
+const tgtRunner = args?.tgtRunner ?? '' // template invoking the ported TARGET unit (same contract)
+// Port runs MUST not regress the build/tests; fold those into constraints so the completion gate enforces
+// them as run invariants (first-class, not a per-card field). Pushed before INVARIANTS is built below.
+if (PORT_MODE) {
+  constraints.push('the project compiles / builds cleanly after each ported unit')
+  if (testCmd) constraints.push('`' + testCmd + '` stays green')
+}
 // Per-run OUTPUT-token ceiling, independent of the platform "+500k" turn directive (which args cannot
 // set). null = no extra ceiling; the platform budget still applies. budgetFloor was the hardcoded floor.
 const maxTokens = args?.maxTokens ?? null
@@ -200,14 +302,26 @@ const CMD = {
   bite:    `bite <id> <i> [--done|--open] [--group bites|acceptance]  (1-based; --done checks)`,
   addbite: `add-bite <id> "<text>" [--group bites|acceptance]`,
   reopen:  `reopen <id> [--gap "<what's missing>"]  (atomic: uncheck acceptance + add gap bite + move doing)`,
-  add:     `add "<title>" [--priority P0..P3] [--status s] [-d "<desc>"] [--bite "<s>"].. [--accept "<c>"]..`,
+  add:     `add "<title>" [--priority P0..P3] [--status s] [-d "<desc>"] [--bite "<s>"].. [--accept "<c>"].. [--external-id ns:val].. [--depends-on EH-XXXX]..`,
   init:    `init "<project>" [--goal "<g>"]  (errors if a board exists)`,
   remove:  `remove <id> [--purge]`,
   sync:    `sync  (reconcile cards <-> state.json + board.md; run after edits)`,
+  depadd:  `dep-add <id> --on <depId>  (add a dependency edge; rejects cycles. next won't offer <id> until <depId> is done)`,
+  deprm:   `dep-rm <id> --on <depId>`,
+  deps:    `deps <id> [--json] -> {depends_on:[blocks it], blocks:[downstream]}`,
 }
 // `done` CLI command omitted on purpose: no prompt uses it (agents tick acceptance + let sync auto-complete).
 const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
 const CARD_RULE = `Card model: each card = one outcome / next 1-3 bites / what proves it done. Keep <=2 cards in "doing".`
+// Injected into the loop worker in PORT MODE: it ports ONE source unit per card, keeping the public API
+// stable, against already-ported (lower-priority) dependencies. Empty string in normal mode.
+const PORT_RULE = PORT_MODE
+  ? `\n\nPORT MODE: this board ports source units to ${targetLang || 'the target language'}` +
+    `${targetDir ? ` under "${targetDir}"` : ''}. The card's description names the SOURCE file and the public ` +
+    `API surface to preserve — port that ONE unit faithfully, keeping its public API stable. Its dependencies ` +
+    `are lower-priority cards already ported (the board is ordered leaf-first by priority band), so port ` +
+    `AGAINST their ported form. Do NOT modify the source files; write the port under the target dir.`
+  : ''
 // Built once, injected into decompose/worker/gate prompts. Empty string when no constraints (no-op append).
 const INVARIANTS = constraints.length
   ? `\n\nBoard invariants — must NOT regress (boundaries + constraints): ` +
@@ -260,22 +374,64 @@ if (resume) {
   // Existing board mid-flight: skip decompose/seed/plan-gate and work the cards already on it.
   log(`Resuming board "${board}": ${probe.active} active card(s). Skipping decompose/seed/plan-gate.`)
 } else {
-  // 1. Decompose — Opus (sets the trajectory). Goal -> outcome-oriented cards with small bites + checkable
-  //    acceptance. Returns STRUCTURED cards; the mechanical CLI writes happen in Seed (cheap), not here.
+  // 1. Decompose — Opus (sets the trajectory). Two modes:
+  //    - Normal: goal -> outcome-oriented cards (CARDS_SCHEMA).
+  //    - PORT MODE (grounding set): READ the inventory.json and map each source unit -> one port card in
+  //      dependency order (PORT_CARDS_SCHEMA). The script has no FS, so the agent reads the file.
+  //    Returns STRUCTURED cards; the mechanical CLI writes happen in Seed (cheap), not here.
   phase('Decompose')
-  plan = await agent(
-    `Break this goal into a small set of outcome-oriented task cards for a one-bite-at-a-time Kanban board.\n` +
-      `Goal: ${goal}\n\n` +
-      `Rules: each card targets ONE meaningful outcome (not a trivial command); give it 1-3 small executable ` +
-      `bites (the next concrete steps) and 1-3 acceptance checks that concretely PROVE the card is done. ` +
-      `Each acceptance item must NAME its evidence surface — the exact command that passes, the path that ` +
-      `exists, or the observable behavior — so a verifier can run or inspect it (never "looks good"). Order by ` +
-      `priority (P0 highest). Prefer fewer, well-scoped cards; if a card would need a long checklist, split it. ` +
-      `Return a short project name and the cards.` +
-      INVARIANTS,
-    { label: 'decompose', schema: CARDS_SCHEMA },
-  )
-  if (!plan?.cards?.length) return { goal, board, error: 'decompose produced no cards', written: false }
+  if (PORT_MODE) {
+    plan = await agent(
+      `Plan a code PORT as a one-bite-at-a-time Kanban board, GROUNDED in a precomputed inventory. Do NOT ` +
+        `plan blind from the goal — READ the inventory and map it one card per unit.\n` +
+        `1. Read the JSON file "${grounding}" (e.g. \`cat "${grounding}"\`). Shape: {units:[{path, layer, ` +
+        `apiSurface, deps, externalDeps, entryPoint, behavior}], topoOrder, cycles, invariants, entryPoints}. ` +
+        `If the file is MISSING or unreadable, STOP and return {project, cards:[]} (do NOT invent units).\n` +
+        `2. Emit ONE card per unit, walking units in topoOrder. For each unit:\n` +
+        `   - title: "Port <path> to ${targetLang || '<target language>'}".\n` +
+        `   - priority: "P" + the unit's layer zero-padded to EXACTLY 2 digits ("P00" for layer 0, "P03" for ` +
+        `layer 3). Lower layer = fewer dependencies = ported FIRST. Always two digits; for any layer >= 100 ` +
+        `use "P99" (the explicit dependency edges, not the band, enforce true order — the band is only a ` +
+        `tiebreak among dep-free cards).\n` +
+        `   - description: the source <path>, the public apiSurface to preserve` +
+        `${preserveApi ? ` (especially: ${preserveApi})` : ''}, and the intra-repo deps it relies on` +
+        `${targetDir ? `, written under "${targetDir}"` : ''}.\n` +
+        `   - bites (1-3): port the unit to ${targetLang || 'the target language'}` +
+        `${targetDir ? ` under ${targetDir}` : ''}; then reconcile its public API against the inventory apiSurface.\n` +
+        `   - acceptance (each MUST name its evidence surface): (a) the ported unit compiles / the project ` +
+        `builds; (b) the public API matches the inventory apiSurface for <path>; (c) behavior parity` +
+        `${verifyEquivalence
+            ? ` — an \`equivalence\` record is written to the card's Notes (method/cases/counterexamples/coverage/confidence) by the verify-equivalence phase, with counterexamples=0`
+            : testCmd ? ` — \`${testCmd}\` passes` : ` (NO test command was given — state the concrete manual check)`}.\n` +
+        `   - externalId: "source:<path>" (back-links the port card to its source unit).\n` +
+        `   - dependsOn: the unit's INTRA-REPO dep paths (the inventory unit's "deps" array — repo-relative ` +
+        `source paths only, NOT external packages). Seed turns these into real dependency edges so the loop ` +
+        `never ports a unit before the units it depends on. Omit or [] for a leaf.\n` +
+        `3. Use a short project name like "Port to ${targetLang || 'target'}". Return {project, cards}.` +
+        INVARIANTS,
+      { label: 'decompose', schema: PORT_CARDS_SCHEMA },
+    )
+  } else {
+    plan = await agent(
+      `Break this goal into a small set of outcome-oriented task cards for a one-bite-at-a-time Kanban board.\n` +
+        `Goal: ${goal}\n\n` +
+        `Rules: each card targets ONE meaningful outcome (not a trivial command); give it 1-3 small executable ` +
+        `bites (the next concrete steps) and 1-3 acceptance checks that concretely PROVE the card is done. ` +
+        `Each acceptance item must NAME its evidence surface — the exact command that passes, the path that ` +
+        `exists, or the observable behavior — so a verifier can run or inspect it (never "looks good"). Order by ` +
+        `priority (P0 highest). Prefer fewer, well-scoped cards; if a card would need a long checklist, split it. ` +
+        `Return a short project name and the cards.` +
+        INVARIANTS,
+      { label: 'decompose', schema: CARDS_SCHEMA },
+    )
+  }
+  if (!plan?.cards?.length)
+    return {
+      goal,
+      board,
+      error: PORT_MODE ? `decompose produced no cards (inventory "${grounding}" missing or empty?)` : 'decompose produced no cards',
+      written: false,
+    }
 
   // 2. Seed — Haiku (mechanical). One agent creates the board (probe proved it's absent) and adds every card.
   //    Deterministic mapping from the decompose JSON; no judgment, so cheapest model.
@@ -288,12 +444,19 @@ if (resume) {
       `\`python3 "${scriptPath}" --board "${board}" init "${(plan.project || 'Eatahorse Project').replace(/"/g, "'")}" --goal "${goal.replace(/"/g, "'")}"\`. ` +
       `If it reports the board already exists, skip this step (do not --force).\n` +
       `2. For EACH card below, run one \`add\` with --priority, -d (description), a --bite per bite, and a ` +
-      `--accept per acceptance check. Put the highest-priority card(s) in --status ready, the rest backlog.\n` +
-      `3. Run \`sync\`, then \`report --json\` and report the resulting counts.\n` +
+      `--accept per acceptance check. If a card has an "externalId" field, ALSO pass \`--external-id <that ` +
+      `value>\` (it back-links the card to its source). Put the highest-priority card(s) (lowest priority ` +
+      `string, e.g. P00/P0) in --status ready, the rest backlog.\n` +
+      `3. Wire dependency edges (PORT MODE): after ALL cards are added, run \`list --json\` to get each ` +
+      `card's id + external_ids. For every card that has a "dependsOn" array, map each dep SOURCE PATH to ` +
+      `the card whose external_ids.source equals that path, and run \`dep-add <card-id> --on <dep-card-id>\`. ` +
+      `Skip a dep path with no matching card (it is an external/untracked unit). dep-add rejects cycles — if ` +
+      `one is rejected, leave it and note it.\n` +
+      `4. Run \`sync\`, then \`report --json\` and report the resulting counts.\n` +
       // seed only creates cards: init/add + sync/report (+ CARD_RULE for well-shaped cards). The init line
       // is spelled out WITH --board so a cheap agent can't drop the flag (which would let resolve_board walk
       // up to a parent board, diverging from where add/report write).
-      `Do NOT start working any task. Only create cards.\n\n${cli('report', 'init', 'add', 'sync')}\n${CARD_RULE}\n\n` +
+      `Do NOT start working any task. Only create cards.\n\n${cli('report', 'init', 'add', 'list', 'depadd', 'sync')}\n${CARD_RULE}\n\n` +
       `Cards (JSON):\n${JSON.stringify(plan.cards)}`,
     { label: 'seed', model: 'haiku' },
   )
@@ -350,6 +513,8 @@ if (!execute) {
     adjustments: gate?.adjustments ?? [],
     activeRemaining: gate?.activeRemaining ?? probe.active,
     executed: false,
+    portMode: PORT_MODE,
+    grounding: grounding || undefined,
     written: true, // the board exists on disk
   }
 }
@@ -394,6 +559,7 @@ while (
       `this card reach done), blocked, activeRemaining (report's "active"), and a short note with evidence.\n\n` +
       // loop worker takes one bite: next/move/bite + sync/report. No card-creation commands needed.
       `${cli('next', 'move', 'bite', 'sync', 'report')}` +
+      PORT_RULE +
       INVARIANTS,
     { label: `bite:${iter}`, phase: 'Execute', model: workerModel, schema: STEP_SCHEMA },
   )
@@ -444,6 +610,81 @@ while (
   stall = step.progressed ? 0 : stall + 1
 }
 
+// 5b. Verify-equivalence (EH-PORT-15) — opt-in, PORT MODE only. A heavier, SEPARATE gate than the per-card
+//     completion check: per ported unit, drive the SOURCE as an oracle and the TARGET differentially via
+//     diff_test.py, write the graded `equivalence` record into the card's Notes, and REOPEN the card on any
+//     counterexample so the divergence becomes the next bite. Kept out of the completion gate because it
+//     needs both toolchains + an oracle into the source runtime live in the sandbox. Fans out over the done
+//     port cards (parallel — each unit is independent). counterexamples>0 => reopened => not admitted done.
+const equivalence = []
+let reopenedByEquiv = 0
+if (verifyEquivalence) {
+  phase('Verify-equivalence')
+  const doneCards = await agent(
+    `List the Eatahorse port cards at "${board}" that are DONE and carry a source back-link. Run ` +
+      `\`list --status done --json\`; return ONLY the cards whose external_ids has a "source" key, as ` +
+      `[{taskId, source}] (source = external_ids.source).\n\n${cli('list')}`,
+    { label: 'equiv-list', model: 'haiku', schema: {
+      type: 'object', additionalProperties: false, required: ['cards'],
+      properties: { cards: { type: 'array', items: {
+        type: 'object', additionalProperties: false, required: ['taskId', 'source'],
+        properties: { taskId: { type: 'string' }, source: { type: 'string' } } } } },
+    } },
+  )
+  const targets = (doneCards?.cards ?? []).filter((c) => c && c.taskId && c.source)
+  if (!targets.length) {
+    log('Verify-equivalence: no done port cards with a source back-link; nothing to verify.')
+  } else {
+    const results = await parallel(
+      targets.map((c) => () =>
+        agent(
+          `Differentially verify the PORT of source unit "${c.source}" (card ${c.taskId}) on the board at ` +
+            `"${board}". You have the differential harness diff_test.py at "${harnessPath}".\n` +
+            `1. From the inventory "${grounding}", read this unit's apiSurface to derive a primitive ` +
+            `argument SIGNATURE (comma-separated, e.g. int,str,list[int]). If the surface is not expressible ` +
+            `in primitives, treat method as "manual".\n` +
+            `2. Build the two runners (each READS a JSON args list on stdin, WRITES a JSON result on stdout): ` +
+            `${srcRunner ? `source from template \`${srcRunner}\`` : 'the SOURCE unit as oracle'}; ` +
+            `${tgtRunner ? `target from template \`${tgtRunner}\`` : 'the ported TARGET unit'}. Substitute this ` +
+            `unit's path/symbol into the template. If you cannot build a runnable oracle, set method "manual".\n` +
+            `3. If you have both runners, run: \`python3 "${harnessPath}" --source-cmd "<src>" --target-cmd ` +
+            `"<tgt>" --signature "<sig>" --cases 1000\`. It prints an equivalence JSON and exits nonzero on ` +
+            `divergence.\n` +
+            `4. Write that JSON (or, for a manual check, a hand-built record with the same fields) as a fenced ` +
+            "```json block under the card's `## Notes` (show " + c.taskId + " --json for its file path; edit " +
+            `the markdown, then \`sync\`). Lead the block with a line \`equivalence:\`.\n` +
+            `5. If counterexamples > 0, REOPEN the card so the divergence is fixed next: ` +
+            `\`reopen ${c.taskId} --gap "diverges on input <x>: src=<a> tgt=<b>"\` using a concrete sample.\n` +
+            `Return taskId, method, cases (inputs tested), counterexamples, coverage (or null), confidence, ` +
+            `reopened, and a short note.\n\n` +
+            `${cli('show', 'reopen', 'sync')}`,
+          { label: `equiv:${c.taskId}`, phase: 'Verify-equivalence', schema: EQUIV_SCHEMA },
+        ),
+      ),
+    )
+    for (const r of results.filter(Boolean)) equivalence.push(r)
+    const diverged = equivalence.filter((r) => r.counterexamples > 0).length
+    // Count cards actually REOPENED (the board mutation), not merely diverged: an agent can report a
+    // counterexample yet fail/decline to reopen, and only reopened cards are active again.
+    reopenedByEquiv = equivalence.filter((r) => r.reopened).length
+    log(
+      `Verify-equivalence: ${equivalence.length} unit(s) checked, ${diverged} diverged, ` +
+        `${reopenedByEquiv} reopened.`,
+    )
+    // Reopened cards are active again, but the Execute loop already exited — they are NOT re-ported this
+    // run. Reflect them in the final count and warn so the user runs a resume/verify pass to fix them.
+    if (reopenedByEquiv) {
+      active += reopenedByEquiv
+      log(
+        `Verify-equivalence reopened ${reopenedByEquiv} card(s) AFTER the work loop ended — they are not ` +
+          `re-ported here. Resume the board (or rerun verifyEquivalence) to close the divergences.`,
+      )
+    }
+  }
+}
+
+// Computed AFTER verify-equivalence so it reflects the post-reopen `active` (a reopened card means the
+// board is no longer "cleared"). Used by write-back and the final return.
 const stopReason =
   active <= 0
     ? 'board cleared'
@@ -480,11 +721,15 @@ return {
   resumed: resume,
   planReady: gate?.ready ?? null,
   executed: true,
+  portMode: PORT_MODE,
+  grounding: grounding || undefined,
   iterations: iter,
   completed,
   blocked,
   activeRemaining: active,
   stopReason,
   trace,
+  equivalence: verifyEquivalence ? equivalence : undefined,
+  equivalenceReopened: verifyEquivalence ? reopenedByEquiv : undefined,
   written: true,
 }

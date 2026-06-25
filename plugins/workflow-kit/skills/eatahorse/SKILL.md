@@ -1,6 +1,6 @@
 ---
 name: eatahorse
-description: Maintains lightweight one-bite-at-a-time Kanban boards using .eatahorse JSON state and markdown task cards. Use for planning, tracking, todos, and bite-sized work, or when the user says "break this into tasks", "plan this work", "track progress", or "/eatahorse <goal>". Front door for two dynamic workflows. (1) Decompose a goal into a board and, opt-in, work it unattended (the eatahorse workflow). (2) Research a folder file by file into a cited report, say "research this folder", "understand this codebase file by file", or "what does each module do" (the eatahorse-research workflow). Gathers and validates the workflow args before launching.
+description: Maintains lightweight one-bite-at-a-time Kanban boards using .eatahorse JSON state and markdown task cards. Use for planning, tracking, todos, and bite-sized work, or when the user says "break this into tasks", "plan this work", "track progress", or "/eatahorse <goal>". Front door for the eatahorse dynamic workflows. (1) Decompose a goal into a board and, opt-in, work it unattended (the eatahorse workflow). (2) Research a folder file by file into a cited report, say "research this folder", "understand this codebase file by file", or "what does each module do" (the eatahorse-research workflow). (3) Convert/port/migrate a codebase to another language or framework ("port this to Rust", "migrate X to Y") by chaining comprehend (extract:'port' -> inventory.json) into grounded execute. Gathers and validates the workflow args before launching.
 dependencies:
   - python>=3.9
 hooks:
@@ -248,6 +248,39 @@ IO), preview them, then launch directly.
    `Workflow({ name: "eatahorse-research", args: { root, question, include, exclude, maxRounds, maxTokens, budgetFloor, workerModel, out, board } })`.
    Omit args you did not gather. To **resume**, point `board` at an existing board with active cards.
 4. Hand back the workflow's report path and board summary (files done, anything skipped).
+
+## Port / convert / migrate a codebase: chaining the two workflows
+
+When the user wants to **convert/port/migrate** a codebase from one language or framework to another
+("port this Python to Rust", "migrate X to Y", "rewrite this in <lang>"), there is no separate
+`eatahorse-port` workflow. A port is **comprehend → grounded execute**, chaining the two existing
+workflows so the convert stage plans from a real cross-file inventory instead of blind:
+
+1. **Comprehend** — `eatahorse-research` with **`extract:'port'`**. Each per-file worker emits a
+   structured JSON block (exports/deps/externalDeps/sideEffects/entryPoint/behavior) in its card Notes,
+   and a Graph phase folds those into **`inventory.json`** (API surface, intra-repo dependency edges, a
+   dependency-ordered `topoOrder`, and any cycles).
+2. **Grounded execute** — `eatahorse` with **`grounding`** = that `inventory.json`. Decompose reads the
+   inventory and seeds **one port card per source unit in dependency order** (priority = topo band,
+   `P00` = leaf, ported first), each linked back to its source via `--external-id source:<path>`.
+
+Front-door steps (gather + validate here; both workflows run headless):
+
+1. Confirm **source root**, **target language** (`targetLang`), **target dir** (`targetDir`), the
+   **public API to preserve** (`preserveApi`), and — critically — the **proving command** (`testCmd`,
+   e.g. `cargo test`). The plan-gate insists every acceptance name an evidence surface, and `testCmd`
+   becomes the behavior-parity acceptance plus an auto-appended run constraint (`<testCmd>` stays green +
+   project compiles). **Warn loudly if there is no `testCmd`:** without a test suite, behavior parity is
+   only locally checkable per card, never whole-program (state this limit to the user).
+2. **Stage 1 (comprehend), launch directly** (read-only):
+   `Workflow({ name: "eatahorse-research", args: { root, extract: "port", out, inventory, board, workerModel } })`.
+   Hand back the inventory path and unit/layer counts.
+3. **Stage 2 (grounded execute)** — gather the `execute` toggle exactly like the unattended run above.
+   `execute:true` makes **unattended edits**: STOP and wait for an explicit "yes" before launching; do
+   NOT call `Workflow` in the same turn as the preview.
+   `Workflow({ name: "eatahorse", args: { goal: "Port <root> to <targetLang>", grounding, targetLang, targetDir, preserveApi, testCmd, execute, board, maxIterations, maxTokens, budgetFloor, workerModel } })`.
+4. **Resume:** re-point stage 2 at an existing `inventory.json` (skip stage 1) and/or an in-progress
+   `board` with active cards — the workflow works the cards already there.
 
 ## Operating rules for Claude
 
