@@ -11,6 +11,8 @@ the per-branch interview (each branch defers to its own front door or runs the m
 target workflow needs). Workflows run in the background and cannot ask anything mid-run, so all
 intake happens HERE and passes as `args`.
 
+Artifacts: this router writes nothing itself; its targets do. `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely git ignored unless the user wants generated docs work tracked.
+
 ## Step 1 — find the source
 
 Take it from the invocation if obvious. Otherwise ONE `AskUserQuestion`:
