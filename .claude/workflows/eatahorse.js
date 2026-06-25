@@ -44,6 +44,10 @@
 //                  when both are set the more restrictive wins.
 //   budgetFloor    stop opening iterations below this many remaining tokens (default 50000)
 //   workerModel    model for the execute loop workers (default "sonnet")
+//   constraints    board invariants/boundaries that must NOT regress (string or string[]). Injected into
+//                  decompose + worker + completion gate (the gate reopens a card that violates one) and
+//                  persisted to CLAUDE.md. Run-level, NOT a card field — closes the "satisfied acceptance
+//                  but regressed something the card never mentioned" hole. Default none.
 //
 // requires-skills: eatahorse
 //   (Bundling only — the installer copies the eatahorse skill alongside this workflow so the CLI script
@@ -165,6 +169,10 @@ const board = args?.board ?? '.eatahorse-' + slugify(goal)
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
 const maxIterations = Math.min(args?.maxIterations ?? 40, 200)
 const workerModel = args?.workerModel ?? 'sonnet'
+// Run-level invariants/boundaries (a bare string becomes a one-item list). Threaded into prompts; never a
+// card field, so the pinned CARDS_SCHEMA / eatahorse.py roundtrip / tests are untouched.
+const normList = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((s) => String(s).trim()).filter(Boolean)
+const constraints = normList(args?.constraints)
 // Per-run OUTPUT-token ceiling, independent of the platform "+500k" turn directive (which args cannot
 // set). null = no extra ceiling; the platform budget still applies. budgetFloor was the hardcoded floor.
 const maxTokens = args?.maxTokens ?? null
@@ -200,6 +208,12 @@ const CMD = {
 // `done` CLI command omitted on purpose: no prompt uses it (agents tick acceptance + let sync auto-complete).
 const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
 const CARD_RULE = `Card model: each card = one outcome / next 1-3 bites / what proves it done. Keep <=2 cards in "doing".`
+// Built once, injected into decompose/worker/gate prompts. Empty string when no constraints (no-op append).
+const INVARIANTS = constraints.length
+  ? `\n\nBoard invariants — must NOT regress (boundaries + constraints): ` +
+    constraints.map((c, i) => `${i + 1}. ${c}`).join('  ') +
+    ` If an invariant names a runnable command, that command staying green is part of "done".`
+  : ''
 
 // 0. Probe — Haiku (mechanical, read-only). Look at the target board dir BEFORE decomposing so we never
 //    silently re-seed onto / no-op against an occupied dir. Three outcomes below: resume an in-progress
@@ -253,10 +267,12 @@ if (resume) {
     `Break this goal into a small set of outcome-oriented task cards for a one-bite-at-a-time Kanban board.\n` +
       `Goal: ${goal}\n\n` +
       `Rules: each card targets ONE meaningful outcome (not a trivial command); give it 1-3 small executable ` +
-      `bites (the next concrete steps) and 1-3 acceptance checks that concretely PROVE the card is done ` +
-      `(a command that passes, a file that exists, an observable behavior — not "looks good"). Order by ` +
+      `bites (the next concrete steps) and 1-3 acceptance checks that concretely PROVE the card is done. ` +
+      `Each acceptance item must NAME its evidence surface — the exact command that passes, the path that ` +
+      `exists, or the observable behavior — so a verifier can run or inspect it (never "looks good"). Order by ` +
       `priority (P0 highest). Prefer fewer, well-scoped cards; if a card would need a long checklist, split it. ` +
-      `Return a short project name and the cards.`,
+      `Return a short project name and the cards.` +
+      INVARIANTS,
     { label: 'decompose', schema: CARDS_SCHEMA },
   )
   if (!plan?.cards?.length) return { goal, board, error: 'decompose produced no cards', written: false }
@@ -293,7 +309,9 @@ if (resume) {
       `proof)? Fix problems IN PLACE via the CLI: split an overloaded card into smaller cards, drop a ` +
       `meaningless one (\`remove\`), or tighten bites/acceptance (\`add-bite\` / re-add). REJECT any card ` +
       `with no acceptance check (or only a vague/non-checkable one): add a concrete, observable one before ` +
-      `passing it, since a card with no real acceptance auto-completes on a single check with nothing proving it. Then run \`sync\` ` +
+      `passing it, since a card with no real acceptance auto-completes on a single check with nothing proving it. ` +
+      `Also REJECT acceptance that does not NAME its evidence surface (a runnable command, an inspectable path, ` +
+      `or a concrete observable): make it name one before passing. Then run \`sync\` ` +
       `and \`report --json\`. Return: ready (is the plan coherent enough to execute), the adjustments you ` +
       // plan-gate inspects + edits in place: list/show to read, remove/addbite/add to fix, sync/report.
       `applied, and activeRemaining (the report's "active" count).\n\n${cli('list', 'show', 'remove', 'addbite', 'add', 'sync', 'report')}\n${CARD_RULE}`,
@@ -366,7 +384,8 @@ while (
       `3. Take EXACTLY ONE bite: the next unchecked bite. ACTUALLY DO THE WORK it describes ` +
       `(edit code/files, run the needed command). Then \`bite <id> <index> --done\`. If you genuinely ` +
       `cannot make progress (missing input, external blocker), \`move <id> blocked\`, set blocked=true, ` +
-      `and explain in note — do NOT fake progress.\n` +
+      `and structure note as "attempted: <what you tried> | blocker: <what stops it> | unlock: <what input ` +
+      `would unblock it>" — do NOT fake progress.\n` +
       `4. If, after this bite, every bite AND every acceptance check for the card is satisfied by REAL ` +
       `evidence, check the remaining acceptance items (\`bite <id> <i> --group acceptance --done\`) so the ` +
       `card auto-completes on sync. Only check acceptance you can actually back up.\n` +
@@ -374,7 +393,8 @@ while (
       `Return the step: taskId, a one-line action, progressed (did the board move forward), completed (did ` +
       `this card reach done), blocked, activeRemaining (report's "active"), and a short note with evidence.\n\n` +
       // loop worker takes one bite: next/move/bite + sync/report. No card-creation commands needed.
-      `${cli('next', 'move', 'bite', 'sync', 'report')}`,
+      `${cli('next', 'move', 'bite', 'sync', 'report')}` +
+      INVARIANTS,
     { label: `bite:${iter}`, phase: 'Execute', model: workerModel, schema: STEP_SCHEMA },
   )
   if (!step) {
@@ -390,13 +410,20 @@ while (
     const v = await agent(
       `A worker just marked card ${step.taskId} DONE on the Eatahorse board at "${board}". Independently ` +
         `verify it. \`show ${step.taskId} --json\` and check each acceptance item against REAL evidence ` +
-        `(run the proving command, inspect the file/behavior — do not trust the checkbox). If every ` +
-        `acceptance check is genuinely met, leave it done and set supported=true. If NOT, reopen it in one ` +
-        `atomic step: \`reopen ${step.taskId} --gap "<what's missing>"\` — that unchecks the acceptance, ` +
-        `appends the gap as a bite, and moves the card to doing (doneness derives from acceptance, so there ` +
-        `is no ordering footgun). Set supported=false. Then \`sync\` and \`report --json\`. Return ` +
-        // completion gate verifies + may reopen: show + the atomic reopen verb, then sync/report.
-        `supported, a short reason, and activeRemaining (report's "active") AFTER any reopen.\n\n${cli('show', 'reopen', 'sync', 'report')}`,
+        `(run the proving command, inspect the file/behavior — do not trust the checkbox). ALSO check the ` +
+        `board invariants below: the bite must not have regressed any of them — if an invariant names a ` +
+        `runnable command, run it. If every acceptance check is genuinely met AND no invariant was ` +
+        `violated, leave it done and set supported=true. If acceptance is unmet OR an invariant was ` +
+        `regressed, reopen it in one atomic step: \`reopen ${step.taskId} --gap "<what's missing or which ` +
+        `invariant regressed>"\` — that unchecks the acceptance, appends the gap as a bite, and moves the ` +
+        `card to doing (doneness derives from acceptance, so there is no ordering footgun). Set ` +
+        `supported=false. Then \`sync\` and \`report --json\`. Return ` +
+        // completion gate verifies acceptance + invariants, may reopen: show + the atomic reopen verb, then sync/report.
+        // ponytail: per-card invariant check is best-effort — the gate runs a NAMED command but won't run a
+        // full test suite on every card. If invariants need a heavy suite, the upgrade is a dedicated final
+        // "invariants green" card in the plan, not a suite run per completion.
+        `supported, a short reason, and activeRemaining (report's "active") AFTER any reopen.\n\n${cli('show', 'reopen', 'sync', 'report')}` +
+        INVARIANTS,
       { label: `verify:${step.taskId}`, phase: 'Verify', schema: VERIFY_SCHEMA },
     )
     if (v) {
@@ -434,13 +461,14 @@ await agent(
     `future session/run benefits. Steps:\n` +
     `1. \`report --json\` and \`list --json\` to see final state.\n` +
     `2. Append a dated, concise section to the project's CLAUDE.md (create it if absent; merge, do NOT ` +
-    `clobber): the goal, what was completed, what remains, and — most important — the REASON each blocked ` +
-    `card is blocked (treat these as constraints so the next run skips the dead end). Keep it short; do not ` +
-    `document the obvious file tree.\n` +
+    `clobber): the goal, what was completed, what remains, the board invariants this run honored (so a ` +
+    `rerun keeps honoring them), and — most important — the REASON each blocked card is blocked (treat ` +
+    `these as constraints so the next run skips the dead end). Keep it short; do not document the obvious ` +
+    `file tree.\n` +
     `3. Do not change any task status. Reporting only.\n\n` +
     `Run summary: goal="${goal}"; iterations=${iter}; completed=${JSON.stringify(completed)}; ` +
     // write-back only reads final state: report/list. No mutations.
-    `blocked=${JSON.stringify(blocked)}; stopReason="${stopReason}".\n\n${cli('report', 'list')}`,
+    `blocked=${JSON.stringify(blocked)}; constraints=${JSON.stringify(constraints)}; stopReason="${stopReason}".\n\n${cli('report', 'list')}`,
   { label: 'write-back', model: 'sonnet' },
 )
 

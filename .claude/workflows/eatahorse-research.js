@@ -111,10 +111,12 @@ const GATHER_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['where', 'evidence'],
+        required: ['where', 'evidence', 'status'],
         properties: {
           where: { type: 'string' },    // file:area the note is about
           evidence: { type: 'string' }, // the concrete observation
+          // Epistemic support, so synthesis can tier and not overclaim (Codex-Goals research pattern).
+          status: { enum: ['confirmed', 'inferred', 'blocked', 'uncertain'] },
         },
       },
     },
@@ -358,8 +360,11 @@ const gatherResults = await parallel(
   idChunks.map((chunk, ci) => () =>
     agent(
       `For EACH card id below, \`show <id> --json\` and read its "notes" field (the card's "## Notes"). ` +
-        `Distill into compact {where, evidence} items: concrete observations with a file:area, drop filler. ` +
-        `Skip cards whose notes are empty or just say "unreadable". Return all items flattened.\n\n` +
+        `Distill into compact {where, evidence, status} items: concrete observations with a file:area, drop ` +
+        `filler. Label each item's status: "confirmed" (directly read in the file), "inferred" ` +
+        `(reconstructed/approximate, not directly seen), "blocked" (could not verify), "uncertain" (a named ` +
+        `remaining gap). Skip cards whose notes are empty or just say "unreadable". Return all items ` +
+        `flattened.\n\n` +
         `Card ids (${chunk.length}): ${JSON.stringify(chunk)}\n\n${cli('show')}`,
       { label: `gather:${ci}`, phase: 'Gather', model: 'haiku', schema: GATHER_SCHEMA },
     ),
@@ -372,7 +377,9 @@ phase('Synthesize')
 const report = await agent(
   `Synthesize a cited research report answering "${question}" for the folder "${root}", from these notes ` +
     `only. Group by area/directory, cite the "where" of each note you rely on, and call out failures and ` +
-    `constraints explicitly. Be concrete; no filler.\n\n` +
+    `constraints explicitly. Honor each note's "status": present "confirmed" notes as fact; clearly mark ` +
+    `"inferred" as approximate and NEVER as confirmed; collect "blocked"/"uncertain" into an explicit ` +
+    `"Unverified / remaining gaps" section. Be concrete; no filler.\n\n` +
     `Notes (${gathered.length}):\n${JSON.stringify(gathered)}`,
   { label: 'synthesize' },
 )

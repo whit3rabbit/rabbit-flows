@@ -178,7 +178,15 @@ background with no user IO, so gather and validate these here first):
    | `maxTokens` | none | per-run OUTPUT-token ceiling; stops the loop once spent crosses it. Independent of the platform "+500k" turn directive, which args cannot set | int, MUST be > `budgetFloor` |
    | `budgetFloor` | `50000` | stop opening new iterations below this many remaining tokens | int >= 0 |
    | `workerModel` | `sonnet` | model for the execute-loop workers | model id |
+   | `constraints` | none | board invariants/boundaries that must NOT regress; the completion gate reopens a card that violates one | string or string[] |
    | `scriptPath` | bundled copy | path to `eatahorse.py` | path |
+
+   **Elicit `constraints` proactively (cheap, high value on an `execute:true` run):** ask what must NOT
+   regress and what is in/out of bounds — e.g. "keep `npm test` green", "only edit files under `src/`".
+   Phrase each as a short imperative; name a runnable command where one exists so the gate can run it. Pass
+   them as `args.constraints`. Empty answer → omit it (identical to today). Also nudge the user toward
+   acceptance that names a concrete evidence surface (a command, a path, an observable), since the
+   plan-gate now rejects acceptance that does not.
 
    **Validate before launching (real footguns):**
    - `maxIterations` / `budgetFloor` must be non-negative ints; `maxIterations` over 200 is silently clamped.
@@ -192,7 +200,7 @@ background with no user IO, so gather and validate these here first):
    and any token/iteration caps). If `execute:true`, STOP and wait for an explicit "yes" — it makes
    unattended edits to the project; do NOT call `Workflow` in the same turn as the preview. A plan-only
    `execute:false` run may launch directly.
-5. Launch: `Workflow({ name: "eatahorse", args: { goal, execute, board, maxIterations, maxTokens, budgetFloor, workerModel } })`.
+5. Launch: `Workflow({ name: "eatahorse", args: { goal, execute, board, maxIterations, maxTokens, budgetFloor, workerModel, constraints } })`.
    Omit args you did not gather — the workflow defaults them.
    - **Resume:** point `board` at an existing board that still has active cards → the workflow skips
      decompose/seed/plan-gate and works the cards already there (use this to continue an interrupted run).
