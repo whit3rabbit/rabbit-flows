@@ -2,5 +2,11 @@
 # deps. recon.py runs fine WITHOUT these (stdlib `ast` for Python + regex/brace heuristics for other
 # languages); with them it gets precise multi-language function spans and call edges.
 # tree-sitter-language-pack bundles 100+ grammars in one wheel, so recon stays language-agnostic.
-tree-sitter>=0.21,<1
-tree-sitter-language-pack>=0.2
+#
+# Exact pins (not >= ranges) for reproducibility + supply-chain integrity: the venv is cached and
+# reused across audit runs, so a silently-floated dep could change analysis results between runs. Bump
+# deliberately: install the new version, run BOTH test_recon.py passes (stdlib + venv), then edit the
+# pin here. Stronger upgrade path if needed: `pip-compile --generate-hashes` + setup_venv.sh
+# `--require-hashes` (declined here — transitive-hash maintenance is overkill for an optional dev venv).
+tree-sitter==0.25.2
+tree-sitter-language-pack==1.10.3

@@ -1,6 +1,6 @@
 ---
 name: eatahorse
-description: Maintains lightweight one-bite-at-a-time Kanban boards using .eatahorse JSON state and markdown task cards. Use for planning, tracking, todos, Kanban, and bite-sized work. Also the front door that decomposes a goal into a board and, opt-in, works it unattended via the eatahorse workflow; it gathers and validates the workflow args before launching.
+description: Maintains lightweight one-bite-at-a-time Kanban boards using .eatahorse JSON state and markdown task cards. Use for planning, tracking, todos, and bite-sized work, or when the user says "break this into tasks", "plan this work", "track progress", or "/eatahorse <goal>". Front door for two dynamic workflows. (1) Decompose a goal into a board and, opt-in, work it unattended (the eatahorse workflow). (2) Research a folder file by file into a cited report, say "research this folder", "understand this codebase file by file", or "what does each module do" (the eatahorse-research workflow). Gathers and validates the workflow args before launching.
 dependencies:
   - python>=3.9
 hooks:
@@ -204,12 +204,42 @@ background with no user IO, so gather and validate these here first):
 The skill name (`eatahorse`) and the workflow `meta.name` (`eatahorse`) live in separate
 registries; reusing the name is fine.
 
-To research a whole folder/corpus file by file (not a goal to execute), use the
-`eatahorse-research` workflow instead: it enumerates the files, auto-picks scale by count, seeds one
-card per file/directory, and loops parallel research rounds against the board until done — the board
-makes the run resumable and lets it scale past the per-run agent cap. It takes the same `maxTokens`
-and `budgetFloor` token caps (and `maxRounds`, default 3, as its loop cap in place of `maxIterations`);
-the same `maxTokens > budgetFloor` validation applies.
+## Research a folder: the `eatahorse-research` workflow
+
+When the user wants to **understand a folder/codebase/corpus file by file** (not execute a goal) —
+"research this folder", "understand this codebase file by file", "what does each module do",
+"document what's in src" — launch the `eatahorse-research` dynamic workflow. It enumerates the
+files, auto-picks scale by count, seeds one card per file/directory, and loops parallel research
+rounds against the board until done. The board makes the run resumable and lets it scale past the
+per-run agent cap; it synthesizes a cited report at the end.
+
+This is **read-only** — it does not modify the researched source — so there is no execute footgun
+and no stop-and-confirm gate. Gather the args here (the workflow runs in the background with no user
+IO), preview them, then launch directly.
+
+1. Confirm the **root** (folder to research; also accepts a bare path) and a **question** (what to
+   find out, e.g. "what does each module do"). Default question is a general per-file summary.
+2. Gather any optional knobs the user raises (omit the rest — the workflow defaults them):
+
+   | arg | default | meaning |
+   |---|---|---|
+   | `root` | (required) | folder to research; also accepts a bare string |
+   | `question` | general per-file summary | what each file's research should answer |
+   | `include` / `exclude` | (all files) | glob filters on the file set |
+   | `maxRounds` | `3` | loop cap in research rounds (the research equivalent of `maxIterations`) |
+   | `maxTokens` | none | per-run OUTPUT-token ceiling; same as the execute loop, MUST be > `budgetFloor` |
+   | `budgetFloor` | `50000` | stop opening new rounds below this many remaining tokens |
+   | `workerModel` | `haiku` | model for the per-file research workers |
+   | `out` | report path | where to write the synthesized report |
+   | `board` | `.eatahorse-<slug>` | board dir; point at an existing one to RESUME |
+   | `scriptPath` | bundled copy | path to `eatahorse.py` |
+
+   **Validate before launching:** if BOTH `maxTokens` and `budgetFloor` are set, require
+   `maxTokens > budgetFloor` (same guard as the execute loop — at or below it, zero rounds run).
+3. Preview the exact `args` (at minimum `root`, `question`, `out`, any token caps), then launch:
+   `Workflow({ name: "eatahorse-research", args: { root, question, include, exclude, maxRounds, maxTokens, budgetFloor, workerModel, out, board } })`.
+   Omit args you did not gather. To **resume**, point `board` at an existing board with active cards.
+4. Hand back the workflow's report path and board summary (files done, anything skipped).
 
 ## Operating rules for Claude
 

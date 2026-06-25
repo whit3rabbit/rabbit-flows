@@ -17,7 +17,9 @@ python3 plugins/workflow-kit/skills/secure-review/scripts/test_recon.py   # secu
 
 Editing a file in `.claude/rules/` without `build:skill` leaves the shipped skill stale; `check` (also in CI) fails the commit.
 
-The `@generated-start/@generated-end` blocks in `.claude/workflows/docs-{create,from-code}.js` are build artifacts of `node scripts/build-docs-contracts.mjs` — NEVER hand-edit between the markers; edit the source, regenerate (no `--check`), then re-run `npm run check`. Sources: `CONTRACT`/`IA_CONTRACT` and the six per-framework `<FW>_CONTRACT` blocks distill from `docs-site-builder/references/` + `docs-site-builder/frameworks/<fw>/references/`; the `frameworks` block (CROSSWALK + the 13-entry FRAMEWORKS registry + resolveLinksAndAssets) is spliced VERBATIM from `docs-site-builder/frameworks/registry.js` — a splice fragment, NOT standalone JS: it references `CONTRACT`/`<FW>_CONTRACT` and the `agent()`/`log()` workflow globals from the host scope, and the per-framework `<FW>_CONTRACT` consts must stay spliced ABOVE the `frameworks` block. A verbatim splice source must NOT contain a literal `@generated-end docs-contracts/<name>` substring anywhere (even in a comment) — the build's `indexOf` matches it and silently truncates the block. `docs-migrate.js` is deliberately NOT wired into these blocks (migration-specific consts; no FRAMEWORKS registry). `npm run check` = three gates: installer manifest, `build:skill`, and `build:docs-contracts` drift.
+The `@generated-start/@generated-end` blocks in `.claude/workflows/docs-{create,from-code}.js` are build artifacts of `node scripts/build-docs-contracts.mjs` — NEVER hand-edit between the markers; edit the source, regenerate (no `--check`), then re-run `npm run check`. Sources: `CONTRACT`/`IA_CONTRACT` and the six per-framework `<FW>_CONTRACT` blocks distill from `docs-site-builder/references/` + `docs-site-builder/frameworks/<fw>/references/`; the `frameworks` block (CROSSWALK + the 13-entry FRAMEWORKS registry + resolveLinksAndAssets) is spliced VERBATIM from `docs-site-builder/frameworks/registry.js` — a splice fragment, NOT standalone JS: it references `CONTRACT`/`<FW>_CONTRACT` and the `agent()`/`log()` workflow globals from the host scope, and the per-framework `<FW>_CONTRACT` consts must stay spliced ABOVE the `frameworks` block. A verbatim splice source must NOT contain a literal `@generated-end docs-contracts/<name>` substring anywhere (even in a comment) — the build's `indexOf` matches it and silently truncates the block. `docs-migrate.js` is deliberately NOT wired into these blocks (migration-specific consts; no FRAMEWORKS registry).
+
+A SECOND, independent generator owns the `arg-contract/*` marker blocks: `node scripts/build-arg-contract.mjs` generates the docs-from-code ARG surfaces (the uniform guard block + the header `Knobs` comment in `docs-from-code.js`, and the Workflow args block + Defaults line in `document-codebase/SKILL.md`) from the single source `installer/arg-schemas/docs-from-code.mjs`. Edit the SCHEMA + regenerate (no `--check`); never hand-edit between `@generated-start/@generated-end arg-contract/*`. Bespoke validators (`i18n`/`versioning`/`refine`) and derived consts (`root`/`fwEntry`/`mode`/`updateMode`/`normPagePath`) stay HAND-WRITTEN below the generated guard block (`kind:'custom'`), down to the `// --- end args / guards` sentinel; `--check` lints that every schema arg name set-matches the `args?.X` accesses in that region, so a hand-added guard or a dropped arg fails the build. `npm run check` = FOUR gates: installer manifest, `build:skill`, `build:docs-contracts`, and `build:arg-contract` drift.
 
 When `validate.py` reports a workflow JS syntax error it points at `:1` generically; `node --check` is no help (it stops at the expected top-level-`return` "Illegal return"). The cause is usually unbalanced parens, e.g. `(await parallel(...)).filter()` needs the grouping paren or `.filter` binds to the promise.
 
@@ -65,8 +67,10 @@ If you escalate a stage, note why. See `.claude/rules/model-routing.md`.
   include one. (`.claude/rules/workflow-design.md`)
 - **Note schema:** workers emit `{type: finding|failure|constraint, where, evidence}`.
   Failures and constraints are first-class; later phases MUST read prior constraints. (`.claude/rules/workflow-design.md`)
-- **Write-back:** durable knowledge a run produces MUST be written to `CLAUDE.md` /
-  `.claude/rules/` in a finalize stage. Script variables evaporate. (`.claude/rules/memory.md`)
+- **Write-back:** durable knowledge a run produces MUST be persisted in a finalize stage (script
+  variables evaporate). Cross-cutting rules → `.claude/rules/`; a SPECIFIC workflow's run log /
+  hardening history → `docs/<workflow>-workflow-log.md` (not `CLAUDE.md` — keep the constitution lean).
+  (`.claude/rules/memory.md`)
 
 ## Reuse & cost
 
@@ -138,71 +142,18 @@ hash, concurrency/agent caps, `args` JSON parsing, rejected `isolation:'remote'`
 45s retry, and other doc-vs-implementation gaps), read **`docs/WORKFLOW_ANALYSIS.md`**. Consult it
 when a workflow behaves unexpectedly or you need a runtime detail the rules/skill don't cover.
 
-## docs-factory: dead ends (don't re-litigate)
+## Per-workflow logs (load only when relevant)
 
-Multi-framework docs factory work (FRAMEWORKS registry, per-framework adapters, validators,
-component crosswalk, quality gate, docs-migrate). Live card status lives in the Eatahorse board
-and git history, not here.
+Run history, hardening rounds, and per-workflow constraints live in `docs/<workflow>-workflow-log.md`,
+NOT here — so this constitution stays lean and a session working on one workflow doesn't load another's
+history. **Before editing a workflow or its skill/recon engine, read its log.** When a run produces
+durable knowledge, append it to that file (one per workflow), and add a pointer row here if new.
 
-- EH-0017 (generated-docs lanes) / EH-0018 (`docs-migrate.js`) acceptance is **empirical**: static
-  checks (`npm run check`, `validate.py --strict`) pass but do NOT substitute for a live run. Don't
-  mark done until `outDir` artifacts (`MIGRATION.md`, `.source-corpus`, reference pages) exist on disk.
-- `docs-migrate.js` exists and lints — gap is runtime verification only. Don't re-implement it.
+| Working on… | Read first |
+|---|---|
+| `security-audit` / `secure-review` / `recon.py` | `docs/security-audit-workflow-log.md` |
+| `docs-from-code` / `docs-create` / `docs-migrate` / docs factory | `docs/docs-from-code-workflow-log.md` |
 
-## docs-from-code run: 2026-06-22
-
-**Codebase documented:** `.` (rabbit-flows repo root)
-**Docs site:** `./docs`
-**Board:** `.eatahorse-docs`
-**Pages:** 11 grounded pages written to `./docs/src/content/docs/`; site recovered to buildable (hand-wrote `astro.config.mjs`, `package.json`, `src/content.config.ts`, `tsconfig.json`; `npm run build` green). The run's `admitted:0`/`configWritten:false` was a bug (two path-convention mismatches in gather-admitted + the quality-gate filter), FIXED 2026-06-23 along with a loud-fail and an opt-in `verify` build gate; ignore the original "0 admitted" write-back.
-**Doc-coverage gaps:** 125 public symbols without a doc comment; see `./docs/src/content/docs/reference/documentation-gaps.md`
-
-CONSTRAINTS (do not re-walk these without a human brief):
-
-- **Deferred, needs human brief, "Quickstart: install and run your first workflow":** a 5-minute getting-started tutorial requires a chosen demo workflow, the exact install/enable steps, and the expected on-screen result. Onboarding intent not present in source; a guessed tutorial fails the grounding gate.
-- **Deferred, needs human brief, "Tutorial: author your own dynamic workflow":** the pedagogical path (what to build first, the worked example, the sample task) is editorial intent. `dynamic-workflow-authoring` skill and `starter.js` provide raw material, but the teaching sequence must be specified by a human.
-
-## security-audit hardening: 2026-06-23
-
-**Goal:** implement the 12-item hardening plan at `.claude/plans/i-reviewed-your-workflow-skill-witty-wand.md`
-**Board:** `.eatahorse-secaudit` (12/12 cards done; board cleared; 25 iterations)
-**Files changed:** `.claude/workflows/security-audit.js`, `plugins/workflow-kit/skills/secure-review/scripts/recon.py`, `plugins/workflow-kit/skills/secure-review/scripts/test_recon.py`
-
-**Completed (all 12 cards, P0 -> P1 -> P2):**
-
-- **EH-0001 (P0)** Fixed diff-mode shell bug: `auditDir` derived from `reconOut`, `mkdir -p` added, trailing `.` removed from redirect target in diffStep.
-- **EH-0002 (P0)** Split diff-mode index into `reconReachOut` (full-repo, used for callers/reachability) and `reconAuditOut` (changed-files, used for lane sharding/fileCount). Paths mode: both equal `reconOut`.
-- **EH-0003 (P0)** Gate INVALID rule softened: incomplete call graph alone is not a rejection ground; rejection requires a specific contradicting code fact. Lean-valid clause appended to gate prompt.
-- **EH-0004 (P0)** Fixed `calls_in()` nested-function call attribution: seed stack with own-body children, skip nested `FN_TYPES` scopes. Test added.
-- **EH-0005 (P0, was riskiest)** Qualifier-aware `_resolve_call_target`: captures qualifier at extraction for both Python AST and tree-sitter backends; gates resolution by qualifier (only unqualified cross-file, self./this. same-file, or proven-internal qualifiers resolve). Drops qualified-external without bare-name fallback. Test added.
-- **EH-0006 (P0)** Import regexes now run against comment-stripped source when tree-sitter backend was not used; when tree-sitter ran, imports are taken from AST import nodes. Eliminates false filegraph edges from commented-out requires.
-- **EH-0007 (P1)** `VERDICT_SCHEMA` extended with `crux`, `confidence`, `checks` (array of `{kind, command_or_file, result}`). Gate prompt requires concrete recon facts; report prompt cites crux/checks per finding.
-- **EH-0008 (P1)** `walk_files` returns `(included, skipped:[{path,reason}])` with reasons: symlink/unsupported/gitignored/too_large. Counts threaded into `build_index` summary and surfaced via `cmd_index`/`cmd_summary`. Report prompt states skipped files by reason. Test added.
-- **EH-0009 (P1)** Config/IaC include-but-don't-parse tier: `CONFIG_EXTENSIONS` (.yml, .yaml, .json, .toml, .ini, .env, .tf, .tfvars, .hcl, .xml, .properties, .conf, .cfg, .sql, .graphql, .proto) + `SPECIAL_FILENAMES` (Dockerfile, docker-compose.*, Makefile, CMakeLists.txt). `parse_file` gives them `backend='config'`, 0 functions; they land in `files[]` and get sharded for secrets/IaC review. Test added.
-- **EH-0010 (P1)** `cmd_extract` fallback window: `--context-lines N` (default ~60) prints a line-centered window with `# fallback window, not exact function` marker when no enclosing span is found. Mirrored into `reconBlock` in security-audit.js. Test added.
-- **EH-0011 (P2, was riskiest workflow change)** Multi-round deep gate, opt-in: args `gateRounds` (default 1, cap 5) and `deepGateSeverities` (default `['critical','high']`). After first gate, VALID findings at those severities get 2 blind independent reviewers; on disagreement, one Opus arbiter arbitrates using only structured inputs. Cheap-first deviation documented in workflow header comment.
-- **EH-0012 (P2)** Per-run artifacts finalize agent (Haiku, `writeArtifacts` default true): writes `{auditDir}/runs/<ts>/` with recon.json-ref, lanes.json, candidates.json, verdicts.json, confirmed.json, coverage.md (skipped-by-reason), report.md.
-
-CONSTRAINTS (verified, do not re-implement):
-- `reconBlock` (security-audit.js) is the runtime source for recon command surface; every new flag must be mirrored there.
-- Acceptance gate for any future edit: `test_recon.py` green under BOTH stdlib AND the tree-sitter venv (`.venv/bin/python test_recon.py`) — stdlib alone SKIPS the tree-sitter tests and is blind to call-graph/import regressions on the precise backend. Plus `validate.py --strict` on `.claude/workflows`, `npm run check`.
-- recon.py call extraction DIFFERS by backend: tree-sitter emits dotted qualifier heads (`pkg.fn`), the regex fallback emits bare names (`fn`). A call-graph/import fix can pass one backend and regress the other, so always run both. `_ts_imports_exports` only covers JS/TS; every other language MUST fall back to the regex extractor even under tree-sitter.
-- Live smoke (paths mode + diff mode) is empirical only; static gates passing does not substitute for a real run.
-- EH-0005 qualifier representation ripples through all call-graph consumers; regression-test `calls_in` before and after any further recon.py edits near `_resolve_call_target`.
-
-## security-audit review round 3: 2026-06-23
-
-**Goal:** close 9 reviewer findings on the post-hardening `security-audit.js` + `recon.py`.
-**Board:** `.eatahorse-secaudit-r3` (7 cards). **Files:** `security-audit.js`, `recon.py`, `test_recon.py`, `secure-review/SKILL.md`.
-
-- **#1 (blocking) deep gate no longer silently drops serious findings.** It DROPS a deep candidate only when BOTH blind reviewers (or the arbiter) are firmly INVALID; any UNCERTAIN (incl. a dead reviewer, which now defaults UNCERTAIN not INVALID) routes to `residualUncertain` (`gateStage:'deep-demoted'`/`'deep-arbiter'`) and surfaces in the report's Unsettled section. Deep-gate + arbiter prompts now default UNCERTAIN-and-surface, INVALID only with a named contradicting fact (mirrors Escalate). `droppedCount` subtracts `residualUncertain` so surfaced ≠ dropped.
-- **#2 regex call extractor emits dotted heads** (`_CALL_RE` + tail-keyword guard), so the no-venv fallback drops `os.path.join` instead of binding bare `join` — the qualified-external false edge is closed on ALL backends now, not just ast/tree-sitter.
-- **#3** `_ts_imports_exports` captures `export const NAME` (lexical_declaration declarators) and `module.exports = { … }` (object form) under tree-sitter.
-- **#4** recon `summary.source_file_count` (excludes `language=='config'`); the Map coverage decision uses it, not `file_count`, so `.json` fixtures don't flip thematic→partition. **#5** dot-dir walk allowlist widened to `.github,.circleci,.gitlab,.azure-pipelines,.azuredevops`.
-- **#6** `maxFindings` arg (default 150, cap 1000): ranks `deduped` by bug-class keywords in evidence/where (NOTE_SCHEMA findings have NO severity at gate-entry — that's set downstream by the gate) then slices, with a loud `log()` (no silent cap). **#8** `minConfidence` arg (default 0=off): demotes low-confidence VALIDs to unsettled; the self-reported confidence is clamped to [0,1] before comparison so an out-of-range `95` can't defeat the floor. **#9** diff-mode 0-files bail message is now mode-specific.
-- **Round 4 (follow-up):** `deepGateSeverities` is lowercase-normalized + enum-validated (a typo no longer silently no-ops the deep gate); `residualUncertain` is exact-key deduped before the report; `confidence` schema is bounded `[0,1]`.
-
-CONSTRAINTS (verified, do not re-litigate):
-- No new recon CLI flags this round (`source_file_count` is summary output; dot-dirs internal), so `reconBlock` in `security-audit.js` was NOT touched — the EH-0001..0012 mirror rule still holds for future flags.
-- New tests in `test_recon.py`: `test_regex_fallback_captures_dotted_call_head`, `test_regex_dotted_external_does_not_bind_to_in_repo_bare_name` (both backend-agnostic), `test_treesitter_captures_export_const_and_module_exports_object` (venv-gated), `test_source_file_count_excludes_config`, `test_walk_allows_ci_iac_dot_dirs`. Acceptance unchanged: green under BOTH stdlib AND venv, plus `validate.py --strict` + `npm run check`.
-- Live smoke (paths + diff) still empirical-only; static gates passing does not substitute.
+Workflow OUTPUT can be sensitive: a `security-audit` run writes a vulnerability inventory to
+`.security-audit/` — gitignored here, and the workflow ensures gitignore in any target repo. Do not
+commit or publish those artifacts.

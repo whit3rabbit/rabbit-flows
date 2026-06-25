@@ -4,56 +4,56 @@
     {
       "name": "security-audit",
       "file": ".claude/workflows/security-audit.js",
-      "description": "Defensive code audit: map attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation.",
-      "skills": ["secure-review"],
+      "description": "Audit a codebase for security vulnerabilities: scan committed code, review it in parallel lanes, drop false positives, and report each issue with remediation.",
+      "skills": ["secure-review", "audit-codebase"],
       "agents": []
     },
     {
       "name": "scaffold",
       "file": ".claude/workflows/scaffold.js",
-      "description": "Start a project from scratch and stub+document the whole tree: discuss the brief, research deps, draft blind architecture attempts merged to one, forward-review, fan out cheap workers to build every file under a 400-line ceiling, verify, write back the decisions.",
+      "description": "Start a new project from scratch: pick a stack, then stub and document every file in the tree under a per-file line ceiling, and verify the result.",
       "skills": ["architect", "new-project"],
       "agents": []
     },
     {
       "name": "docs-create",
       "file": ".claude/workflows/docs-create.js",
-      "description": "Author a documentation site from a brief: plan pages, fan out authors, verify + assemble config. Targets Starlight, Docusaurus, MkDocs, VitePress, Fumadocs, mdBook, or Docsify via the framework arg.",
+      "description": "Author a documentation site from a written brief, no codebase needed: plan the pages, write each one, then verify and assemble config. Targets Starlight, Docusaurus, MkDocs, VitePress, Fumadocs, mdBook, or Docsify via the framework arg.",
       "skills": ["docs-site-builder", "document"],
       "agents": []
     },
     {
       "name": "docs-scrape",
       "file": ".claude/workflows/docs-scrape.js",
-      "description": "Ingest a documentation website into a local markdown corpus: detect platform, enumerate pages, fetch+extract, gate, assemble.",
+      "description": "Save an external documentation website as a local markdown corpus: detect the platform, then clone, scrape, or fetch the pages, and assemble them.",
       "skills": ["docs-scraper"],
       "agents": []
     },
     {
       "name": "eatahorse",
       "file": ".claude/workflows/eatahorse.js",
-      "description": "Decompose a goal into an Eatahorse Kanban board and gate the plan; optionally work it unattended one bite at a time in a Ralph-style loop, a fresh-context completion-gated worker each iteration, then write back the decisions.",
+      "description": "Break a goal into a Kanban board of small tasks and check the plan, then optionally work the board unattended one task at a time, verifying each task before moving on.",
       "skills": ["eatahorse"],
       "agents": []
     },
     {
       "name": "eatahorse-research",
       "file": ".claude/workflows/eatahorse-research.js",
-      "description": "Research every file in a folder using an Eatahorse board as a durable resumable ledger: enumerate, auto-pick scale by file count, seed one card per unit, then loop research rounds of parallel workers gated and synced until dry, and synthesize a cited report.",
+      "description": "Research every file in a folder and synthesize a cited report. Progress is tracked on a resumable board so large trees run in batches.",
       "skills": ["eatahorse"],
       "agents": []
     },
     {
       "name": "docs-from-code",
       "file": ".claude/workflows/docs-from-code.js",
-      "description": "Document a whole codebase into a docs site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks via the framework arg.",
+      "description": "Generate a documentation site from an existing codebase: enumerate source, plan a page per module, write grounded reference pages, then assemble config. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks via the framework arg.",
       "skills": ["eatahorse", "docs-site-builder", "document-codebase", "document"],
       "agents": []
     },
     {
       "name": "docs-migrate",
       "file": ".claude/workflows/docs-migrate.js",
-      "description": "Migrate a documentation site from one framework to another: acquire source corpus, map pages via crosswalk, fan out conversion workers, gate for syntax leaks, assemble target config.",
+      "description": "Move a documentation site from one framework to another: convert each page to the target framework, check for leftover old-framework syntax, and assemble the target config.",
       "skills": ["docs-scraper", "docs-site-builder", "document"],
       "agents": []
     }

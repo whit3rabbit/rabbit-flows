@@ -88,19 +88,36 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
 
    ```
    Workflow({ name: "docs-from-code", args: {
-     root, outDir, framework, scaffoldMode, brief, includeTutorials,
-     // framework: a registry id from the table above (verbatim); unknown ids -> work-from-current-docs.
-     // scaffoldMode: content-only (default) | add-to-existing | full-project (Starlight only).
-     // optional knobs the user may set:
-     // include, exclude (globs), board (default .eatahorse-docs),
-     // workerModel (default sonnet), maxRounds (default 3, clamped to 10),
-     // filesPerPage (split modules bigger than this, default 12),
-     // pages (explicit page plan, skips the Plan stage)
-     // site (full production URL), basePath (subpath the site is served from),
-     // i18n ({defaultLocale, locales[]}), versioning ({current, versions?[]}),
-     // verify (bool, default false — opt-in end-to-end build gate; Starlight only, needs pinned deps)
-     // UPDATE an existing run (see Step 0): mode "update", updateMode "diff"|"refine",
-     //   since (git ref, default HEAD~1), refine [{page, ask}], planNewModules (default false)
+   // @generated-start arg-contract/skill-args
+   // Knobs (args) — GENERATED from installer/arg-schemas/docs-from-code.mjs (build:arg-contract); edit the schema.
+   // core:
+   //   root — repo root to document (bare string also accepted)
+   //   outDir (required) — directory to write the docs site into (required)
+   //   framework — registry id; unknown ids fall back to work-from-current-docs
+   //   scaffoldMode — content-only (default) | add-to-existing | full-project (Starlight only)
+   //   brief — focus/scope note for the run
+   //   includeTutorials — also author tutorials (default false; expect more gate churn)
+   // optional:
+   //   board — Eatahorse board directory
+   //   workerModel — model for page authors
+   //   maxRounds — author/gate rounds per run (default 3, clamped to 10)
+   //   filesPerPage — split modules bigger than this into sub-pages
+   //   include — glob(s) to include
+   //   exclude — glob(s) to exclude
+   //   pages — explicit page plan; skips the Plan stage
+   //   scriptPath — path to eatahorse.py
+   //   verify — opt-in end-to-end build gate (Starlight only, needs pinned deps)
+   //   site — full production URL (e.g. https://docs.example.com)
+   //   basePath — subpath the site is served from (e.g. /docs)
+   //   i18n — {defaultLocale, locales[]} — enable multi-locale output
+   //   versioning — {current, versions?[]} — version label, mapped where supported
+   // update mode (args.mode='update'):
+   //   mode — 'fresh' (default) | 'update' (re-document an existing run)
+   //   updateMode — 'diff' (default, changed source since `since`) | 'refine' (named pages)
+   //   since — git ref for diff mode
+   //   refine — [{page, ask}] for refine mode
+   //   planNewModules — plan pages for new undocumented source (default false)
+   // @generated-end arg-contract/skill-args
    }})
    ```
    Pass only what was gathered; omit the rest (the workflow defaults them). If `Workflow()` errors
@@ -113,13 +130,15 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
    - **Frame IA + plan**: group BY READER TASK (not module layout); one page per module; tag each page
      a Diátaxis type and a file **scope**; keep scope ≤ ~12 files (split bigger modules). Default to
      reference + module overviews; DEFER tutorials unless the user asked for them.
-   - **Seed the board**, one card per page (title = page path), scope in the card description:
-     `python3 <eatahorse.py> --board .eatahorse-docs add "<path>" --status backlog -d "path=… | scope=…" --bite "author it" --accept "page written and grounded in source"`
+   - **Seed the board**, one card per page (title = page path), scope in the card description, TWO acceptance
+     items (the author ticks the first, the grounding check ticks the second):
+     `python3 <eatahorse.py> --board .eatahorse-docs add "<path>" --status backlog -d "path=… | scope=…" --bite "author it" --accept "page written from source" --accept "grounding verified by gate"`
    - **Author pages** one module at a time (a couple of subagents): read the scope source, write the
-     page under `outDir/src/content/docs/…` per the Starlight contract, then tick the card's acceptance.
-     Run `sync` after a batch (single writer — don't sync concurrently).
-   - **Spot-check (grounding)**: re-read the scope source for a few done pages; `reopen <id> --gap "…"`
-     any whose claims aren't in the code.
+     page under `outDir/src/content/docs/…` per the Starlight contract, then tick ONLY the FIRST acceptance
+     item. Run `sync` after a batch (single writer — don't sync concurrently).
+   - **Grounding check (full coverage)**: for every written-but-unverified page, re-read the scope source;
+     if backed, tick the second acceptance item (`bite <id> 1 --group acceptance --done` → done); else
+     `reopen <id> --gap "…"`. The card reaches `done` (admitted) only after grounding is verified.
    - **Assemble**: write `src/content.config.ts` + `astro.config.mjs` sidebar from the admitted pages,
      and `.docs-plan.md`. Run `npx astro check` only if `outDir` is already a buildable Astro project.
    - **To update (Tier 2)**: don't replan. For changed code, `git diff --name-only <ref>` and `reopen <id>`
@@ -132,8 +151,9 @@ Artifacts: `docs-site/`, `.eatahorse-docs/`, and `.docs-plan.md` can be safely g
 
 ## Defaults (when the user skips a field)
 
-root=`.` · outDir=`./docs-site` · framework=starlight · scaffoldMode=content-only · includeTutorials=false ·
-board=`.eatahorse-docs` · workerModel=sonnet · maxRounds=3 (clamped to 10) · filesPerPage=12 · verify=false.
+<!-- @generated-start arg-contract/skill-defaults -->
+root=. · outDir=./docs-site · framework=starlight · scaffoldMode=content-only · includeTutorials=false · board=.eatahorse-docs · workerModel=sonnet · maxRounds=3 (max 10) · filesPerPage=12 · verify=false.
+<!-- @generated-end arg-contract/skill-defaults -->
 
 ## Notes
 

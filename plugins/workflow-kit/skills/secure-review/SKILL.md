@@ -15,6 +15,11 @@ or step-by-step exploitation — only evidence-backed findings and remediation g
 
 Artifacts: `.security-audit/` baselines can be safely git ignored unless the user wants audit state tracked.
 
+> SENSITIVE OUTPUT: everything under `.security-audit/` (recon index, report, baseline, confirmed
+> findings) is a VULNERABILITY INVENTORY. Do NOT commit it or post it publicly. The `security-audit`
+> workflow auto-ensures the target repo gitignores this dir; if you run recon.py by hand, add
+> `.security-audit/` to `.gitignore` yourself before committing.
+
 ## Set up deterministic recon (do this first)
 
 `scripts/recon.py` builds a JSON index (symbols, resolved constants, caller↔callee graph, entry points)
@@ -56,12 +61,13 @@ All subcommands except `index` read a prebuilt index via `--index <recon.json>` 
 | Command | Args / flags | What it returns |
 |---|---|---|
 | `index <scope>` | `--out <f>` (else stdout), `--files <list>` (newline paths, for diff mode), `--max-bytes <n>` (skip larger files, default 1_000_000), `--compact` | Builds + writes the JSON artifact |
-| `extract <target>` | `target` = `file#fn[:line]` \| `file:line` \| `fn`; `--index` | Exact function body (replaces brace-window slicing) |
+| `extract <target>` | `target` = `file#fn[:line]` \| `file:line` \| `fn`; `--index`; `--context-lines <n>` (fallback window for config files) | Exact function body. Header carries `key=<file#name>` (a stable, line-shift-resistant fingerprint of the enclosing function) and a `# taint: <param>-><call>(...)` line listing which params flow DIRECTLY into each call's args (precise backends only — a `# taint: none` line is not proof of safety; recon tracks no transitive/cross-function flow) |
 | `callers <symbol>` | `symbol` = `fn` \| `file#fn[:line]`; `--index` | Direct callers; `no DIRECT callers but referenced as a VALUE` = handler/callback; `NO callers and not referenced` = dead code |
 | `const <NAME>` | `--index` | Resolved constant value(s) + defining file |
 | `map` | `--index`; `--focus <a,b>` (default: entry-point files); `--hops <n>` (default 2); `--max <n>` (default 80) | Compressed internal module graph (imports + cross-file calls), external libs collapsed |
 | `shard` | `--index`; `--i <i>` `--n <n>` (required); `--by dir\|name` (default dir) | Deterministic file slice i-of-n (drives file-partition lanes) |
 | `summary` | `--index` | Counts, languages, tree-sitter on/off, per-language `backends`, first 50 entry points |
+| `scan <scope>` | `--bin <path>` (else `$SECRETS_SCANNER_BIN`, else `secrets-scanner`); `--changed-files --base <ref>`; `--baseline <file>` (read only if it exists); `--max-file-size <n>` | OPTIONAL deterministic secret scan via the external `secrets-scanner` binary. Emits `{ran,count,findings[]}`; `ran:false` (with `reason`+`install`) when the binary is absent — expected, not an error. See "Optional: deterministic secrets scan" below |
 
 A bare `<symbol>`/`<fn>` that is defined in more than one place is **ambiguous** for `callers`/`extract`:
 they exit non-zero and print candidate ids instead of a result. Re-run with the printed `file#fn` form,
@@ -105,6 +111,48 @@ for any source-size decision so fixture-heavy trees (lots of `.json`) don't skew
   Imports written inside string literals can inflate the external list but never affect internal edges.
 - Entry-point detection (heuristic) spans CLI mains, Python/Flask, Express/Node, Go HTTP, plus
   Spring/JAX-RS (Java), ASP.NET (C#), actix/axum (Rust), Rails/Sinatra (Ruby), and PHP superglobals/Laravel.
+
+## Optional: deterministic secrets scan
+
+`recon.py scan` shells out to an external `secrets-scanner` binary
+([github.com/whit3rabbit/secrets-scanner](https://github.com/whit3rabbit/secrets-scanner)) for a
+deterministic, no-LLM secrets pass (memchr prefilter → Aho-Corasick → entropy → regex over ~988 rules).
+It emits json/jsonl/SARIF and line-tolerant SHA-256 fingerprints with a baseline/suppression model — so
+a leaked key is matched on content, not `file:line`, and survives reformatting.
+
+It is **optional**. Detected on PATH (or `$SECRETS_SCANNER_BIN`); if absent, `recon.py scan` returns
+`{"ran": false, ...}` (exit 0) and the audit continues with an honest "secrets pass not run" constraint.
+The security-audit workflow runs it automatically when present (`secretsScan: 'auto'`); pass
+`secretsScan: 'off'` to skip or `'on'` to require the attempt.
+
+### Install (pick one — never piped into a shell from inside an audit)
+
+| OS | Options |
+|---|---|
+| macOS | `brew install --cask whit3rabbit/tap/secrets-scanner` · `cargo install secrets_scanner` · release binary + checksum |
+| Linux | `cargo install secrets_scanner` · release binary + checksum · (`install.sh` exists but review it; do not `curl … \| bash` from an audit) |
+| Windows | release binary · (`install.ps1` exists; review before running) |
+
+Release binaries (checksum-verified) are at the repo's GitHub Releases. Place on `PATH`, `chmod +x`.
+
+### Run
+
+```bash
+secrets-scanner scan . --format json                 # findings as JSON (exit 1 = findings, 0 = none)
+secrets-scanner scan . --format sarif > results.sarif # for GitHub code-scanning / merge gates
+secrets-scanner scan . --baseline .security-audit/secrets-baseline.txt  # suppress known fingerprints
+```
+
+Suppress a false positive by adding its `fingerprint` (one per line) to the baseline file — this is
+**operator-managed**; the workflow reads it but never auto-writes fingerprints (auto-suppressing would
+silently hide a real leak).
+
+### Licensing
+
+The default lean build (`cargo build --release`) embeds permissive rulesets (MIT/Apache-2.0). Building
+`--features full-ruleset` pulls in AGPL-3.0-derived rules (secrets-patterns-db): if you redistribute that
+binary or run it as a network service you take on AGPL source-sharing obligations. Install the plain
+build; do not bake `full-ruleset` into a hosted pipeline unaware.
 
 ## Brief yourself first
 

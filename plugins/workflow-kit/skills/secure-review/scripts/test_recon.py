@@ -234,8 +234,12 @@ def sink():
     pass
 ''')
     idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    # outer's OWN body makes no call to sink (the call lives in the nested inner) ...
     assert "sink" not in idx["callees"]["outer"], idx["callees"]["outer"]
-    assert idx["callers"]["sink"] == [], idx["callers"]["sink"]
+    # ... but inner IS now its own symbol (ast backend used to drop nested defs entirely), and its
+    # call edge to sink is captured: sink's only caller is inner, not outer.
+    assert "inner" in idx["symbols"], list(idx["symbols"])
+    assert idx["callers"]["sink"] == ["inner"], idx["callers"]["sink"]
 
 
 def test_entrypoint_function_is_flagged_reachable_not_dead():
@@ -637,7 +641,7 @@ def test_regex_dotted_external_does_not_bind_to_in_repo_bare_name():
     # symbols table has an in-repo `Join`; the dotted external call must NOT resolve to it.
     symbols = {"Join": [{"name": "Join", "file": "utils.js", "language": "javascript"}]}
     caller_fn = {"name": "my_func", "file": "caller.js", "language": "javascript"}
-    target = recon._resolve_call_target(call, caller_fn, symbols, known_internal_qualifiers=set())
+    target = recon._resolve_call_target(call, caller_fn, symbols, known_internal_qualifiers={})
     assert target is None, f"qualified-external pkg.Join must not bind to in-repo Join, got {target}"
 
 
@@ -797,6 +801,37 @@ def test_aliased_js_require_resolves_internal_call():
     assert "go" in idx["callers"].get("foo", []), idx["callers"].get("foo")
 
 
+def test_aliased_require_does_not_bind_to_unimported_same_named_symbol():
+    # #2: `const fs = require('./util'); fs.foo()` — `foo` is NOT defined in util.js; a same-named `foo`
+    # exists UNIQUELY in an unrelated other.js. Rule (c) must bind ONLY to the imported file, so the
+    # call resolves to nothing (no false cross-file edge), NOT to other.js#foo. Backend-agnostic.
+    d = tempfile.mkdtemp()
+    (Path(d) / "main.js").write_text("const fs = require('./util');\nfunction go(){ return fs.foo(); }\n")
+    (Path(d) / "util.js").write_text("function bar(){ return 1; }\nmodule.exports = { bar };\n")
+    (Path(d) / "other.js").write_text("function foo(){ return 2; }\nmodule.exports = { foo };\n")
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    assert "foo" not in idx["callees"].get("go", []), idx["callees"].get("go")
+    assert "go" not in idx["callers"].get("foo", []), idx["callers"].get("foo")
+
+
+def test_argparse_entrypoint_not_inflated_per_flag():
+    # #6: an N-flag ArgumentParser must yield ONE argparse entrypoint, not one per add_argument(.
+    d = tempfile.mkdtemp()
+    (Path(d) / "cli.py").write_text(
+        "import argparse\n"
+        "def main():\n"
+        "    p = argparse.ArgumentParser()\n"
+        "    p.add_argument('--a')\n"
+        "    p.add_argument('--b')\n"
+        "    p.add_argument('--c')\n"
+        "    return p.parse_args()\n"
+    )
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    argparse_eps = [e for e in idx["entrypoints"] if e["kind"] == "argparse"]
+    # ArgumentParser() + parse_args() = 2 signal lines; the 3 add_argument lines must NOT each fire.
+    assert len(argparse_eps) <= 2, argparse_eps
+
+
 def test_treesitter_nonjs_imports_still_populated():
     # EH-0006 regression guard: under tree-sitter, non-JS/TS files (Go here) must STILL get imports via
     # the regex fallback — _ts_imports_exports only covers JS/TS, so without the fallback Go/Rust/Java/etc.
@@ -851,6 +886,334 @@ def test_strip_comments_preserves_shebang():
     out_php = recon._strip_comments(php, "php")
     assert "#!/usr/bin/php" in out_php, out_php
     assert "hash comment" not in out_php and "slash comment" not in out_php, out_php
+
+
+# --- taint (direct param->call-arg) + stable-key extract header ---------------------------------
+
+def test_python_taint_direct_param_to_call_arg():
+    # ast backend: a param flowing into a call's args is recorded; a call with only constant args isn't.
+    d = tempfile.mkdtemp()
+    (Path(d) / "a.py").write_text(
+        "def handle(req):\n    return sink(req)\n"
+        "def safe():\n    return sink(42)\n"
+        "def sink(x):\n    return x\n")
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    assert idx["symbols"]["handle"][0].get("taint") == [{"call": "sink", "params": ["req"]}], \
+        idx["symbols"]["handle"][0].get("taint")
+    assert idx["symbols"]["safe"][0].get("taint") == [], idx["symbols"]["safe"][0].get("taint")
+
+
+def test_python_taint_nested_arg_expression():
+    # Direct flow includes a param used inside a nested arg expression (req.body) or wrapping call.
+    d = tempfile.mkdtemp()
+    (Path(d) / "a.py").write_text(
+        "def handle(req):\n    return run(parse(req.body))\n"
+        "def run(x):\n    return x\n"
+        "def parse(y):\n    return y\n")
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    taint = idx["symbols"]["handle"][0].get("taint")
+    flows = {t["call"]: t["params"] for t in taint}
+    assert flows.get("parse") == ["req"], taint     # req.body -> parse arg
+    assert flows.get("run") == ["req"], taint        # req reaches the outer run(...) expression too
+
+
+def test_regex_backend_has_no_taint_or_params():
+    # Precise-only: the regex fallback can't scope args to params, so both stay empty.
+    fi = recon.parse_regex("a.js", "function handle(req){ return sink(req); }\n", "javascript")
+    assert fi.functions[0].get("taint") == [], fi.functions[0]
+    assert fi.functions[0].get("params") == [], fi.functions[0]
+
+
+def test_extract_emits_stable_key_header():
+    # cmd_extract header carries key=<file#name> (stable, line-free for a unique name) for fingerprinting.
+    d = _tree()
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    ipath = _write_index(d, idx)
+    ns = type("A", (), {"index": str(ipath), "target": "handle"})
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = recon.cmd_extract(ns)
+    out = buf.getvalue()
+    assert rc == 0, out
+    assert "key=a.py#handle" in out, out
+
+
+def test_extract_duplicate_name_key_is_line_disambiguated():
+    # For a duplicate name in one file the key must carry the line suffix (stable per-definition id).
+    d = _overloaded_tree()
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    ipath = _write_index(d, idx)
+    ns = type("A", (), {"index": str(ipath), "target": "S.java#Get:2"})
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = recon.cmd_extract(ns)
+    out = buf.getvalue()
+    assert rc == 0, out
+    assert "key=S.java#Get:2" in out, out
+
+
+def test_extract_emits_taint_line():
+    # cmd_extract surfaces the function's direct taint when the target resolves to an indexed fn.
+    d = tempfile.mkdtemp()
+    (Path(d) / "a.py").write_text("def handle(req):\n    return sink(req)\ndef sink(x):\n    return x\n")
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    ipath = _write_index(d, idx)
+    ns = type("A", (), {"index": str(ipath), "target": "a.py#handle"})
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = recon.cmd_extract(ns)
+    out = buf.getvalue()
+    assert rc == 0, out
+    assert "# taint:" in out and "req->sink" in out, out
+
+
+def test_extract_file_line_target_surfaces_key_and_taint():
+    # A file:line target (the shape lanes often emit) recovers the enclosing symbol so key=/taint still show.
+    d = tempfile.mkdtemp()
+    (Path(d) / "a.py").write_text("def handle(req):\n    return sink(req)\ndef sink(x):\n    return x\n")
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    ipath = _write_index(d, idx)
+    ns = type("A", (), {"index": str(ipath), "target": "a.py:2"})  # the sink-call line inside handle
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = recon.cmd_extract(ns)
+    out = buf.getvalue()
+    assert rc == 0, out
+    assert "key=a.py#handle" in out, out
+    assert "req->sink" in out, out
+
+
+def test_treesitter_taint_param_to_call_arg():
+    # venv-gated: tree-sitter backend computes the same direct param->arg taint as the ast backend.
+    if recon._ts_parser("javascript") is None:
+        print("   (skip: tree-sitter language pack not installed)")
+        return
+    d = tempfile.mkdtemp()
+    (Path(d) / "a.js").write_text(
+        "function handle(req){ return sink(req); }\n"
+        "function safe(){ return sink(1); }\n"
+        "function sink(x){ return x; }\n")
+    idx = recon.build_index(d, recon.DEFAULT_MAX_BYTES, None)
+    assert idx["symbols"]["handle"][0].get("taint") == [{"call": "sink", "params": ["req"]}], \
+        idx["symbols"]["handle"][0].get("taint")
+    assert idx["symbols"]["safe"][0].get("taint") == [], idx["symbols"]["safe"][0].get("taint")
+
+
+# --- backend parity harness --------------------------------------------------------------------
+# The recurring-bug class (EH-0002 export-const, EH-0006 non-JS imports, nested-fn drop) was always the
+# same shape: the PRECISE (tree-sitter) path forgot something the DEGRADED (regex) path already did,
+# making precise STRICTLY WORSE than degraded. These tests make that structurally catchable: parse the
+# SAME fixture through parse_file twice (tree-sitter on, then forced off -> regex) and assert the
+# anti-"precise<degraded" contract. venv-gated — needs both backends to compare, so SKIP in stdlib.
+#
+# Contract (subset, NOT equality — precise legitimately catches MORE: nested fns, module.exports object):
+#   imports / exports / function names:  regex (degraded) MUST be a subset of tree-sitter (precise).
+#     If precise misses an import/export/fn the degraded path found, regex ⊄ ts and the test fails —
+#     exactly the precise<degraded regression. Precise catching extra is allowed (superset is fine).
+#   call edges:  ts MUST be a subset of regex. Here the relationship is reversed by design: the regex
+#     fallback OVER-attributes calls inside nested closures to the outer fn (documented degraded
+#     limitation, recon.py calls scoping), so regex is the superset. ts ⊆ regex documents that.
+
+_PARITY_FIXTURES = {
+    # filename: (grammar, source). One import, an export where the language has them, two functions,
+    # one cross/dotted call — clean enough that the regex backend does not false-positive a function.
+    "p.js": ("javascript",
+             "import helper from './helper';\n"
+             "export function run(req) { return helper(req); }\n"
+             "export const go = () => run(1);\n"),
+    "p.go": ("go",
+             'package main\nimport "myrepo/util"\n'
+             "func main() { util.Do() }\nfunc helper() {}\n"),
+    "p.rb": ("ruby",
+             "require_relative 'helper'\ndef handle(req)\n  parse(req)\nend\ndef parse(x)\n  x\nend\n"),
+    "p.rs": ("rust",
+             "mod util;\npub fn run() { helper() }\nfn helper() {}\n"),
+    "p.java": ("java",
+               "package com.ex;\nimport com.ex.Util;\n"
+               "public class Main { public String get(String id) { return clean(id); }\n"
+               "  public String clean(String s) { return s; } }\n"),
+}
+
+
+def _parse_both(path):
+    """Return (ts_on, ts_off) FileInfo for `path`: once with tree-sitter, once with it forced off
+    (regex fallback). Forcing off via the module global exercises the REAL parse_file path, including
+    the non-JS import fallback that EH-0006 broke. Restores the global + parser cache afterward."""
+    ts_on = recon.parse_file(path, recon.DEFAULT_MAX_BYTES)
+    saved_avail = recon._TS_AVAILABLE
+    saved_parsers = dict(recon._TS_PARSERS)
+    recon._TS_AVAILABLE = False           # make _ts_parser return None for every grammar
+    recon._TS_PARSERS.clear()
+    try:
+        ts_off = recon.parse_file(path, recon.DEFAULT_MAX_BYTES)
+    finally:
+        recon._TS_AVAILABLE = saved_avail
+        recon._TS_PARSERS.clear()
+        recon._TS_PARSERS.update(saved_parsers)
+    return ts_on, ts_off
+
+
+def test_backend_parity_imports_exports_fns():
+    # venv-gated: degraded (regex) must be a SUBSET of precise (tree-sitter) for imports, exports, and
+    # function names. Catches the EH-0002 / EH-0006 / nested-drop class where precise lost ground.
+    # Skip ONLY if NO fixture grammar is installed — gating on one grammar (go) would silently skip the
+    # js/ruby/rust/java fixtures whenever a pack ships without go, hiding their parity regressions.
+    if all(recon._ts_parser(g) is None for g in {g for g, _ in _PARITY_FIXTURES.values()}):
+        print("   (skip: no tree-sitter grammars from the language pack installed)")
+        return
+    d = tempfile.mkdtemp()
+    for fn, (grammar, src) in _PARITY_FIXTURES.items():
+        if recon._ts_parser(grammar) is None:
+            continue  # this grammar absent from the pack — skip just this fixture
+        p = Path(d) / fn
+        p.write_text(src)
+        ts_on, ts_off = _parse_both(str(p))
+        assert ts_on.backend == "treesitter", (fn, ts_on.backend)  # the "on" pass really used tree-sitter
+        assert ts_off.backend == "regex", (fn, ts_off.backend)     # the "off" pass really fell to regex
+        on_imp = {i["spec"] for i in ts_on.imports}
+        off_imp = {i["spec"] for i in ts_off.imports}
+        assert off_imp <= on_imp, f"{fn}: precise<degraded on imports — regex {off_imp} not subset of ts {on_imp}"
+        assert set(ts_off.exports) <= set(ts_on.exports), (
+            f"{fn}: precise<degraded on exports — regex {ts_off.exports} not subset of ts {ts_on.exports}")
+        on_fns = {f["name"] for f in ts_on.functions}
+        off_fns = {f["name"] for f in ts_off.functions}
+        assert off_fns <= on_fns, f"{fn}: precise<degraded on functions — regex {off_fns} not subset of ts {on_fns}"
+
+
+def test_backend_parity_calls_subset():
+    # venv-gated: for call edges the relationship is REVERSED — the regex fallback over-attributes
+    # nested-closure calls to the outer function (documented), so ts ⊆ regex. Assert that for the
+    # dotted/qualifier-clean languages (go, js) where both backends parse call heads the same way.
+    if recon._ts_parser("go") is None and recon._ts_parser("javascript") is None:
+        print("   (skip: neither go nor javascript grammar installed)")
+        return
+    d = tempfile.mkdtemp()
+    for fn in ("p.go", "p.js"):
+        grammar, src = _PARITY_FIXTURES[fn]
+        if recon._ts_parser(grammar) is None:
+            continue
+        p = Path(d) / fn
+        p.write_text(src)
+        ts_on, ts_off = _parse_both(str(p))
+        on_by_name = {f["name"]: set(f["calls"]) for f in ts_on.functions}
+        off_by_name = {f["name"]: set(f["calls"]) for f in ts_off.functions}
+        for name, on_calls in on_by_name.items():
+            off_calls = off_by_name.get(name, set())
+            assert on_calls <= off_calls, (
+                f"{fn}:{name}: ts calls {on_calls} not subset of regex calls {off_calls}")
+
+
+def test_backend_parity_taint_is_precise_only_superset():
+    # venv-gated: taint is a documented precise-only enrichment. The degraded (regex) backend must
+    # carry NO taint, and the precise backend's taint is a superset (here: the handle->sink flow).
+    # This keeps "precise >= degraded" true for taint — precise adds it, degraded never has a WRONG one.
+    if recon._ts_parser("javascript") is None:
+        print("   (skip: tree-sitter language pack not installed)")
+        return
+    d = tempfile.mkdtemp()
+    p = Path(d) / "t.js"
+    p.write_text("function handle(req){ return sink(req); }\nfunction sink(x){ return x; }\n")
+    ts_on, ts_off = _parse_both(str(p))
+    off_taint = {f["name"]: f.get("taint", []) for f in ts_off.functions}
+    on_taint = {f["name"]: f.get("taint", []) for f in ts_on.functions}
+    assert all(t == [] for t in off_taint.values()), f"regex must carry no taint, got {off_taint}"
+    assert on_taint.get("handle") == [{"call": "sink", "params": ["req"]}], on_taint
+
+
+import json as _json
+
+
+def _scan_ns(**kw):
+    base = {"scope": ".", "bin": None, "changed_files": False, "base": None,
+            "baseline": None, "max_file_size": None, "format": "json"}
+    base.update(kw)
+    return type("A", (), base)
+
+
+def test_scan_subparser_accepts_format_flag():
+    # Regression for the secrets stage: security-audit.js's reconBlock documents and invokes
+    # `recon.py scan <scope> --format json`. The other scan tests call cmd_scan() directly and bypass
+    # argparse, so they cannot catch a missing --format. Exercise the real parse path.
+    args = recon.build_parser().parse_args(["scan", ".", "--format", "json"])
+    assert args.scope == "." and args.format == "json", vars(args)
+    # And it must parse WITHOUT --format too (default json).
+    args2 = recon.build_parser().parse_args(["scan", "."])
+    assert args2.format == "json", vars(args2)
+
+
+def _run_scan(ns):
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = recon.cmd_scan(ns)
+    return rc, _json.loads(buf.getvalue())
+
+
+def test_scan_absent_binary_returns_not_run():
+    # Absence is EXPECTED: exit 0, ran=false, with a reason + install breadcrumb so the
+    # workflow can surface a constraint instead of failing the audit.
+    rc, out = _run_scan(_scan_ns(bin="/nonexistent-secrets-scanner-xyz"))
+    assert rc == 0, rc
+    assert out["ran"] is False, out
+    assert out["reason"] and out["install"], out
+
+
+def test_scan_present_parses_json():
+    # Stub binary on disk (passed via --bin) emits canned secrets-scanner JSON and exits 1
+    # (findings). cmd_scan must parse it and pass the fingerprint through verbatim.
+    d = tempfile.mkdtemp()
+    stub = Path(d) / "fake-scanner"
+    payload = _json.dumps([
+        {"file": "config/.env", "line": 3, "col": 1, "rule_id": "aws-access-key",
+         "rule_description": "AWS access key", "matched": "***REDACTED***",
+         "entropy": 4.2, "fingerprint": "sha256-deadbeef"},
+    ])
+    # cat the payload, exit 1 to mimic "findings detected" (a normal, non-error outcome).
+    stub.write_text("#!/bin/sh\ncat <<'EOF'\n" + payload + "\nEOF\nexit 1\n")
+    stub.chmod(0o755)
+    rc, out = _run_scan(_scan_ns(bin=str(stub)))
+    assert rc == 0, rc
+    assert out["ran"] is True, out
+    assert out["count"] == 1, out
+    f = out["findings"][0]
+    assert f["fingerprint"] == "sha256-deadbeef", f  # baseline key preserved verbatim
+    assert f["rule_id"] == "aws-access-key" and f["file"] == "config/.env", f
+
+
+def test_rg_stdlib_fallback_skips_pathologically_long_lines():
+    # The stdlib _rg fallback (used when ripgrep is absent) must not scan a multi-MB single line —
+    # a hostile tree could otherwise turn the regex pass into a CPU/memory DoS. Force the fallback by
+    # stubbing shutil.which to None, then confirm a normal short hit is returned and the over-long
+    # line (which also contains the pattern) is skipped, not matched.
+    d = tempfile.mkdtemp()
+    long_line = "NEEDLE" + ("A" * (recon._RG_MAX_LINE_BYTES + 10))
+    (Path(d) / "a.py").write_text(f"x = 1  # NEEDLE here\n{long_line}\nz = 2\n")
+    orig_which = recon.shutil.which
+    recon.shutil.which = lambda *a, **k: None  # force the stdlib walk (no ripgrep)
+    try:
+        hits = recon._rg("NEEDLE", d)
+    finally:
+        recon.shutil.which = orig_which
+    assert any(":1:" in h for h in hits), hits          # the short line on line 1 matched
+    assert not any("AAAA" in h for h in hits), "over-long line must be skipped, not scanned"
+
+
+def test_file_suffix_match_is_segment_anchored():
+    # Regression: file.lstrip('./') + endswith over-matched. lstrip strips a CHAR SET, so '../a/db.py'
+    # collapsed to 'a/db.py' and bare 'db.py' suffix-matched 'imdb.py' -> wrong key=/taint fingerprint.
+    assert recon._strip_dot_slash("./a/db.py") == "a/db.py"
+    assert recon._strip_dot_slash("../a/db.py") == "../a/db.py"  # the bug turned this into 'a/db.py'
+    assert recon._file_suffix_match("src/auth/db.py", "auth/db.py")
+    assert recon._file_suffix_match("db.py", "db.py")
+    assert not recon._file_suffix_match("imdb.py", "db.py")
+    assert not recon._file_suffix_match("src/fakeauth/db.py", "auth/db.py")
+
+
+def test_dedup_taint_collapses_duplicate_flows():
+    # Regression: taint was appended raw while `calls` was sorted(set(...)), so two call sites to the
+    # same sink inflated the `# taint:` header. Dedup by (call, params); distinct param sets are kept.
+    t = [{"call": "sink", "params": ["req"]}, {"call": "sink", "params": ["req"]},
+         {"call": "sink", "params": ["x"]}]
+    assert recon._dedup_taint(t) == [{"call": "sink", "params": ["req"]}, {"call": "sink", "params": ["x"]}]
 
 
 def main():

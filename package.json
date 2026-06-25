@@ -9,7 +9,8 @@
   "scripts": {
     "build:skill": "node scripts/build-skill.mjs",
     "build:docs-contracts": "node scripts/build-docs-contracts.mjs",
-    "check": "node bin/cli.mjs --check && node scripts/build-skill.mjs --check && node scripts/build-docs-contracts.mjs --check",
+    "build:arg-contract": "node scripts/build-arg-contract.mjs",
+    "check": "node bin/cli.mjs --check && node scripts/build-skill.mjs --check && node scripts/build-docs-contracts.mjs --check && node scripts/build-arg-contract.mjs --check",
     "test": "node --test"
   },
   "dependencies": {

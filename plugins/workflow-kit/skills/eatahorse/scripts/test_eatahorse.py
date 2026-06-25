@@ -158,6 +158,28 @@ def test_move_done_empty_card_sticks():
             "empty done card must stay done across re-sync"
 
 
+def test_two_acceptance_gate_tick_completes():
+    # docs-from-code #1 (grounding-as-board-fact): a page card carries TWO acceptance items —
+    # [1] "page written" (author ticks), [2] "grounding verified by gate" (gate ticks). The card is
+    # NOT done until BOTH are ticked, so admitted ⇔ gate-verified. Indexing is 1-BASED (the workflow
+    # gate runs `bite <id> 2`); ticking item 1 alone must NOT complete the card.
+    with tempfile.TemporaryDirectory() as d:
+        board = Path(d) / ".eatahorse"
+        eh.init_board(board, "Test")
+        task = eh.create_task(
+            board, "page.md", bites=["author it"],
+            acceptance=["page written from source", "grounding verified by gate"], status="backlog")
+        tid = task["id"]
+        # author ticks ONLY item 1 -> still awaiting grounding (not done).
+        eh.set_checkbox(board, tid, 1, done=True, group="acceptance")
+        assert eh.load_state(board)["tasks"][tid]["status"] != "done", \
+            "author ticking 'page written' alone must NOT complete the card"
+        # gate ticks item 2 (1-based) -> both met -> done.
+        eh.set_checkbox(board, tid, 2, done=True, group="acceptance")
+        assert eh.load_state(board)["tasks"][tid]["status"] == "done", \
+            "ticking the grounding item (index 2) completes the card"
+
+
 def main():
     tests = [
         test_bite_done_open_flag,
@@ -167,6 +189,7 @@ def main():
         test_move_done_unmet_reverts,
         test_reopen_verb,
         test_next_excludes_blocked,
+        test_two_acceptance_gate_tick_completes,
         test_notes_roundtrip_no_footer_pollution,
         test_notes_empty_roundtrips_blank,
         test_move_done_empty_card_sticks,

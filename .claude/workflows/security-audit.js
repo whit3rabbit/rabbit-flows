@@ -59,7 +59,9 @@
 // write-back writes the baseline. The recon index + baseline default OUTSIDE .claude/rules/ on purpose
 // — that dir auto-loads into every session, so a vuln inventory there would leak into unrelated work.
 //
-// requires-skills: secure-review
+// requires-skills: secure-review, audit-codebase
+//   (audit-codebase is the conversational FRONT DOOR — it runs AskUserQuestion for scope/focus/depth,
+//    then launches this workflow. secure-review is the inline specialist WORKER role for the lanes/gate.)
 //   (Bundling — the installer copies this skill (SKILL.md + scripts/recon.py + venv bootstrap) alongside
 //    the workflow. Workflow stages do NOT auto-load skills; agent() has no skills option. The lane/gate
 //    contracts and the recon.py command surface are carried inline; those inline prompts are the runtime
@@ -69,10 +71,12 @@
 // script in an async function, so top-level return/await are legal there. Same as starter.js.)
 export const meta = {
   name: 'security-audit',
-  description: 'Defensive code audit: deterministic recon index, map attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation.',
+  description: 'Audit a codebase for security vulnerabilities: scan committed code, review it in parallel lanes, drop false positives, and report each issue with remediation.',
+  whenToUse: 'Use to find security bugs in committed code across a path, folder, or whole repo. For the pending diff only, use the built-in /security-review. Front door: the audit-codebase skill.',
   phases: [
     { title: 'Recon' },
     { title: 'Map' },
+    { title: 'Secrets', detail: 'optional deterministic secret scan; skipped if scanner absent' },
     { title: 'Lanes' },
     { title: 'Gate' },
     { title: 'Escalate', detail: 'resolve UNCERTAIN verdicts with a recon-and-commit pass; surface residual' },
@@ -98,6 +102,34 @@ const NOTE_SCHEMA = {
           type: { enum: ['finding', 'failure', 'constraint'] },
           where: { type: 'string' },    // file:line, file, or area
           evidence: { type: 'string' }, // the exact code/pattern seen + why it may be a risk
+        },
+      },
+    },
+  },
+}
+
+// Secrets stage echoes recon.py's `scan` output verbatim. ran:false (binary absent) is expected, not a
+// failure; findings carry the line-tolerant fingerprint used as the baseline key.
+const SECRETS_SCHEMA = {
+  type: 'object',
+  additionalProperties: true, // tolerate extra scanner fields without a schema retry
+  required: ['ran'],
+  properties: {
+    ran: { type: 'boolean' },
+    count: { type: 'integer' },
+    scanner: { type: 'string' },
+    incomplete: { type: 'boolean' },
+    reason: { type: 'string' },   // present when ran:false
+    install: { type: 'string' },  // present when ran:false
+    findings: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: true,
+        properties: {
+          file: { type: 'string' }, line: { type: ['integer', 'null'] }, col: { type: ['integer', 'null'] },
+          rule_id: { type: 'string' }, rule_description: { type: 'string' },
+          entropy: { type: ['number', 'null'] }, fingerprint: { type: 'string' },
         },
       },
     },
@@ -156,9 +188,17 @@ const MAP_SCHEMA = {
 const VERDICT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
+  // fingerprint is OPTIONAL (not required): the first gate + escalate fill it; deep-gate/arbiter re-examine
+  // a finding that already carries one, and the script back-fills a fallback for any confirmed VALID that
+  // lacks it — so it need not be in `required` (which is shared by all four verdict prompts).
   required: ['verdict', 'entry_point', 'severity', 'category', 'remediation', 'why', 'crux', 'confidence', 'checks'],
   properties: {
     verdict: { enum: ['VALID', 'INVALID', 'UNCERTAIN'] },
+    // Stable cross-run identity: <enclosing-fn key from recon extract's "key=">::<category>. Survives line
+    // shifts and minor evidence rewording (unlike where=file:line), so a triaged ACCEPTED item in the
+    // baseline keeps suppressing the same finding across releases. Falls back to <where>::<category> when
+    // no key resolves (config files, unindexed spans).
+    fingerprint: { type: 'string' },
     entry_point: { type: 'string' }, // the external entry point the attacker-controlled data enters from, or NONE
     severity: { enum: ['critical', 'high', 'medium', 'low', 'info'] }, // meaningful only when verdict=VALID
     category: { type: 'string' },
@@ -210,7 +250,11 @@ const partitionThreshold = args?.partitionThreshold ?? 40 // file count above wh
 const maxFindings = Math.min(args?.maxFindings ?? 150, 1000) // ceiling on per-finding gate fan-out (severity-sorted)
 const minConfidence = args?.minConfidence ?? 0 // 0 = off; demote confirmed VALIDs below this to unsettled
 const mode = args?.mode === 'diff' ? 'diff' : 'paths'
-const since = args?.since ?? 'HEAD~1' // diff mode: audit committed files changed since this ref
+// diff mode: audit committed files changed since this ref. Validate the charset — `since` is
+// interpolated into git commands inside agent prompts (steps below + recon --base), so restrict it
+// to safe git-ref characters and fall back to the default on anything else.
+const sinceRaw = args?.since ?? 'HEAD~1'
+const since = /^[A-Za-z0-9_.~^:/-]+$/.test(sinceRaw) ? sinceRaw : 'HEAD~1'
 const workerModel = args?.workerModel ?? 'haiku' // breadth-first + cheap on purpose
 const gateModel = args?.gateModel ?? 'sonnet'    // recon makes the trace deterministic, so no Opus here
 const planModel = args?.planModel ?? 'opus'      // decompose: errors propagate
@@ -225,6 +269,13 @@ const deepGateSeverities = (args?.deepGateSeverities ?? ['critical', 'high'])
 const baselinePath = args?.baselinePath ?? '.security-audit/baseline.md' // NOT .claude/rules/ — auto-loads every session
 const writeBaseline = args?.writeBaseline ?? true
 const writeArtifacts = args?.writeArtifacts ?? true
+// Optional deterministic secrets pass via the external secrets-scanner binary (recon.py scan).
+// 'auto' = run if the binary is on PATH, skip with a constraint note if absent (never forces a
+// download); 'on' = run (same detection); 'off' = skip entirely. Baseline is READ-only (a found
+// fingerprint is never auto-suppressed — that would silently hide a real leak).
+const secretsScan = ['auto', 'on', 'off'].includes(args?.secretsScan) ? args.secretsScan : 'auto'
+const secretsBin = args?.secretsBin // undefined -> recon.py resolves $SECRETS_SCANNER_BIN, else 'secrets-scanner'
+const secretsBaseline = args?.secretsBaseline ?? '.security-audit/secrets-baseline.txt'
 
 // recon.py is bundled in the secure-review skill; agents shell out to it. Paths are strings the script
 // passes through (it cannot read them). venvPy is the optional tree-sitter python the Recon stage builds.
@@ -248,6 +299,19 @@ const reconAuditOut = mode === 'diff'
   ? (reconOut.endsWith('.json') ? reconOut.replace(/\.json$/, '-audit.json') : reconOut + '.audit.json')
   : reconOut
 
+// Sensitive output: the audit writes a vulnerability inventory (recon index, report, baseline, confirmed
+// findings) under auditDir. In THIS repo that path is gitignored, but the workflow installs into OTHER
+// repos that won't be — so the Recon agent ensures the target repo gitignores it (idempotent root-.gitignore
+// append). Guard the auditDir === '.' case: outputs at the repo ROOT have no subdir to ignore (never write
+// ".gitignore" with "./" — that would ignore the whole repo); there the script just warns the operator.
+const sensitiveBlurb = `the audit output under "${auditDir}" (recon index, report, baseline, confirmed findings) is a VULNERABILITY INVENTORY — committing or publicly posting it is a security risk`
+const gitignoreStep = auditDir !== '.'
+  ? `Also (housekeeping, NOT code analysis): protect the audit output from accidental commit. Ensure the ` +
+    `repo-root .gitignore ignores the audit dir, idempotently (add the line only if absent):\n` +
+    `  L="${auditDir}/"; { [ -f .gitignore ] && grep -qxF "$L" .gitignore; } || ` +
+    `printf '%s\\n%s\\n' '# security-audit output (vulnerability inventory — do not commit)' "$L" >> .gitignore\n`
+  : ''
+
 // Recon command surface injected into lane + gate prompts (sliced: only the read subcommands they call).
 // Uses reconReachOut (full-repo index) so callers/const/extract always have the complete call graph,
 // even in diff mode where reconAuditOut is scoped to changed files only.
@@ -255,7 +319,8 @@ const reconBlock =
   `Deterministic recon — PREFER these over ad-hoc grep. Use "${venvPy}" as PY if it exists, else python3:\n` +
   `  PY "${reconScript}" callers <symbol|file#fn[:line]> --index "${reconReachOut}"   -> callers; it states when a function with no in-code caller is an ENTRY POINT or referenced-as-a-value (reachable) vs genuinely dead\n` +
   `  PY "${reconScript}" const <NAME> --index "${reconReachOut}"       -> resolved constant value (then DO THE ARITHMETIC)\n` +
-  `  PY "${reconScript}" extract <file#fn[:line] | file:line> --index "${reconReachOut}"  -> the exact function body; add --context-lines N (default 60) for config/IaC files where no function span exists — emits a line-centred window marked "# fallback window, not exact function"\n` +
+  `  PY "${reconScript}" extract <file#fn[:line] | file:line> --index "${reconReachOut}"  -> the exact function body. Its header carries key=<file#name> (a STABLE, line-shift-resistant fingerprint of the enclosing function) and a "# taint: <param>-><call>(...)" line listing which of the function's params flow DIRECTLY into each call's arguments. The taint line is PRECISE-BACKEND-ONLY: a taint hit is positive evidence of attacker-control reaching that sink; "# taint: none detected" is NOT a defense (the degraded/regex backend cannot compute taint, and recon does not track transitive or cross-function flow). Add --context-lines N (default 60) for config/IaC files where no function span exists — emits a line-centred window marked "# fallback window, not exact function"\n` +
+  `  PY "${reconScript}" scan <scope> --format json [--changed-files --base <ref>] [--baseline <file>]  -> optional deterministic secret scan via external secrets-scanner binary; emits {ran,findings[]} (ran:false if the binary is absent — expected, not an error)\n` +
   `If a query reports "ambiguous function <name>", the symbol has multiple definitions: re-run with ` +
   `the printed file#fn or file#fn:line form (applies to callers/extract; const lists every defining file).\n` +
   `Entry-point detection is heuristic — treat it as a signal, then confirm the path yourself.`
@@ -281,6 +346,7 @@ const recon = await agent(
     `1. Best-effort enable the precise backend: PY=$(bash "${reconSetup}" 2>/dev/null | tail -1); ` +
     `[ -x "$PY" ] || PY=python3   (recon.py works either way; the venv only adds tree-sitter precision)\n` +
     diffStep +
+    gitignoreStep +
     (mode === 'diff'
       ? `5. Return file_count (from the audit index "${reconAuditOut}"), reach_file_count (the file count ` +
         `reported when building the full-repo reach index "${reconReachOut}" — 0 if that build failed), ` +
@@ -304,6 +370,9 @@ if (!fileCount) return {
 // index silently failed to build, the reachability trace is dead but downstream wouldn't know. Bail loud.
 if (mode === 'diff' && !(recon?.reach_file_count ?? 0))
   return { error: 'diff mode: full-repo reach index empty or failed to build; reachability trace would be dead', scope, reconPath: reconReachOut }
+// Sensitive-output warning (always, regardless of writeBaseline/writeArtifacts): surface that the run
+// produces a vuln inventory and whether it was auto-gitignored.
+log(`security-audit: ${sensitiveBlurb}${auditDir !== '.' ? ' — ensured gitignored in the target repo' : ' (output is at the repo ROOT — NOT auto-gitignored; do not commit)'}.`)
 
 // 1. Map — Opus. Reads recon.json + the baseline, fixes shared constraints, and chooses the coverage
 //    model. Small scope -> thematic lanes; large scope -> file-partition so no file is skipped.
@@ -352,6 +421,43 @@ if (coverage === 'partition') {
 }
 if (!lanes.length) return { error: 'map stage returned no audit lanes', scope }
 log(`map: ${coverage} coverage, ${lanes.length} lane(s)`)
+
+// 1.5 Secrets — optional, deterministic. recon.py shells out to the external secrets-scanner binary
+//     (detect-or-skip; a leaked key needs no LLM reachability adjudication). These findings BYPASS the
+//     dedup + per-finding gate and live in a SEPARATE channel (secretFindings) so the gate's drop-count
+//     math is untouched. Absence is expected: it surfaces a constraint, never fails the audit. Baseline
+//     is read-only (recon.py reads --baseline only if it exists; nothing is auto-suppressed).
+phase('Secrets')
+let secretFindings = []
+let secretsRan = false
+if (secretsScan !== 'off') {
+  const scanCmd =
+    `PY="${venvPy}"; [ -x "$PY" ] || PY=python3\n` +
+    `"$PY" "${reconScript}" scan "${scope}" --format json` +
+    (mode === 'diff' ? ` --changed-files --base "${since}"` : '') +
+    ` --baseline "${secretsBaseline}"` +
+    (secretsBin ? ` --bin "${secretsBin}"` : '')
+  const secrets = await agent(
+    `Run the deterministic secrets scan, then report its JSON verbatim — do NOT analyze code or invent ` +
+      `findings. Run exactly this via Bash and return what it prints:\n${scanCmd}\n\n` +
+      `The command emits a single JSON object. If "ran" is false the scanner binary is not installed ` +
+      `(this is EXPECTED, not a failure) — return ran:false with its reason/install text. If "ran" is ` +
+      `true, return ran:true with its count and findings (pass each finding's fingerprint through ` +
+      `verbatim — it is the baseline key). Never run any installer (no curl|bash); just run the command above.`,
+    { label: 'secrets', phase: 'Secrets', model: workerModel, schema: SECRETS_SCHEMA },
+  )
+  secretsRan = !!secrets?.ran
+  if (secretsRan) {
+    secretFindings = (secrets?.findings ?? []).map((f) => ({ ...f, category: 'secret', severity: 'high' }))
+    log(`secrets: ${secretFindings.length} candidate(s) from ${secrets?.scanner ?? 'secrets-scanner'}${secrets?.incomplete ? ' (incomplete coverage)' : ''}`)
+  } else {
+    // Honest analog of treesitter:false — Lanes, Report, and coverage.md all learn the pass did not run.
+    constraints.push(`deterministic secrets pass NOT run: ${secrets?.reason ?? 'secrets-scanner unavailable'} (${secrets?.install ?? 'see secure-review/SKILL.md'}); config/secret coverage is LLM-lane only, not exhaustive`)
+    log(`secrets: skipped (${secrets?.reason ?? 'scanner unavailable'})`)
+  }
+} else {
+  constraints.push('deterministic secrets pass disabled (secretsScan:"off"); config/secret coverage is LLM-lane only')
+}
 
 // 2. Lanes — Haiku, parallel, breadth-first. Each lane gets the shared constraints read-only + the recon
 //    command surface, and owns a disjoint scope (or file shard), so lanes don't collide (workflow-design.md).
@@ -412,11 +518,14 @@ phase('Gate')
 // ponytail: exact where+evidence key; add a semantic dedup agent only if cross-file dups show up.
 const seen = new Set()
 let deduped = findings.filter((f) => {
-  const key = `${f.where}::${(f.evidence ?? '').slice(0, 120)}`
+  // Key on the FULL evidence, not a 120-char prefix: two distinct findings at the same `where`
+  // sharing a long prefix would otherwise collapse and silently drop one (recall hole).
+  const key = `${f.where}::${f.evidence ?? ''}`
   if (seen.has(key)) return false
   seen.add(key)
   return true
 })
+let notGated = [] // maxFindings overflow: surfaced as unsettled below, never silently dropped
 // ponytail: bound per-finding fan-out. Gate + escalate + deep-gate each spawn agents per finding, so
 // total cost scales with deduped.length, which a noisy Haiku lane pass can blow up. Never silently
 // truncate — log what was dropped (memory.md: no silent caps). True severity is set DOWNSTREAM by the
@@ -425,12 +534,18 @@ let deduped = findings.filter((f) => {
 if (deduped.length > maxFindings) {
   const HIGH_SIGNAL = /\b(rce|overflow|injection|sqli|xss|ssrf|deserial\w*|auth\w*|bypass|traversal|secret|credential|exec|command)\b/i
   const rank = (f) => (HIGH_SIGNAL.test(`${f.where} ${f.evidence ?? ''}`) ? 0 : 1)
-  deduped = deduped
+  const ranked = deduped
     .map((f, i) => [f, i])                                  // stable: emission order breaks ties within a bucket
     .sort(([a, ai], [b, bi]) => rank(a) - rank(b) || ai - bi)
     .map(([f]) => f)
-    .slice(0, maxFindings)
-  log(`gate: capped to ${maxFindings} of ${seen.size} deduped findings (ranked by evidence keywords; true severity is assigned downstream at the gate); ${seen.size - maxFindings} lower-signal findings NOT gated — raise maxFindings to cover them`)
+  deduped = ranked.slice(0, maxFindings)
+  // The sliced-off tail is NOT gated — but it is SURFACED downstream (unsettled), never dropped
+  // (memory.md: no silent caps). Marked so the report/baseline say it was skipped for cost, not refuted.
+  notGated = ranked.slice(maxFindings).map((f) => ({
+    ...f, gateStage: 'not-gated-capped',
+    why: `not gated — exceeded maxFindings cap (${maxFindings}); raise maxFindings to adjudicate`,
+  }))
+  log(`gate: capped to ${maxFindings} of ${seen.size} deduped findings (ranked by evidence keywords; true severity is assigned downstream at the gate); ${notGated.length} lower-signal findings NOT gated, surfaced as unsettled — raise maxFindings to cover them`)
 }
 const carriedBlock = carried.length
   ? `Constraints / failures from earlier stages (respect "ACCEPTED:" items):\n${JSON.stringify(carried, null, 2)}`
@@ -450,7 +565,9 @@ const verdicts = await parallel(
         `(confirm reachability with recon \`callers\`); (3) the cited value/size/pointer is actually ` +
         `attacker-controlled — NOT trusted/kernel-set, NOT a fixed-size field, and NOT bounded by an ` +
         `upstream check UNLESS that bound still exceeds the destination size (resolve it with recon ` +
-        `\`const\` and DO THE ARITHMETIC).\n` +
+        `\`const\` and DO THE ARITHMETIC). recon \`extract\`'s "# taint:" line is positive evidence for (3): ` +
+        `if the attacker-controlled param flows directly into the sink call's arguments it confirms ` +
+        `attacker-control of the sink; its ABSENCE proves nothing (precise-backend-only; no transitive flow).\n` +
         `Mark INVALID if: recon \`callers\` shows no caller AND the function is not an entry point and ` +
         `not referenced as a value (genuinely dead code — a route/handler the framework invokes is NOT ` +
         `dead even with no in-code caller), the value is trusted or ` +
@@ -486,17 +603,26 @@ const verdicts = await parallel(
         `kind must be one of: extract, callers, const, map, manual-read, other; ` +
         `"command_or_file" is the exact command or file path; "result" is the one-line key output ` +
         `that informed the verdict. If you ran NO recon commands, explain in crux why manual-read ` +
-        `was sufficient and record that as a manual-read entry.\n\n` +
+        `was sufficient and record that as a manual-read entry.\n` +
+        `"fingerprint" (fill it for a VALID verdict): the STABLE cross-run identity — take the ` +
+        `"key=<file#name>" from recon \`extract\`'s header for the ENCLOSING function and join it with the ` +
+        `category as "<key>::<category>". If no key resolves (config/unindexed), use "<where>::<category>". ` +
+        `Derive it from the enclosing function, NOT the raw line number, so it survives code churn.\n\n` +
         `${GATE_FEWSHOT}\n\n` +
         `${carriedBlock}\n\n` +
         `Candidate finding:\n${JSON.stringify(f, null, 2)}`,
       { label: `gate:${i}:${f.where}`, phase: 'Gate', model: gateModel, schema: VERDICT_SCHEMA },
-    ).then((v) => (v ? { ...f, ...v } : null)),
+    ).then((v) => (v ? { ...f, ...v } : { ...f, verdict: 'UNCERTAIN', why: 'first-gate verifier did not return; failing to UNCERTAIN for escalation' })),
+    // A dead first-gate agent fails toward UNCERTAIN (not null) so the candidate routes to escalate
+    // instead of vanishing — matching escalate's `: f` and the deep-gate dead-reviewer default.
   ),
 )
 const confirmed1 = verdicts.filter((v) => v && v.verdict === 'VALID')
-const droppedCount1 = deduped.length - confirmed1.length
-log(`gate: ${confirmed1.length} confirmed, ${droppedCount1} dropped of ${deduped.length} candidate findings`)
+// UNCERTAINs are NOT dropped here — they route to Escalate below. Count them separately so the log
+// doesn't overstate the drop rate (the true rejected count is what's left after confirmed + uncertain).
+const uncertainCount1 = verdicts.filter((v) => v && v.verdict === 'UNCERTAIN').length
+const rejected1 = deduped.length - confirmed1.length - uncertainCount1
+log(`gate: ${confirmed1.length} confirmed, ${uncertainCount1} to escalate, ${rejected1} rejected of ${deduped.length} candidate findings`)
 
 // 3a. Escalate — resolve UNCERTAIN instead of dropping it. One Sonnet commit pass per UNCERTAIN, told to
 // spend recon (callers/const/extract) and COMMIT to VALID/INVALID. Fires only when there ARE UNCERTAINs;
@@ -504,7 +630,7 @@ log(`gate: ${confirmed1.length} confirmed, ${droppedCount1} dropped of ${deduped
 // below if opted in, since they were uncertain); residual UNCERTAIN is surfaced downstream, never dropped.
 const uncertain1 = verdicts.filter((v) => v && v.verdict === 'UNCERTAIN')
 let escalated = []          // UNCERTAIN -> VALID after deeper recon
-let residualUncertain = []  // still unsettled; surfaced (report/baseline/return/artifacts), not dropped
+let residualUncertain = [...notGated]  // still unsettled; surfaced (report/baseline/return/artifacts), not dropped. Seeded with the maxFindings overflow.
 if (uncertain1.length) {
   phase('Escalate')
   const escResults = await parallel(
@@ -526,7 +652,9 @@ if (uncertain1.length) {
           `not find one, lean VALID — not having verified every upstream caller is NOT grounds for UNCERTAIN. ` +
           `A reachable REAL bug that is NOT security-relevant (data race on diagnostic state, NULL/None deref ` +
           `on an internal-only API, debug-only UB) is still VALID but "severity":"info" with "non-security" ` +
-          `in crux/why. Fill crux/confidence/checks with the concrete recon output you ran.\n\n` +
+          `in crux/why. Fill crux/confidence/checks with the concrete recon output you ran. For a VALID ` +
+          `verdict also fill "fingerprint" as "<key>::<category>" using the "key=<file#name>" from recon ` +
+          `\`extract\`'s header (fallback "<where>::<category>") — the stable cross-run identity.\n\n` +
           `${GATE_FEWSHOT}\n\n${carriedBlock}\n\n` +
           `Finding to resolve:\n${JSON.stringify(f, null, 2)}`,
         { label: `escalate:${i}:${f.where}`, phase: 'Escalate', model: gateModel, schema: VERDICT_SCHEMA },
@@ -534,8 +662,9 @@ if (uncertain1.length) {
     ),
   )
   escalated = escResults.filter((v) => v && v.verdict === 'VALID')
-  residualUncertain = escResults.filter((v) => v && v.verdict === 'UNCERTAIN')
-  const escInvalid = uncertain1.length - escalated.length - residualUncertain.length
+  const escResidual = escResults.filter((v) => v && v.verdict === 'UNCERTAIN')
+  residualUncertain.push(...escResidual)  // APPEND — must not clobber the notGated seed (the maxFindings overflow)
+  const escInvalid = uncertain1.length - escalated.length - escResidual.length
   log(`escalate: ${escalated.length} -> VALID, ${residualUncertain.length} still uncertain, ${escInvalid} -> INVALID`)
 }
 // Confirmed pool = first-gate VALIDs + escalation-resolved VALIDs. Deep-gate (below) operates on this.
@@ -642,7 +771,9 @@ if (gateRounds >= 2 && confirmedBase.length) {
               `Return VERDICT_SCHEMA with the deciding verdict. For "crux" state which reviewer's key ` +
               `fact was determinative and why. Remediation guidance only — no exploit code or payloads.`,
             { label: `arbiter:${original.where}`, phase: 'Gate', model: 'opus', schema: VERDICT_SCHEMA },
-          ).then((v) => (v ? { ...original, ...v } : null))
+          ).then((v) => (v ? { ...original, ...v } : { ...original, verdict: 'UNCERTAIN', why: 'arbiter did not return; surfacing for human review (one reviewer called this VALID)' }))
+          // A dead arbiter must NOT vanish the finding (one reviewer already said VALID): default to
+          // UNCERTAIN so the loop surfaces it as unsettled — matching the first gate + deep reviewers.
         )
       )
       for (const v of arbitrated) {
@@ -670,19 +801,29 @@ if (minConfidence > 0) {
     log(`min-confidence: demoted ${lowConf.length} VALID finding(s) below ${minConfidence} to unsettled`)
   }
 }
+// Fingerprint back-fill: the gate/escalate fill `fingerprint` from recon extract's stable key=, but an
+// agent may omit it (it is optional in the schema). Derive a fallback so every confirmed VALID carries a
+// cross-run identity for the baseline. The script has no recon access (no FS), so the fallback is the
+// line-based <where>::<category> — weaker than the enclosing-fn key, but still a stable dedup key when the
+// agent supplied none. Agent-provided fingerprints (enclosing-fn-based) are preserved.
+for (const f of confirmed) {
+  if (!f.fingerprint) f.fingerprint = `${f.where}::${f.category ?? ''}`
+}
 // Dedup the unsettled pool by exact where+evidence (same key style as the gate's upstream dedup) so a
 // finding can't be listed twice; distinct findings that only share a `where` are preserved. Keep first.
 {
   const seenU = new Set()
   residualUncertain = residualUncertain.filter((f) => {
-    const k = `${f.where}::${(f.evidence ?? '').slice(0, 120)}`
+    const k = `${f.where}::${f.evidence ?? ''}`  // full evidence, matching the pre-gate dedup
     if (seenU.has(k)) return false
     seenU.add(k)
     return true
   })
 }
 // Surfaced (residualUncertain) items are NOT dropped — exclude them so the count reflects true drops.
-const droppedCount = deduped.length - confirmed.length - residualUncertain.length
+// Candidate base = the gated set PLUS the maxFindings overflow (notGated, which bypassed deduped but
+// is surfaced via residualUncertain), so the overflow doesn't skew the drop count negative.
+const droppedCount = deduped.length + notGated.length - confirmed.length - residualUncertain.length
 log(`gate total: ${confirmed.length} confirmed, ${residualUncertain.length} unsettled, ${droppedCount} dropped`)
 
 // 4. Report — Opus. Prioritized, defensive write-up from confirmed findings only.
@@ -700,11 +841,18 @@ const report = await agent(
     `Do NOT include exploit code, payloads, or step-by-step exploitation — remediation only.\n` +
     `If any UNSETTLED items are listed below, add a separate "Unsettled (needs human review)" section ` +
     `AFTER the findings — these could be neither confirmed nor refuted even after escalation; state the ` +
-    `count and, per item, the where + the crux fact that blocked the decision. Do NOT rank them as ` +
-    `confirmed findings.\n\n` +
+    `count and, per item, the where + the crux fact that blocked the decision (fall back to the item's ` +
+    `"why" when "crux" is absent — e.g. items skipped for the maxFindings cap or a verifier that did not ` +
+    `return). Do NOT rank them as confirmed findings.\n\n` +
+    `If any SECRETS findings are listed below, add a separate "Secrets (deterministic scan)" section: ` +
+    `these come from the secrets-scanner binary, NOT from LLM reachability analysis — present them as ` +
+    `scanner output to verify, listing file:line + rule + fingerprint, and tell the reader to add a ` +
+    `fingerprint to "${secretsBaseline}" to suppress a false positive. If the secrets pass did not run, ` +
+    `the constraints above already say so; do not invent secret findings.\n\n` +
     `Recon: ${recon?.summary ?? 'n/a'}\n` +
     `Scope / constraints:\n- ${constraints.join('\n- ') || '(none recorded)'}\n\n` +
     `Confirmed findings:\n${JSON.stringify(confirmed, null, 2)}\n\n` +
+    `SECRETS (${secretFindings.length}, deterministic scan — ${secretsRan ? 'ran' : 'NOT run'}):\n${JSON.stringify(secretFindings, null, 2)}\n\n` +
     `UNSETTLED (${residualUncertain.length}):\n${JSON.stringify(residualUncertain, null, 2)}`,
   { label: 'report', phase: 'Report', model: reportModel },
 )
@@ -714,20 +862,70 @@ const report = await agent(
 //    Non-destructive: preserve human annotations. Skipped when writeBaseline is false or nothing confirmed.
 phase('Write-back')
 let baselineWritten = false
-if (writeBaseline && (confirmed.length || residualUncertain.length)) {
+if (writeBaseline && (confirmed.length || residualUncertain.length || secretFindings.length)) {
   await agent(
     `Update the security triage baseline at "${baselinePath}" (create it if missing). Read any existing ` +
       `file first and PRESERVE human annotations, especially "ACCEPTED:" lines. Record today's confirmed ` +
-      `findings as a dated section: each with where, entry_point, severity, category, and remediation, plus ` +
+      `findings as a dated section: each with its "fingerprint" (the STABLE cross-run key — record it ` +
+      `verbatim; the next run's map stage matches "ACCEPTED: <fingerprint>" against it to suppress a ` +
+      `re-discovery, and it is line-shift-resistant so write it, not the raw file:line), where, ` +
+      `entry_point, severity, category, and remediation, plus ` +
       `the audited scope. ALSO record an "UNSETTLED" subsection for any items below that escalation could ` +
-      `not resolve (where + crux of what blocked it) so the next run's map stage knows what is still open. ` +
+      `not resolve (where + crux of what blocked it, or "why" when crux is absent) so the next run's map ` +
+      `stage knows what is still open. ` +
       `Keep it lean and skimmable — a durable record a future run and a future session ` +
       `read, not a transcript. Remediation guidance only; no exploit detail.\n\n` +
+      `ALSO record a brief "SECRETS" subsection noting the deterministic scan ${secretsRan ? `found ${secretFindings.length} candidate(s) (list where + rule_id + fingerprint)` : 'did not run'}. ` +
+      `Do NOT write raw secrets and do NOT add fingerprints to "${secretsBaseline}" — that suppression file is operator-managed (auto-suppressing would hide a real leak).\n\n` +
       `Audited scope: ${scope}\nConfirmed findings:\n${JSON.stringify(confirmed, null, 2)}\n\n` +
+      `Secrets (${secretFindings.length}):\n${JSON.stringify(secretFindings, null, 2)}\n\n` +
       `Unsettled (${residualUncertain.length}):\n${JSON.stringify(residualUncertain, null, 2)}`,
     { label: 'write-back', phase: 'Write-back', model: gateModel },
   )
   baselineWritten = true
+}
+
+// SARIF v2.1.0 builder — pure JS (no recon/FS), so the script builds the object and the finalize agent
+// writes it verbatim. Turns confirmed findings + deterministic secrets into a code-scanning-ingestible
+// file (post to GitHub code-scanning / gate merges) — the rerun-every-release use case wants pipeline
+// output, not just markdown. An empty results array is still valid + useful ("ran, no findings").
+function buildSarif(confirmedFindings, secrets, auditScope, coverageModel) {
+  const levelOf = (sev) => (sev === 'critical' || sev === 'high' ? 'error' : sev === 'medium' ? 'warning' : 'note')
+  const locsFor = (where) => {
+    const m = /^(.*?):(\d+)/.exec(where || '')
+    const phys = { artifactLocation: { uri: m ? m[1] : (where || 'unknown') } }
+    if (m) phys.region = { startLine: parseInt(m[2], 10) }
+    return [{ physicalLocation: phys }]
+  }
+  const results = []
+  for (const f of confirmedFindings) {
+    const text = `${f.why || f.evidence || 'security finding'}${f.crux ? ` [crux: ${f.crux}]` : ''}`.trim()
+    results.push({
+      ruleId: f.category || 'finding',
+      level: levelOf(f.severity),
+      message: { text: text || 'security finding' },
+      locations: locsFor(f.where),
+      properties: { severity: f.severity, entry_point: f.entry_point, fingerprint: f.fingerprint, confidence: f.confidence },
+    })
+  }
+  for (const s of secrets) {
+    results.push({
+      ruleId: s.rule_id || 'secret',
+      level: 'error',
+      message: { text: `${s.rule_description || 'secret detected'} (deterministic scan — verify)` },
+      locations: locsFor(s.line != null ? `${s.file}:${s.line}` : s.file),
+      properties: { category: 'secret', fingerprint: s.fingerprint, entropy: s.entropy },
+    })
+  }
+  return {
+    $schema: 'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
+    version: '2.1.0',
+    runs: [{
+      tool: { driver: { name: 'security-audit', informationUri: 'https://github.com/whit3rabbit/rabbit-flows', rules: [] } },
+      properties: { scope: auditScope, coverage: coverageModel },
+      results,
+    }],
+  }
 }
 
 // 6. Finalize — Haiku, mechanical. Persist run artifacts for gate debugging (writeArtifacts=true default).
@@ -745,9 +943,12 @@ if (writeArtifacts) {
     deepGate: deepGateRecords,   // reviewer + arbiter verdicts (empty unless gateRounds >= 2)
     residualUncertain: residualUncertain,  // unsettled after escalation (empty if none)
     confirmed: confirmed,
+    secretFindings: secretFindings,  // deterministic secrets-scanner output (empty if scan absent/clean)
+    secretsRan: secretsRan,
     constraints: constraints,
     report: report ?? '',
     reconSummary: recon?.summary ?? '',
+    sarif: buildSarif(confirmed, secretFindings, scope, coverage),  // code-scanning-ingestible findings
   }
   const artifactsResult = await agent(
     `Write per-run audit artifacts to disk. These are debug artifacts for gate review — write them ` +
@@ -769,14 +970,21 @@ if (writeArtifacts) {
       `  uncertain.json  — JSON array of residualUncertain (unsettled after escalation; write ONLY if the ` +
       `residualUncertain array below is non-empty; skip the file when it is empty)\n` +
       `  confirmed.json  — JSON array of confirmed VALID findings only\n` +
+      `  findings.sarif  — the SARIF v2.1.0 object below (the "sarif" field), written verbatim as valid ` +
+      `JSON; always write it even when results is empty (a clean run is a valid, ingestible SARIF)\n` +
+      `  secrets.json    — JSON array of secretFindings (deterministic scan; write ONLY if the ` +
+      `secretFindings array below is non-empty; skip the file when it is empty)\n` +
       `  coverage.md     — a markdown file listing what was NOT analyzed: write a section ` +
       `"## Skipped / Not Analyzed" with bullet points for: (a) config/CI/IaC files outside the recon ` +
       `index, (b) any failure notes from the lanes (if present), (c) diff-mode scope if mode="${mode}" is ` +
-      `"diff" (audit scoped to files changed since "${since}"), otherwise note paths-mode full-scope audit.\n\n` +
+      `"diff" (audit scoped to files changed since "${since}"), otherwise note paths-mode full-scope audit, ` +
+      `(d) the deterministic secrets scan: ${secretsRan ? `ran, ${secretFindings.length} candidate(s)` : 'did NOT run (secrets-scanner not installed or disabled) — config/secret coverage is LLM-lane only'}.\n\n` +
       `STEP 4 — SELF-VERIFY (do not skip): run \`ls -1 "$runDir"\` and confirm report.md, recon-ref.txt, ` +
-      `lanes.json, candidates.json, verdicts.json, confirmed.json, and coverage.md each EXIST and are ` +
-      `NON-EMPTY (\`[ -s "$runDir/report.md" ]\` etc.). Re-write any that are missing or empty NOW, then ` +
-      `re-check. Only report.md being large is not an excuse to omit it.\n\n` +
+      `lanes.json, candidates.json, verdicts.json, confirmed.json, findings.sarif, and coverage.md each EXIST and are ` +
+      `NON-EMPTY (\`[ -s "$runDir/report.md" ]\` etc.). ALSO confirm the CONDITIONAL files you were told ` +
+      `to write: uncertain.json (when residualUncertain is non-empty) and deep-gate.json (when deepGate ` +
+      `is non-empty) — these hold surfaced unsettled findings and must not be silently omitted. Re-write ` +
+      `any that are missing or empty NOW, then re-check. Only report.md being large is not an excuse to omit it.\n\n` +
       `STEP 5 — return the resolved $runDir in "runDir" and the exact list of filenames you wrote (and ` +
       `verified non-empty) in "writtenFiles".\n\n` +
       `Data to write:\n${JSON.stringify(artifactData, null, 2)}`,
@@ -789,8 +997,18 @@ if (writeArtifacts) {
   // Loud check: report.md is the file Haiku tends to drop. Surface it instead of a silent gap so a
   // future run/operator knows the report lives only in the return value, not on disk.
   const wrote = artifactsResult?.writtenFiles ?? []
-  if (artifactsDir && !wrote.some((f) => /(^|\/)report\.md$/.test(f)))
+  const missing = (re) => artifactsDir && !wrote.some((f) => re.test(f))
+  if (missing(/(^|\/)report\.md$/))
     log(`finalize: WARNING — report.md not in the written manifest; the report is in the return value but may be missing from ${artifactsDir}`)
+  if (missing(/(^|\/)findings\.sarif$/))
+    log(`finalize: WARNING — findings.sarif not in the written manifest; code-scanning ingestion will have no file at ${artifactsDir}`)
+  // The unsettled artifacts are conditional, so they sit OUTSIDE report.md's check — but they hold the
+  // surfaced-not-dropped findings, so a silent disk drop undercuts the "surface, never drop" invariant.
+  // Warn deterministically (don't trust Haiku's self-verify) when they were expected but not manifested.
+  if (residualUncertain.length && missing(/(^|\/)uncertain\.json$/))
+    log(`finalize: WARNING — uncertain.json missing though ${residualUncertain.length} unsettled item(s) exist; they live in the return value/baseline but may be absent from ${artifactsDir}`)
+  if (deepGateRecords.length && missing(/(^|\/)deep-gate\.json$/))
+    log(`finalize: WARNING — deep-gate.json missing though ${deepGateRecords.length} deep-gate record(s) exist; may be absent from ${artifactsDir}`)
   log(`finalize: artifacts written${artifactsDir ? ` to ${artifactsDir}` : ''}`)
 }
 
@@ -803,10 +1021,15 @@ return {
   lanes: lanes.length,
   confirmed: confirmed.length,
   droppedByGate: droppedCount,
+  secrets: { ran: secretsRan, count: secretFindings.length }, // deterministic scan (ran:false if scanner absent/off)
   unsettled: residualUncertain.length, // UNCERTAIN findings escalation could not resolve (surfaced, not dropped)
   report,
   baselineWritten,
   baselinePath: baselineWritten ? baselinePath : null,
   reconPath: reconOut,
   artifactsDir,
+  // Output is a vulnerability inventory — flag it so a caller/UI never treats it as safe to share.
+  sensitive: true,
+  outputDir: auditDir,
+  warning: `${sensitiveBlurb}.${auditDir !== '.' ? ` Ensured gitignored under "${auditDir}/".` : ' Output is at the repo ROOT — review before committing.'} Do not commit or publicly post these artifacts.`,
 }

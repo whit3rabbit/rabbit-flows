@@ -55,7 +55,8 @@
 // requires-skills: docs-site-builder, document
 export const meta = {
   name: 'docs-create',
-  description: 'Author a documentation site from a brief: plan pages, fan out authors, verify and assemble config. Starlight is first-class; other frameworks are authored from current docs.',
+  description: 'Author a documentation site from a written brief, no codebase needed: plan the pages, write each one, then verify and assemble the site config. Starlight is first-class; other frameworks are authored from current docs.',
+  whenToUse: 'Use to create docs from an idea or brief when there is no codebase yet. Front door: the document skill.',
   phases: [
     { title: 'Frame IA', detail: 'one strong-model call: brief -> audiences, journey, Diátaxis split, sidebar shape' },
     { title: 'Plan', detail: 'one strong-model call: IA + brief -> page list, each tagged diataxisType + template' },
@@ -1038,7 +1039,48 @@ Two structural page kinds sit outside the quadrants:
 
 A new reader reaches a **first success within ~5 minutes.** If the quickstart can't get someone to a
 working result that fast, the IA (or the product's onboarding) is the problem, not the prose. This is
-the single highest-leverage page; design the journey backwards from it.`
+the single highest-leverage page; design the journey backwards from it.
+
+## Archetypes: what docs a project needs
+
+Diátaxis shapes a page *once you've decided to write it*. This decides **which pages a given project
+should have, and whether it needs a site at all.** Identify the archetype first, then plan the
+minimum-viable set for it — do not pour every project into the full four-quadrant spread.
+
+| Archetype | Must-have | High-value | Skip / deprioritize |
+|---|---|---|---|
+| **CLI tool** | command reference, quickstart | install/config how-to | tutorials, deep explanation |
+| **Library / SDK** | API reference, getting-started | how-tos, tutorials, key-concepts explanation | ops/deployment |
+| **Service / API** | endpoint reference (OpenAPI), auth + deploy runbook | integration how-tos | beginner tutorial |
+| **Internal tool / app** | README, runbook, ADRs | onboarding how-to | public splash, marketing |
+| **Framework / platform** | getting-started, guides, full reference | tutorials, explanation, migration guides | — (the full spread fits) |
+
+**Minimum-viable-docs baseline (every archetype clears this floor):** a one-paragraph "what this is
++ who it's for", a getting-started that hits first success in ~5 min (the rule above), and one
+reference surface for the project's primary interface (commands, API, or endpoints). Everything else
+is earned by the archetype, not added by default.
+
+**Two skeletons the four quadrants don't cover** (use when the archetype calls for them):
+- **ADR** (architecture decision record) — context (forces at play) → decision → consequences
+  (what this commits us to, what it rules out). One decision per record, dated, immutable once
+  accepted.
+- **Runbook** — symptom / trigger → diagnosis steps → remediation → escalation + rollback. Written
+  for an on-call reader at 3am: scannable, imperative, no theory.
+- "CLI command page" is a reference entry (signature, flags, example) and "library quickstart" is a
+  tutorial — variants of existing quadrants, not new shapes.
+
+**Does this even need a multi-page site?** Match output shape to archetype + size, and record the
+verdict so the reader can act on it:
+- **single-file** (one README/markdown file) — a CLI or small library whose whole surface fits one
+  scannable page. A multi-page site here is overhead.
+- **embedded** (docstrings / inline API comments in source, not a separate site) — a library whose
+  API reference belongs next to the code it documents.
+- **site** — anything with multiple audiences, a real reader journey, or a reference surface too
+  large for one page (frameworks, platforms, larger services).
+
+This is a recommendation the planner records, not a branch it takes: note the archetype and the
+recommended shape even when the run still builds a site, so a maintainer sees "this is a CLI tool; a
+single README likely suffices" and can choose.`
 // @generated-end docs-contracts/ia-contract
 
 // @generated-start docs-contracts/docusaurus-contract
@@ -5689,6 +5731,8 @@ const sourcesNote = sources.length
 const IA_SCHEMA = {
   type: 'object', required: ['audiences', 'journey', 'diataxis', 'sidebar'], additionalProperties: false,
   properties: {
+    archetype: { type: 'string', description: 'project archetype per the IA contract: cli | library | service-api | internal-tool | framework-platform (or the closest fit + why)' },
+    siteRecommendation: { enum: ['site', 'single-file', 'embedded'], description: 'advisory output shape for this archetype+scope; recorded even though this run still builds a site' },
     audiences: { type: 'array', items: { type: 'string' }, description: 'who the docs serve + their goal' },
     journey: { type: 'array', items: { type: 'string' }, description: 'ordered steps: first-touch -> proficient' },
     diataxis: {
@@ -5777,9 +5821,13 @@ if (!explicitPages) {
   ia = await agent(
     `You are framing the information architecture for a ${framework} documentation site BEFORE any pages ` +
     `are planned. Brief:\n${brief}\n${sourcesNote}\n\n` +
-    `Apply the IA contract below. Return: audiences (and their goal), the reader journey (ordered, ` +
-    `first-touch -> proficient), the Diátaxis split (how many of tutorial/howto/reference/explanation this ` +
-    `set needs and why), and the sidebar SHAPE (group structure + ordering, not raw pages yet).\n\n` +
+    `Apply the IA contract below. FIRST identify the project archetype (Archetypes section) and pick the ` +
+    `minimum-viable doc set for it -- do not default to the full four-quadrant spread. THEN return: archetype; ` +
+    `siteRecommendation (site|single-file|embedded -- the honest output shape for this archetype+scope, recorded ` +
+    `even though this run still builds a site); audiences (and their goal); the reader journey (ordered, ` +
+    `first-touch -> proficient); the Diátaxis split (how many of tutorial/howto/reference/explanation this ` +
+    `set needs and why, weighted by the archetype's must-have/skip columns); and the sidebar SHAPE (group ` +
+    `structure + ordering, not raw pages yet).\n\n` +
     `IA CONTRACT\n${IA_CONTRACT}`,
     { label: 'frame-ia', schema: IA_SCHEMA },
   )
@@ -5796,7 +5844,8 @@ if (!pages) {
   const plan = await agent(
     `You are planning a ${framework} documentation site. Brief:\n${brief}\n${sourcesNote}\n${iaNote}\n` +
     `Produce a focused set of pages (prefer FEWER, well-scoped pages over many thin ones) that realizes the ` +
-    `framed IA above. For each page give:\n` +
+    `framed IA above. Honor the framed archetype: cover its must-have doc set and the minimum-viable baseline, ` +
+    `and do NOT add pages the archetype's skip column deprioritizes.\nFor each page give:\n` +
     `- path: repo-relative under "${outDir}", e.g. src/content/docs/guides/getting-started.md (use .mdx ONLY if it needs components, .md otherwise)\n` +
     `- title, kind (index|splash|guide|reference), group (sidebar group label), brief (what it must cover).\n` +
     `- diataxisType (tutorial|howto|reference|explanation|index|splash): the ONE reader need this page serves.\n` +
@@ -5928,7 +5977,10 @@ const final = await agent(
   `(Diataxis adherence was already checked by the quality gate -- skip that check here.)\n` +
   fwEntry.assemblePrompt(outDir, [...new Set(admittedPages.map(p => p.group))].join(', '), scaffoldMode, { basePath, i18n, versioning, site }) +
   `4. WRITE-BACK: write ${outDir}/.docs-plan.md capturing the final page list, sidebar structure, and any decisions/constraints ` +
-  `(e.g. rejected/dropped pages and why) so a future run or human has the durable record.\n\n` +
+  `(e.g. rejected/dropped pages and why) so a future run or human has the durable record. ` +
+  `Include a "Doc strategy" line recording the archetype and the advisory output shape so a maintainer can act on it: ` +
+  `archetype=${ia?.archetype ?? '(unframed)'}, recommended-shape=${ia?.siteRecommendation ?? 'site'} ` +
+  `(if single-file or embedded, note that a full site may be more than this project needs).\n\n` +
   `NOTE: The empirical build check (running the framework build command and repairing errors) is handled ` +
   `separately by the orchestrating script after you finish. Do NOT attempt to run the build yourself.\n\n` +
   `Return admitted paths, rejected {path,reason}, pages you fixed, configWritten, decisions, and a short summary.\n\n` +

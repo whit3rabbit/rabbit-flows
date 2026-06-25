@@ -74,7 +74,8 @@
 // requires-skills: docs-scraper
 export const meta = {
   name: 'docs-scrape',
-  description: 'Ingest a documentation website into a local markdown corpus: detect platform, pick the cheapest acquisition path - git clone, python scraper, or WebFetch - then acquire, gate, and assemble.',
+  description: 'Save an external documentation website as a local markdown corpus: detect the platform, then clone, scrape, or fetch the pages, and assemble them.',
+  whenToUse: 'Use to mirror or archive an external docs website as markdown. Front door: the docs-scraper skill.',
   phases: [
     { title: 'Recon', detail: 'one Haiku call: identify platform, probe llms/sitemap/search_index, gh-verify the source repo + format, enumerate fallback pages' },
     { title: 'Acquire', detail: 'cheapest path the script picks: git clone -> python scrape.py via trafilatura -> playwright render -> per-page WebFetch' },

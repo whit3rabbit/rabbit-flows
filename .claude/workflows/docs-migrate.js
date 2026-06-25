@@ -51,7 +51,8 @@
 // requires-skills: docs-scraper, docs-site-builder, document
 export const meta = {
   name: 'docs-migrate',
-  description: 'Migrate a documentation site from one framework to another: acquire source corpus, map pages via crosswalk, fan out conversion workers, gate for syntax leaks, assemble target config.',
+  description: 'Move a documentation site from one framework to another: convert each page to the target framework, check for leftover old-framework syntax, and assemble the target config.',
+  whenToUse: 'Use to port an existing docs site to a different framework. Front door: the document skill.',
   phases: [
     { title: 'Recon', detail: 'one Haiku call: identify source platform, probe acquisition paths' },
     { title: 'Acquire', detail: 'cheapest path: git clone -> python scrape -> webfetch; writes .md corpus under outDir/source' },

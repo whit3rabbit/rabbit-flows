@@ -65,7 +65,8 @@
 // script in an async function, so top-level return/await are legal there. Same as starter.js.)
 export const meta = {
   name: 'scaffold',
-  description: 'Start a project from scratch and stub+document the whole tree: discuss-driven brief, research deps, blind architecture attempts merged to one, forward-review, then fan out cheap workers to build every file under a 400-line ceiling, verify, write back the decisions.',
+  description: 'Start a new project from scratch: pick a stack, then stub and document every file in the tree under a per-file line ceiling, and verify the result.',
+  whenToUse: 'Use to bootstrap a brand-new codebase, app, library, CLI, or service from nothing. Front door: the new-project skill.',
   phases: [
     { title: 'Frame' },
     { title: 'Propose' },

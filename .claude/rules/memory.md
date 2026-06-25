@@ -2,13 +2,20 @@
 
 ## Write-back (required)
 
-Durable knowledge a workflow produces MUST be written to `CLAUDE.md` / `.claude/rules/`
-in a finalize stage — by an agent, since the script itself can't touch the filesystem.
-Workflow script variables evaporate when the run ends; only the memory files persist.
-This is the bridge the platform doesn't give you. Build it every time the run learns
-something worth keeping.
+Durable knowledge a workflow produces MUST be persisted in a finalize stage — by an agent, since
+the script itself can't touch the filesystem. Workflow script variables evaporate when the run ends;
+only the memory files persist. This is the bridge the platform doesn't give you. Build it every time
+the run learns something worth keeping.
 
-Artifacts: workflow run outputs (`.eatahorse*`, `docs-site/`, `scaffold-out/`, `.security-audit/`, `.docs-plan.md`, `.claude/projects/`) can be safely git ignored unless the user wants them tracked.
+Where it goes:
+- Cross-cutting authoring rules → `.claude/rules/`.
+- A SPECIFIC workflow's run log / hardening history / per-workflow constraints →
+  `docs/<workflow>-workflow-log.md` (one file per workflow), with a one-line pointer row in `CLAUDE.md`.
+  Do NOT grow these logs inline in `CLAUDE.md` — that bloats the always-loaded constitution and forces a
+  session working on workflow A to read workflow B's history. Keep `CLAUDE.md` to commands + constraints
+  + the pointer table.
+
+Artifacts: workflow run outputs (`.eatahorse*`, `docs-site/`, `scaffold-out/`, `.security-audit/`, `.docs-plan.md`, `.claude/projects/`) can be safely git ignored unless the user wants them tracked. A `.security-audit/` run is a vulnerability inventory — the security-audit workflow ensures it is gitignored in the target repo; never commit or publish it.
 
 ## What goes in CLAUDE.md
 

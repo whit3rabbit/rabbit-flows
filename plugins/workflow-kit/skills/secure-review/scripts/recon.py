@@ -75,7 +75,13 @@ LANGUAGES: Dict[str, Tuple[str, Optional[str]]] = {
 DEFAULT_MAX_BYTES = 1_000_000  # skip files larger than this (binary/generated blobs)
 SKIP_DIRS = {".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build",
              ".next", "target", "vendor", ".idea", ".vscode", "coverage", ".mypy_cache",
+             # .eatahorse / .security-audit are the workflows' OWN output dirs — never audit your own
+             # recon.json / baseline / board state.
              ".pytest_cache", ".eatahorse", ".security-audit"}
+
+# Dot-dirs that hold CI/IaC config worth indexing (supply-chain / unpinned-action coverage). Allowed
+# back in past the dot-prefix skip, but SKIP_DIRS still wins (see walk_files).
+CI_DOT_DIRS = {".github", ".circleci", ".gitlab", ".azure-pipelines", ".azuredevops"}
 
 # Config/IaC: include for secret/permission scanning but do NOT parse for functions.
 # These land in files[] with backend='config' and zero functions so audit lanes can grep them.
@@ -98,7 +104,9 @@ ENTRYPOINT_PATTERNS: List[Tuple[str, re.Pattern]] = [
     ("py-main", re.compile(r'if\s+__name__\s*==\s*[\'"]__main__[\'"]')),
     ("route", re.compile(r'@(?:app|router|bp|blueprint)\.(?:route|get|post|put|delete|patch|websocket)\b')),
     ("flask-add-url", re.compile(r'\.add_url_rule\s*\(')),
-    ("argparse", re.compile(r'argparse\.ArgumentParser|add_argument\s*\(')),
+    # ArgumentParser construction + parse_args are the real entry signals; matching add_argument(
+    # would fire once PER flag and inflate entrypoint_count for no added signal.
+    ("argparse", re.compile(r'argparse\.ArgumentParser|\.parse_args\s*\(')),
     ("express", re.compile(r'\b(?:app|router)\.(?:get|post|put|delete|patch|use|all)\s*\(')),
     ("http-server", re.compile(r'\b(?:createServer|http\.HandleFunc|HandleFunc|ListenAndServe)\b')),
     ("go-main", re.compile(r'func\s+main\s*\(')),
@@ -191,12 +199,31 @@ def parse_python(path: str, src: str) -> FileInfo:
 
     class V(ast.NodeVisitor):
         def _fn(self, node):
-            calls = _python_calls_in_own_body(node)
+            params = _python_params(node)
+            calls, taint = _python_calls_in_own_body(node, params)
             end = getattr(node, "end_lineno", node.lineno)
             fi.functions.append({
                 "name": node.name, "start": node.lineno, "end": end,
-                "calls": sorted(set(calls)),
+                "calls": sorted(set(calls)), "params": params, "taint": taint,
             })
+            # Descend for NESTED functions so a `def` inside a `def` is its own symbol with its own
+            # call edges (the tree-sitter backend already captures these; without this the precise
+            # ast backend is strictly worse). _descend_nested visits ONLY nested def/class nodes — never
+            # bare statements — so a function-local `UPPER = ...` does NOT leak into module constants.
+            for child in node.body:
+                self._descend_nested(child)
+
+        def _descend_nested(self, node):
+            stack = [node]
+            while stack:
+                n = stack.pop()
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    self._fn(n)        # registers it and recurses into ITS body; stop here
+                    continue
+                if isinstance(n, ast.ClassDef):
+                    self.visit(n)      # generic_visit picks up its methods (+ class-attr constants)
+                    continue
+                stack.extend(ast.iter_child_nodes(n))
 
         def visit_FunctionDef(self, node):
             self._fn(node)
@@ -221,10 +248,55 @@ def parse_python(path: str, src: str) -> FileInfo:
     return fi
 
 
-def _python_calls_in_own_body(root) -> List[str]:
+def _python_params(node) -> List[str]:
+    """Flat parameter-name list for a def/async def (positional, keyword-only, *args, **kwargs)."""
+    a = node.args
+    out: List[str] = []
+    for grp in (getattr(a, "posonlyargs", []), a.args, a.kwonlyargs):
+        out += [x.arg for x in grp]
+    if a.vararg:
+        out.append(a.vararg.arg)
+    if a.kwarg:
+        out.append(a.kwarg.arg)
+    return out
+
+
+def _dedup_taint(taint: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collapse duplicate taint entries (same call + same param set) so the taint list matches the
+    deduped `calls` list — two call sites to sink(req) yield one calls entry, so one taint entry too."""
+    seen = set()
+    out = []
+    for t in taint:
+        k = (t["call"], tuple(t["params"]))
+        if k not in seen:
+            seen.add(k)
+            out.append(t)
+    return out
+
+
+def _param_args_py(call, pset: set) -> set:
+    """Which of `pset` (the enclosing function's params) appear as identifiers in this call's args.
+
+    Direct intra-procedural flow only: a param used anywhere in an argument expression (including
+    nested like `f(req.body)` or `f(g(x))`) counts as flowing into the call. No transitive local
+    tracking and no sanitizer awareness — over-attribution errs toward 'tainted' (the safe direction
+    for a defensive signal, same bias as the referenced/entrypoint heuristics)."""
+    found: set = set()
+    for arg in list(call.args) + [kw.value for kw in call.keywords]:
+        for sub in ast.walk(arg):
+            if isinstance(sub, ast.Name) and sub.id in pset:
+                found.add(sub.id)
+    return found
+
+
+def _python_calls_in_own_body(root, params=None) -> Tuple[List[str], List[Dict[str, Any]]]:
     # Collect calls in this function's OWN body — stop descending at a nested def/class/lambda so an
     # inner helper's calls aren't attributed to the outer one. Stack walk mirrors tree-sitter calls_in().
+    # ALSO computes DIRECT taint (which params reach each call's args) in the SAME walk, so taint
+    # inherits the exact nested-scope skip — an inner helper's tainted call is not attributed to outer.
+    pset = set(params or ())
     calls: List[str] = []
+    taint: List[Dict[str, Any]] = []
     # Body statements only — NOT decorator_list / args.defaults / returns annotation, which are
     # children of the def node but execute in the ENCLOSING scope at def time (so `@cache(...)` and
     # `def f(x=bar())` are not calls made by f). FunctionDef/AsyncFunctionDef always have a stmt-list body.
@@ -237,8 +309,12 @@ def _python_calls_in_own_body(root) -> List[str]:
             name = _call_name(n.func)
             if name and name not in _NOT_CALLS:
                 calls.append(name)
+                if pset:
+                    flow = sorted(_param_args_py(n, pset))
+                    if flow:
+                        taint.append({"call": name, "params": flow})
         stack.extend(ast.iter_child_nodes(n))
-    return calls
+    return calls, _dedup_taint(taint)
 
 
 def _call_name(func) -> Optional[str]:
@@ -325,11 +401,47 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
                 "local_function_statement")      # c# nested local function
     ANON = ("arrow_function", "function_expression")
 
-    def calls_in(node) -> List[str]:
+    def params_of(node) -> List[str]:
+        # Identifier tokens in the function's parameter list. Over-inclusive for typed grammars (a Java
+        # `String id` yields both "String" and "id") — harmless: an extra name can only over-attribute
+        # taint (the safe direction), never miss a real param flow.
+        pnode = node.child_by_field_name("parameters")
+        if pnode is None:
+            for ch in node.children:
+                if "parameter" in ch.type:
+                    pnode = ch
+                    break
+        if pnode is None:
+            return []
+        out: List[str] = []
+        st = list(pnode.children)
+        while st:
+            c = st.pop()
+            if c.type == "identifier":
+                out.append(text(c))
+            st.extend(c.children)
+        return out
+
+    def _arg_params(argnode, pset: set) -> set:
+        # Which params appear as identifiers anywhere in a call's argument list (direct flow; nested
+        # arg expressions included — mirrors the Python _param_args_py bias).
+        found: set = set()
+        st = list(argnode.children)
+        while st:
+            c = st.pop()
+            if c.type == "identifier" and text(c) in pset:
+                found.add(text(c))
+            st.extend(c.children)
+        return found
+
+    def calls_in(node, params=None) -> Tuple[List[str], List[Dict[str, Any]]]:
         # Calls in this function's OWN body only. Seed with children (not `node`) and stop descending
         # at a nested def/closure/arrow so an inner helper's calls aren't attributed to the outer one
         # (mirrors _python_calls_in_own_body). FN_TYPES must be defined above for this to see it.
+        # ALSO computes DIRECT taint (params reaching each call's args) in the same walk.
+        pset = set(params or ())
         out: List[str] = []
+        taint: List[Dict[str, Any]] = []
         stack = list(node.children)
         while stack:
             n = stack.pop()
@@ -352,8 +464,13 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
                         tail = nm.rsplit(".", 1)[-1]
                         if tail and tail not in _NOT_CALLS:
                             out.append(nm)
+                            if pset:
+                                argn = n.child_by_field_name("arguments")
+                                flow = _arg_params(argn, pset) if argn is not None else set()
+                                if flow:
+                                    taint.append({"call": nm, "params": sorted(flow)})
             stack.extend(n.children)
-        return sorted(set(out))
+        return sorted(set(out)), _dedup_taint(taint)
     stack = [tree.root_node]
     while stack:
         n = stack.pop()
@@ -364,9 +481,11 @@ def parse_treesitter(path: str, src: str, language: str, grammar: str) -> Option
             # drop keywords/control-flow and non-identifiers the generic walk can mis-grab; skip truly
             # anonymous functions (no useful name, no call-graph value).
             if nm and len(nm) > 1 and nm not in _NOT_CALLS and re.fullmatch(r"[A-Za-z_]\w*", nm):
+                prms = params_of(n)
+                fn_calls, fn_taint = calls_in(n, prms)
                 fi.functions.append({
                     "name": nm, "start": n.start_point[0] + 1, "end": n.end_point[0] + 1,
-                    "calls": calls_in(n),
+                    "calls": fn_calls, "params": prms, "taint": fn_taint,
                 })
         stack.extend(n.children)
 
@@ -606,7 +725,10 @@ def parse_regex(path: str, src: str, language: str) -> FileInfo:
             # tail so `if(`/`for(` (bare) still drop while a dotted call survives for the resolver.
             calls = sorted({c for c in _CALL_RE.findall(body)
                             if c.rsplit(".", 1)[-1] not in _NOT_CALLS and c != name})
-            fi.functions.append({"name": name, "start": start, "end": end, "calls": calls})
+            # params/taint are precise-only (need an AST to scope args to params); the regex backend
+            # leaves them empty. The parity harness asserts regex taint stays [] and ts taint is a superset.
+            fi.functions.append({"name": name, "start": start, "end": end, "calls": calls,
+                                 "params": [], "taint": []})
             i = end
             continue
         i += 1
@@ -960,8 +1082,10 @@ def walk_files(scope: str, max_bytes: int, only: Optional[List[str]]
     for dirpath, dirnames, filenames in os.walk(scope):
         # Allowlist the dot-dirs that hold CI/IaC config (supply-chain / unpinned-action coverage);
         # everything else dot-prefixed is skipped. .gitlab-ci.yml etc. at root are files, not dirs.
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")
-                       or d in (".github", ".circleci", ".gitlab", ".azure-pipelines", ".azuredevops")]
+        # Parenthesized so SKIP_DIRS stays authoritative even for a CI_DOT_DIRS member (the old
+        # `and ... or d in CI` precedence would have let a SKIP_DIRS entry slip back in).
+        dirnames[:] = [d for d in dirnames
+                       if d not in SKIP_DIRS and (not d.startswith(".") or d in CI_DOT_DIRS)]
         for fn in filenames:
             full = os.path.join(dirpath, fn)
             rel = os.path.relpath(full, scope)
@@ -1111,14 +1235,14 @@ def _graph_key(name: str, file: str, symbols: Dict[str, List[Dict[str, Any]]],
 
 def _resolve_call_target(name: str, caller: Dict[str, Any],
                          symbols: Dict[str, List[Dict[str, Any]]],
-                         known_internal_qualifiers: Optional[set] = None) -> Optional[Dict[str, Any]]:
+                         known_internal_qualifiers: Optional[Dict[str, set]] = None) -> Optional[Dict[str, Any]]:
     """Resolve a call name to a symbol in the index.
 
     Resolution rules (conservative, avoids false cross-file edges):
       (a) Unqualified name -> same-file first; unique cross-file if no same-file match.
       (b) self.X / this.X -> same-file method only (strip qualifier, same-file lookup).
-      (c) Qualified (qualifier.X) where qualifier head is proven internal (in known_internal_qualifiers)
-          -> resolve bare method name to same-file or unique cross-file.
+      (c) Qualified (qualifier.X) where qualifier head is proven internal (a key of known_internal_qualifiers)
+          -> resolve bare method name ONLY to a symbol in the file(s) that qualifier actually imports.
       (d) All other qualified calls (os.path.join, fs.readFileSync, etc.) -> drop (return None).
 
     This prevents external-library qualifiers from binding to an unrelated in-repo function of the
@@ -1132,16 +1256,16 @@ def _resolve_call_target(name: str, caller: Dict[str, Any],
                          if loc.get("language") == caller.get("language")
                          and loc.get("file") == caller.get("file")]
             return same_file[0] if len(same_file) == 1 else None
-        # (c) check if qualifier head is a known internal module for this file
-        if known_internal_qualifiers is not None and head in known_internal_qualifiers:
+        # (c) qualifier head is a proven internal module: resolve the bare tail, but ONLY to a symbol
+        # that actually lives in the file(s) this qualifier imports. Without the file restriction a
+        # `fs.foo()` (fs -> ./util) would bind to a unique `foo` defined in some unrelated in-repo file
+        # — the same false cross-file edge the qualifier gating exists to kill.
+        allowed_files = known_internal_qualifiers.get(head) if known_internal_qualifiers else None
+        if allowed_files:
             bare = name.rsplit(".", 1)[-1]
             candidates = [loc for loc in symbols.get(bare, [])
-                          if loc.get("language") == caller.get("language")]
-            same_file = [loc for loc in candidates if loc.get("file") == caller.get("file")]
-            if len(same_file) == 1:
-                return same_file[0]
-            if len(same_file) > 1:
-                return None
+                          if loc.get("language") == caller.get("language")
+                          and loc.get("file") in allowed_files]
             return candidates[0] if len(candidates) == 1 else None
         # (d) qualified-external: drop without bare-name fallback
         return None
@@ -1187,7 +1311,10 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
         exports = list(fi.exports)
         for fn in fi.functions:
             symbols.setdefault(fn["name"], []).append(
-                {"file": rel, "start": fn["start"], "end": fn["end"], "language": fi.language})
+                {"file": rel, "start": fn["start"], "end": fn["end"], "language": fi.language,
+                 # direct param->call-arg taint (precise backends only; [] under regex). Carried onto the
+                 # loc so cmd_extract can surface it; additive — call-graph consumers ignore it.
+                 "taint": fn.get("taint", [])})
             all_funcs.append({"name": fn["name"], "file": rel, "start": fn["start"],
                               "end": fn["end"], "language": fi.language, "calls": fn["calls"]})
             if fi.language == "go" and fn["name"][:1].isupper():
@@ -1261,9 +1388,12 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
     # Per-file set of qualifier heads that map to an in-repo file.  For Python `import mymod` or
     # `from mymod import x` where mymod.py is in scope, "mymod" is internal.  For non-Python the
     # import name list may be empty; use the spec's last path component as the module name.
-    file_internal_qualifiers: Dict[str, set] = {}
+    # rel -> {qualifier_head: {resolved files that head imports}}. Mapping (not a bare set) so the
+    # call resolver can bind a qualified internal call ONLY to a symbol in the file that qualifier
+    # actually pulls in, not to any unique same-named symbol elsewhere in the repo.
+    file_internal_qualifiers: Dict[str, Dict[str, set]] = {}
     for rel, imps in imports_map.items():
-        qual_set: set = set()
+        qual_map: Dict[str, set] = {}
         for imp in imps:
             if imp.get("system"):
                 continue  # system/external import: not internal
@@ -1278,15 +1408,16 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
             # fires when no binding was captured.
             # For other languages: use first name in imp["names"] if present.
             names = imp.get("names") or []
-            if names:
-                qual_set.update(n.split(".")[0] for n in names if n)
-            else:
+            heads = [n.split(".")[0] for n in names if n] if names else []
+            if not heads:
                 # Fallback: last path component of the spec (e.g. "./util" -> "util")
                 tail = imp["spec"].rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
                 tail = tail.split(".")[0]  # strip extension if present
                 if tail:
-                    qual_set.add(tail)
-        file_internal_qualifiers[rel] = qual_set
+                    heads = [tail]
+            for h in heads:
+                qual_map.setdefault(h, set()).add(resolved)
+        file_internal_qualifiers[rel] = qual_map
 
     # Call-graph edges are conservative: same-file definitions shadow other files, exactly one
     # same-language cross-file candidate is allowed, and ambiguous names are skipped. Resolve each
@@ -1299,7 +1430,7 @@ def build_index(scope: str, max_bytes: int, only: Optional[List[str]]) -> Dict[s
         callees.setdefault(caller_key, [])
         for c in f["calls"]:
             target = _resolve_call_target(c, f, symbols,
-                                          file_internal_qualifiers.get(f["file"], set()))
+                                          file_internal_qualifiers.get(f["file"], {}))
             if target is None:
                 continue
             callee_key = target["key"]
@@ -1453,12 +1584,24 @@ def _target_name_file(target: str) -> Tuple[Optional[str], str, Optional[int]]:
     return None, target, None
 
 
+def _strip_dot_slash(file: str) -> str:
+    """Remove a single leading './' relative prefix (NOT str.lstrip('./'), which strips a whole
+    character set: '../a/db.py'.lstrip('./') -> 'a/db.py', and 'imdb.py' would then suffix-match)."""
+    return file[2:] if file.startswith("./") else file
+
+
+def _file_suffix_match(loc_file: str, needle: str) -> bool:
+    """Path-segment-anchored suffix match: needle 'auth/db.py' matches 'src/auth/db.py' but NOT
+    'fakeauth/db.py' or 'imdb.py'. Mirrors the correct idiom already used in _resolve_import."""
+    return loc_file == needle or loc_file.endswith("/" + needle)
+
+
 def _loc_candidates(idx: Dict[str, Any], name: str, file: Optional[str],
                     line: Optional[int] = None) -> List[Dict[str, Any]]:
     locs = list(idx.get("symbols", {}).get(name, []))
     if file:
-        needle = file.lstrip("./")
-        locs = [loc for loc in locs if loc.get("file", "").endswith(needle)]
+        needle = _strip_dot_slash(file)
+        locs = [loc for loc in locs if _file_suffix_match(loc.get("file", ""), needle)]
     if line is not None:
         locs = [loc for loc in locs if loc.get("start") == line]
     return locs
@@ -1521,14 +1664,18 @@ def cmd_extract(args) -> int:
         file, fn, _ = _target_name_file(target)  # file#fn[:line] or bare fn
 
     scope = idx["scope"] if idx else os.path.abspath(".")
+    resolved_loc = None  # the indexed symbol for this span, when one exists (carries key + taint)
     if idx and fn:
         _, _, loc, err = _resolve_index_target(idx, target)
         if err:
             print(err, file=sys.stderr)
             return 1
+        resolved_loc = loc
         span = (loc["file"], loc["start"], loc["end"])
     else:
         span = _find_span(idx, file, fn, line, scope)
+        if idx and span:
+            resolved_loc = _loc_at(idx, span[0], span[1])  # file:line target -> recover its symbol
 
     # Resolve the target file path for the fallback window (used when span is None).
     target_file = file
@@ -1565,14 +1712,42 @@ def cmd_extract(args) -> int:
         print(f"recon: cannot read {full}: {e}", file=sys.stderr)
         return 1
     snippet = "\n".join(lines[start - 1:end])
-    print(f"# {os.path.relpath(full, scope)}:{start}-{end}\n{snippet}")
+    # Header carries the STABLE symbol key (file#name, line-suffixed only on duplicate names) for a
+    # line-shift-resistant finding fingerprint, plus the direct param->call-arg taint summary for this
+    # function (precise backends only — a `# taint: none` line under the regex backend is NOT proof of
+    # safety, just that the degraded backend can't compute it).
+    header = f"# {os.path.relpath(full, scope)}:{start}-{end}"
+    key = (resolved_loc.get("id") or resolved_loc.get("key")) if resolved_loc else None
+    if key:
+        header += f"  key={key}"
+    out_lines = [header]
+    if resolved_loc is not None:
+        tl = resolved_loc.get("taint") or []
+        if tl:
+            flows = ", ".join(f"{','.join(t['params'])}->{t['call']}(...)" for t in tl)
+            out_lines.append(f"# taint: {flows}")
+        else:
+            out_lines.append("# taint: none detected (direct param->arg; precise backend only)")
+    out_lines.append(snippet)
+    print("\n".join(out_lines))
     return 0
+
+
+def _loc_at(idx: Dict[str, Any], file: str, start: int) -> Optional[Dict[str, Any]]:
+    """The symbol loc whose (file, start) match a resolved span — used to surface key=/taint for a
+    file:line extract target (the fn-name path already has the loc from _resolve_index_target)."""
+    needle = _strip_dot_slash(file)
+    for name, locs in idx.get("symbols", {}).items():
+        for loc in locs:
+            if loc.get("start") == start and _file_suffix_match(loc.get("file", ""), needle):
+                return dict(loc, name=name)
+    return None
 
 
 def _find_span(idx, file, fn, line, scope) -> Optional[Tuple[str, int, int]]:
     if idx and file and line is not None:
         cand = [l for name in idx.get("symbols", {}) for l in idx["symbols"][name]
-                if l["file"].endswith(file.lstrip("./")) and l["start"] <= line <= l["end"]]
+                if _file_suffix_match(l["file"], _strip_dot_slash(file)) and l["start"] <= line <= l["end"]]
         if cand:
             cand.sort(key=lambda l: l["end"] - l["start"])
             return (cand[0]["file"], cand[0]["start"], cand[0]["end"])
@@ -1769,6 +1944,105 @@ def cmd_summary(args) -> int:
     return 0
 
 
+# Short, OS-agnostic pointer printed when the binary is absent. Full per-OS install
+# instructions live in secure-review/SKILL.md; this is just a breadcrumb in the JSON.
+_SCANNER_INSTALL_HINT = (
+    "optional: install secrets-scanner (brew install --cask whit3rabbit/tap/secrets-scanner, "
+    "or cargo install secrets_scanner, or a release binary from "
+    "github.com/whit3rabbit/secrets-scanner); see secure-review/SKILL.md"
+)
+
+
+def cmd_scan(args) -> int:
+    """Optional deterministic secret scan via the external secrets-scanner binary.
+
+    Mirrors the _rg pattern: shutil.which gates the invocation. Absence is EXPECTED, not an
+    error (exit 0, ran=false) so the audit degrades cleanly instead of failing closed. The
+    binary is the deterministic engine; this is a thin detect -> run -> parse wrapper that
+    normalizes output for the workflow. Fingerprints pass through verbatim (the baseline key)."""
+    name = args.bin or os.environ.get("SECRETS_SCANNER_BIN") or "secrets-scanner"
+    binpath = shutil.which(name) or (name if os.path.isfile(name) and os.access(name, os.X_OK) else None)
+    if not binpath:
+        print(json.dumps({
+            "ran": False,
+            "scanner": name,
+            "reason": f"secrets-scanner not found on PATH (looked for '{name}')",
+            "install": _SCANNER_INSTALL_HINT,
+        }, indent=2))
+        return 0
+
+    cmd = [binpath, "scan", args.scope, "--format", getattr(args, "format", "json")]
+    if getattr(args, "changed_files", False):
+        cmd.append("--changed-files")
+        if args.base:
+            cmd += ["--base", args.base]
+    if args.max_file_size:
+        cmd += ["--max-file-size", str(args.max_file_size)]
+    # Read the baseline only when it actually exists; passing a missing file would error the scanner.
+    if args.baseline and os.path.isfile(args.baseline):
+        cmd += ["--baseline", args.baseline]
+
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    except Exception as e:  # binary present but unrunnable (perms, arch) -> treat as not-run, don't crash
+        print(json.dumps({
+            "ran": False, "scanner": binpath,
+            "reason": f"secrets-scanner failed to execute: {e}", "install": _SCANNER_INSTALL_HINT,
+        }, indent=2))
+        return 0
+
+    # Exit 0 = no findings, 1 = findings; both normal. 2 = incomplete coverage (scan errors). Other = real failure.
+    if r.returncode not in (0, 1, 2):
+        print(json.dumps({
+            "ran": False, "scanner": binpath,
+            "reason": f"secrets-scanner exited {r.returncode}: {(r.stderr or '').strip()[:300]}",
+            "install": _SCANNER_INSTALL_HINT,
+        }, indent=2))
+        return 0
+
+    try:
+        parsed = json.loads(r.stdout or "[]")
+    except json.JSONDecodeError as e:
+        print(json.dumps({
+            "ran": False, "scanner": binpath,
+            "reason": f"could not parse secrets-scanner JSON output: {e}", "install": _SCANNER_INSTALL_HINT,
+        }, indent=2))
+        return 0
+
+    # Tolerate both a bare array and an object wrapping {findings:[...]}.
+    raw = parsed.get("findings", []) if isinstance(parsed, dict) else parsed
+    findings = []
+    for f in raw if isinstance(raw, list) else []:
+        if not isinstance(f, dict):
+            continue
+        findings.append({
+            "file": f.get("file"),
+            "line": f.get("line"),
+            "col": f.get("col"),
+            "rule_id": f.get("rule_id"),
+            "rule_description": f.get("rule_description"),
+            "entropy": f.get("entropy"),
+            "fingerprint": f.get("fingerprint"),  # baseline key — pass through verbatim
+        })
+    print(json.dumps({
+        "ran": True,
+        "scanner": binpath,
+        "count": len(findings),
+        "incomplete": r.returncode == 2,
+        "findings": findings,
+    }, indent=2))
+    return 0
+
+
+# Cap line length scanned in the stdlib _rg fallback. Every caller passes a re.escape()'d (literal)
+# pattern, so catastrophic backtracking is not reachable today — but re.search over arbitrary file
+# lines is still unbounded work on a pathological single line (a minified/vendored blob can be one
+# multi-MB line). Skip those lines so the fallback can't be turned into a CPU/memory DoS by a hostile
+# tree. ripgrep (the preferred path) is already bounded by its own timeout. Ceiling, not a guess:
+# raise it only if a real source line legitimately exceeds it (none should).
+_RG_MAX_LINE_BYTES = 100_000
+
+
 def _rg(pattern: str, root: str, max_hits: int = 60) -> List[str]:
     rg = shutil.which("rg")
     if rg:
@@ -1778,7 +2052,8 @@ def _rg(pattern: str, root: str, max_hits: int = 60) -> List[str]:
             return [ln for ln in r.stdout.splitlines() if ln.strip()]
         except Exception:
             pass
-    # stdlib fallback walk
+    # stdlib fallback walk. Callers MUST pass an escaped/literal pattern (see re.escape at the call
+    # sites); a raw user-supplied regex here would reintroduce ReDoS the length cap can't fully fix.
     out = []
     rx = re.compile(pattern)
     for dirpath, dirnames, filenames in os.walk(root):
@@ -1790,6 +2065,8 @@ def _rg(pattern: str, root: str, max_hits: int = 60) -> List[str]:
             try:
                 with open(full, "r", encoding="utf-8", errors="replace") as f:
                     for i, line in enumerate(f, 1):
+                        if len(line) > _RG_MAX_LINE_BYTES:
+                            continue  # pathologically long line (minified blob) — skip, don't scan
                         if rx.search(line):
                             out.append(f"{os.path.relpath(full, root)}:{i}:{line.rstrip()}")
                             if len(out) >= max_hits:
@@ -1850,6 +2127,19 @@ def build_parser() -> argparse.ArgumentParser:
     pp.add_argument("--hops", type=int, default=2, help="max hops from focus (default 2)")
     pp.add_argument("--max", type=int, default=80, help="max files to print (default 80)")
     pp.set_defaults(func=cmd_map)
+
+    pscan = sub.add_parser("scan", help="optional deterministic secret scan via external secrets-scanner binary")
+    pscan.add_argument("scope")
+    pscan.add_argument("--bin", default=None, help="scanner binary (else $SECRETS_SCANNER_BIN, else 'secrets-scanner')")
+    pscan.add_argument("--changed-files", dest="changed_files", action="store_true", help="scan only changed files (diff mode)")
+    pscan.add_argument("--base", default=None, help="base git ref for --changed-files")
+    pscan.add_argument("--baseline", default=None, help="fingerprint suppression file (read only if it exists)")
+    pscan.add_argument("--max-file-size", dest="max_file_size", type=int, default=None, help="skip files larger than this many bytes")
+    # --format is forwarded verbatim to the scanner binary (cmd_scan). recon.py's scan output is always
+    # JSON; the flag exists so the documented `scan <scope> --format json` (reconBlock in security-audit.js)
+    # actually parses instead of erroring "unrecognized arguments".
+    pscan.add_argument("--format", default="json", help="output format forwarded to the scanner binary (default json)")
+    pscan.set_defaults(func=cmd_scan)
     return p
 
 

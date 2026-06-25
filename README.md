@@ -42,20 +42,28 @@ Install writes `<scope>/.rabbit-flows-receipt.json`. `--force` backups go under 
 
 ## Workflows
 
-Run installed workflows by name in Claude Code. Pass JSON args after the command.
+Two ways to trigger a workflow:
 
-| Workflow | Purpose | Example |
+- **Easy (recommended): just say what you want.** A front-door skill recognizes the request,
+  asks a couple of questions, then launches the workflow for you. Say "audit this repo for
+  security bugs", "start a new Rust CLI project", or "document this codebase".
+- **Power user: call the workflow by name with JSON args.** Skips the discussion; you supply the
+  args yourself.
+
+| Workflow | Say this (front door) | Power-user command |
 |---|---|---|
-| `scaffold` | Create a project from a brief, compare architectures, build file stubs under a line ceiling. | `/scaffold { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }` |
-| `security-audit` | Map attack surface, run audit lanes, gate findings, report remediation. | `/security-audit { "scope": "src", "focus": ["authz", "ssrf"] }` |
-| `docs-create` | Create a docs site from a brief. | `/docs-create { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site", "framework": "docusaurus" }` |
-| `docs-from-code` | Generate source-grounded docs from an existing codebase. | `/docs-from-code { "root": "src", "outDir": "./docs-site", "framework": "mkdocs" }` |
-| `docs-scrape` | Convert an external docs site into a local markdown corpus. | `/docs-scrape { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }` |
-| `docs-migrate` | Migrate docs from one framework to another. | `/docs-migrate { "from": "mkdocs", "to": "starlight", "outDir": "./docs-site" }` |
-| `eatahorse` | Create an Eatahorse board and optionally work it one bite at a time. | `/eatahorse { "goal": "Add OAuth login", "execute": true }` |
-| `eatahorse-research` | Research files through a durable Eatahorse board and synthesize a cited report. | `/eatahorse-research { "root": "src", "question": "What does each module do?" }` |
+| `scaffold` | "start a new project" → `new-project` skill | `/scaffold { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }` |
+| `security-audit` | "audit my code for vulnerabilities" → `audit-codebase` skill | `/security-audit { "scope": "src", "focus": ["authz", "ssrf"] }` |
+| `docs-create` | "write docs from this brief" → `document` skill | `/docs-create { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site", "framework": "docusaurus" }` |
+| `docs-from-code` | "document this codebase" → `document-codebase` skill | `/docs-from-code { "root": "src", "outDir": "./docs-site", "framework": "mkdocs" }` |
+| `docs-scrape` | "save these docs locally" → `docs-scraper` skill | `/docs-scrape { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }` |
+| `docs-migrate` | "migrate these docs to Starlight" → `document` skill | `/docs-migrate { "from": "mkdocs", "to": "starlight", "outDir": "./docs-site" }` |
+| `eatahorse` | "break this goal into tasks" → `eatahorse` skill | `/eatahorse { "goal": "Add OAuth login", "execute": true }` |
+| `eatahorse-research` | "research this folder file by file" → `eatahorse` skill | `/eatahorse-research { "root": "src", "question": "What does each module do?" }` |
 
-`starter.js` is a reference example for the workflow spine. It is not in the installer catalog.
+The front-door skill ships with its workflow (see the skills table below), so the natural-language
+path works as soon as the workflow is installed. `starter.js` is a reference example for the workflow
+spine and is not in the installer catalog.
 
 ## Safe Defaults
 
@@ -97,18 +105,19 @@ Front-door dependency skills gather inputs, then launch a workflow:
 | Skill | Purpose |
 |---|---|
 | `new-project` | Intake for `scaffold`. |
+| `audit-codebase` | Intake for `security-audit`. |
 | `document` | Routes a docs brief, codebase, or migration to the right docs workflow. |
 | `document-codebase` | Intake for `docs-from-code`; can fall back to a conversational board. |
+| `eatahorse` | Drives Kanban boards directly, and is the intake for the `eatahorse` and `eatahorse-research` workflows. |
+| `docs-scraper` | Detects a docs site and extracts markdown; intake for `docs-scrape`. |
 
-Specialist dependency skills:
+Specialist dependency skills (used inside a workflow, not a user front door):
 
 | Skill | Purpose |
 |---|---|
 | `architect` | Produces one architecture proposal from a brief. |
 | `secure-review` | Evidence-backed defensive code review. |
 | `docs-site-builder` | Docs framework authoring reference. |
-| `docs-scraper` | Docs site detection and markdown extraction. |
-| `eatahorse` | Lightweight Kanban boards in `.eatahorse` files. |
 
 Authoring skills:
 

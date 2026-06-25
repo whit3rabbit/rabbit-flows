@@ -38,21 +38,36 @@
 // PERMISSIONS: READS source files; WRITES under outDir (the site), the board dir, and CLAUDE.md. Does not
 //   modify the documented source. Runs under the session allowlist.
 //
-// Knobs (args): root (or bare string), outDir (required), framework (default starlight), board, brief,
-//   workerModel (default sonnet), maxRounds (default 3), includeTutorials (default false), filesPerPage,
-//   pages (skip Plan), include/exclude globs, scriptPath (eatahorse.py),
-//   scaffoldMode ('content-only' default | 'add-to-existing' | 'full-project'),
-//   basePath (string, optional) — subpath the site is served from, e.g. '/docs'; injected into framework
-//     config where supported (Astro base, Docusaurus baseUrl, etc.); skipped with a log note elsewhere,
-//   i18n ({defaultLocale, locales[]}, optional) — multi-locale config; mapped to each framework's i18n block,
-//   versioning ({current, versions?[]}, optional) — version label; mapped where supported (Docusaurus, Sphinx,
-//     MkDocs/mike); noted and skipped for frameworks without built-in versioning,
-//   site (string, optional) — full production URL, e.g. 'https://docs.example.com'; set as Astro `site:` in
-//     defineConfig (Starlight auto-adds @astrojs/sitemap, which needs it; also fixes canonical URLs),
-//   verify (bool, default false) — opt-in end-to-end build gate: ensure package.json, npm install, npm run
-//     build; surfaces failure as ok:false. Off by default since it pulls deps and builds generated config.
-//   mode ('fresh' default | 'update'), updateMode ('diff' default | 'refine'), since (git ref, default
-//     HEAD~1), refine ([{page, ask}]), planNewModules (bool, default false) — see UPDATE MODE below.
+// @generated-start arg-contract/header
+// Knobs (args) — GENERATED from installer/arg-schemas/docs-from-code.mjs (build:arg-contract); edit the schema.
+// core:
+//   root — repo root to document (bare string also accepted)
+//   outDir (required) — directory to write the docs site into (required)
+//   framework — registry id; unknown ids fall back to work-from-current-docs
+//   scaffoldMode — content-only (default) | add-to-existing | full-project (Starlight only)
+//   brief — focus/scope note for the run
+//   includeTutorials — also author tutorials (default false; expect more gate churn)
+// optional:
+//   board — Eatahorse board directory
+//   workerModel — model for page authors
+//   maxRounds — author/gate rounds per run (default 3, clamped to 10)
+//   filesPerPage — split modules bigger than this into sub-pages
+//   include — glob(s) to include
+//   exclude — glob(s) to exclude
+//   pages — explicit page plan; skips the Plan stage
+//   scriptPath — path to eatahorse.py
+//   verify — opt-in end-to-end build gate (Starlight only, needs pinned deps)
+//   site — full production URL (e.g. https://docs.example.com)
+//   basePath — subpath the site is served from (e.g. /docs)
+//   i18n — {defaultLocale, locales[]} — enable multi-locale output
+//   versioning — {current, versions?[]} — version label, mapped where supported
+// update mode (args.mode='update'):
+//   mode — 'fresh' (default) | 'update' (re-document an existing run)
+//   updateMode — 'diff' (default, changed source since `since`) | 'refine' (named pages)
+//   since — git ref for diff mode
+//   refine — [{page, ask}] for refine mode
+//   planNewModules — plan pages for new undocumented source (default false)
+// @generated-end arg-contract/header
 //
 // UPDATE MODE (args.mode='update') — re-document an EXISTING run instead of planning from scratch. Bounded
 //   branch (mirrors security-audit's mode knob): it REPLACES the fresh front-end (Enumerate/Detect/Generate/
@@ -80,7 +95,9 @@
 export const meta = {
   name: 'docs-from-code',
   description:
-    'Document a whole codebase into a Starlight site using an Eatahorse board as a durable resumable ledger: enumerate source, detect generator lanes, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back.',
+    'Generate a documentation site from an existing codebase: enumerate source, plan a page per module, write grounded reference pages, then assemble the site config. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks via the framework arg.',
+  whenToUse:
+    'Use to document an existing codebase into a docs site. Front door: the document-codebase or document skill.',
   phases: [
     { title: 'Enumerate' },
     { title: 'Detect', detail: 'classify the gitignore-respecting tracked file set against language rules: 12 languages plus OpenAPI and CLI --help cross-cutting lanes' },
@@ -1070,7 +1087,48 @@ Two structural page kinds sit outside the quadrants:
 
 A new reader reaches a **first success within ~5 minutes.** If the quickstart can't get someone to a
 working result that fast, the IA (or the product's onboarding) is the problem, not the prose. This is
-the single highest-leverage page; design the journey backwards from it.`
+the single highest-leverage page; design the journey backwards from it.
+
+## Archetypes: what docs a project needs
+
+Diátaxis shapes a page *once you've decided to write it*. This decides **which pages a given project
+should have, and whether it needs a site at all.** Identify the archetype first, then plan the
+minimum-viable set for it — do not pour every project into the full four-quadrant spread.
+
+| Archetype | Must-have | High-value | Skip / deprioritize |
+|---|---|---|---|
+| **CLI tool** | command reference, quickstart | install/config how-to | tutorials, deep explanation |
+| **Library / SDK** | API reference, getting-started | how-tos, tutorials, key-concepts explanation | ops/deployment |
+| **Service / API** | endpoint reference (OpenAPI), auth + deploy runbook | integration how-tos | beginner tutorial |
+| **Internal tool / app** | README, runbook, ADRs | onboarding how-to | public splash, marketing |
+| **Framework / platform** | getting-started, guides, full reference | tutorials, explanation, migration guides | — (the full spread fits) |
+
+**Minimum-viable-docs baseline (every archetype clears this floor):** a one-paragraph "what this is
++ who it's for", a getting-started that hits first success in ~5 min (the rule above), and one
+reference surface for the project's primary interface (commands, API, or endpoints). Everything else
+is earned by the archetype, not added by default.
+
+**Two skeletons the four quadrants don't cover** (use when the archetype calls for them):
+- **ADR** (architecture decision record) — context (forces at play) → decision → consequences
+  (what this commits us to, what it rules out). One decision per record, dated, immutable once
+  accepted.
+- **Runbook** — symptom / trigger → diagnosis steps → remediation → escalation + rollback. Written
+  for an on-call reader at 3am: scannable, imperative, no theory.
+- "CLI command page" is a reference entry (signature, flags, example) and "library quickstart" is a
+  tutorial — variants of existing quadrants, not new shapes.
+
+**Does this even need a multi-page site?** Match output shape to archetype + size, and record the
+verdict so the reader can act on it:
+- **single-file** (one README/markdown file) — a CLI or small library whose whole surface fits one
+  scannable page. A multi-page site here is overhead.
+- **embedded** (docstrings / inline API comments in source, not a separate site) — a library whose
+  API reference belongs next to the code it documents.
+- **site** — anything with multiple audiences, a real reader journey, or a reference surface too
+  large for one page (frameworks, platforms, larger services).
+
+This is a recommendation the planner records, not a branch it takes: note the archetype and the
+recommended shape even when the run still builds a site, so a maintainer sees "this is a CLI tool; a
+single README likely suffices" and can choose.`
 // @generated-end docs-contracts/ia-contract
 
 // @generated-start docs-contracts/docusaurus-contract
@@ -5512,82 +5570,71 @@ async function resolveLinksAndAssets(writtenNotes, outDir, fwEntry, framework) {
   return result ?? { copied: [], rewritten: [], skipped: ['resolve-links-assets agent returned null'], summary: 'skipped' }
 }
 // @generated-end docs-contracts/frameworks
-// --- args / guards -----------------------------------------------------------------------------
-const root = typeof args === 'string' ? args : args?.root ?? '.'
+// --- args / guards -------------------------------------------------------------------------------
+// The UNIFORM guards below are GENERATED from installer/arg-schemas/docs-from-code.mjs by
+// scripts/build-arg-contract.mjs — do NOT hand-edit between the markers; edit the schema + regenerate.
+// Bespoke object/array validators (i18n, versioning, refine) and derived consts (root, fwEntry, mode,
+// updateMode, normPagePath) are hand-written below the block; ALL arg names are drift-checked against the
+// schema by `--check` over the region down to the "end args / guards" sentinel.
+// @generated-start arg-contract/guards
 const outDir = typeof args?.outDir === 'string' ? args.outDir : null
 const framework = args?.framework ?? 'starlight'
-// Resolve the registry entry; unknown frameworks fall back to the _unfilled sentinel.
-const fwEntry = FRAMEWORKS[framework] ?? FRAMEWORKS._unfilled
+const scaffoldMode = ['content-only', 'add-to-existing', 'full-project'].includes(args?.scaffoldMode) ? args.scaffoldMode : 'content-only'
 const brief = typeof args?.brief === 'string' ? args.brief : ''
-// scaffoldMode: 'content-only' (default) | 'add-to-existing' | 'full-project'. Default preserves prior behavior.
-const SCAFFOLD_MODES = ['content-only', 'add-to-existing', 'full-project']
-const scaffoldMode = SCAFFOLD_MODES.includes(args?.scaffoldMode) ? args.scaffoldMode : 'content-only'
-const board = args?.board ?? '.eatahorse-docs'
-const workerModel = args?.workerModel ?? 'sonnet'      // page authoring is real writing, not mechanical -> sonnet (model-routing.md)
-const maxRounds = Math.min(args?.maxRounds ?? 3, 10)
 const includeTutorials = args?.includeTutorials === true
-const filesPerPage = args?.filesPerPage ?? 12          // soft ceiling: split oversized modules into sub-pages at plan time so no author reads 40 files
+const board = args?.board ?? '.eatahorse-docs'
+const workerModel = args?.workerModel ?? 'sonnet'   // page authoring is real writing, not mechanical -> sonnet (model-routing.md)
+const maxRounds = Math.min(args?.maxRounds ?? 3, 10)   // clamp: keep author+sync+gate fan-out under the 1000-agent lifetime cap
+const filesPerPage = args?.filesPerPage ?? 12   // soft ceiling: split oversized modules at plan time so no author reads 40 files
 const include = args?.include ?? ''
 const exclude = args?.exclude ?? ''
 const explicitPages = Array.isArray(args?.pages) ? args.pages.filter(Boolean) : null
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
-// verify: opt-in end-to-end build gate. Default false on purpose — it pulls deps and runs a build of
-// generated config (mirrors the scaffold verify=false rejected-relitigation note). See plan.
-const verify = args?.verify === true
-// site: full production URL (e.g. 'https://docs.example.com'). Threaded into Starlight's defineConfig
-// `site:` (Starlight auto-adds @astrojs/sitemap, which needs it; also fixes canonical URLs). Null = absent.
+const verify = args?.verify === true   // opt-in build gate; default false (pulls deps, builds generated config). Starlight only
 const site = typeof args?.site === 'string' && args.site.trim() ? args.site.trim() : null
-
-// basePath: subpath the site is served under (e.g. '/docs'). Passed to assemblePrompt for frameworks that
-// have a config key for it (Astro base, Docusaurus baseUrl, etc.). Null = not specified.
 const basePath = typeof args?.basePath === 'string' && args.basePath.trim() ? args.basePath.trim() : null
-
-// i18n: {defaultLocale, locales} — enable multi-locale output. Null = not specified.
-// Guard: must be an object with a non-empty defaultLocale string and a non-empty locales array.
+const planNewModules = args?.planNewModules === true
+// @generated-end arg-contract/guards
+const root = typeof args === 'string' ? args : args?.root ?? '.'   // bare string supported -> custom, not generated
+const fwEntry = FRAMEWORKS[framework] ?? FRAMEWORKS._unfilled       // derived from framework; unknown -> _unfilled sentinel
+const mode = args?.mode === 'update' ? 'update' : 'fresh'
+const updateMode = args?.updateMode === 'refine' ? 'refine' : 'diff'
+// since (diff mode): interpolated into git commands inside an agent prompt, so restrict it to safe
+// git-ref characters and fall back to the default on anything else. Custom (not codegenned) for this guard.
+const _sinceRaw = typeof args?.since === 'string' && args.since.trim() ? args.since.trim() : 'HEAD~1'
+const since = /^[A-Za-z0-9_.~^:/-]+$/.test(_sinceRaw) ? _sinceRaw : 'HEAD~1'
+// i18n: {defaultLocale, locales} — must be an object with a non-empty defaultLocale and a non-empty locales array.
 const i18n = (
   args?.i18n && typeof args.i18n === 'object' &&
   typeof args.i18n.defaultLocale === 'string' && args.i18n.defaultLocale &&
   Array.isArray(args.i18n.locales) && args.i18n.locales.length > 0
 ) ? { defaultLocale: args.i18n.defaultLocale, locales: args.i18n.locales } : null
-
-// versioning: {current, versions?} — the current version label and optional prior versions list.
-// Null = not specified.
+// versioning: {current, versions?} — current version label + optional prior versions list.
 const versioning = (
   args?.versioning && typeof args.versioning === 'object' &&
   typeof args.versioning.current === 'string' && args.versioning.current
 ) ? { current: args.versioning.current, versions: Array.isArray(args.versioning.versions) ? args.versioning.versions : [] } : null
-
-if (basePath) log(`basePath="${basePath}" will be injected into framework config where supported`)
-if (i18n) log(`i18n enabled: defaultLocale="${i18n.defaultLocale}", locales=[${i18n.locales.join(', ')}]`)
-if (versioning) log(`versioning enabled: current="${versioning.current}"${versioning.versions.length ? `, versions=[${versioning.versions.join(', ')}]` : ''}`)
-
-if (!outDir) return { error: 'args.outDir is required (dir to write the docs site into)', got: { root, outDir } }
-
-// Page paths MUST be contentRoot-relative (e.g. "src/content/docs/x.md"), one convention across the
-// planner and the generator lanes. Lane workers sometimes echo the outDir-prefixed path they wrote
-// ("docs/src/content/docs/x.md"); left unnormalized that divergence silently breaks gather-admitted
-// (string match), the quality gate (reads `${outDir}/${path}` -> "docs/docs/..."), and config assembly.
-// Normalize at every ingestion point. See plan: "Core defect".
+// Page paths MUST be contentRoot-relative (e.g. "src/content/docs/x.md"), one convention across the planner
+// and the generator lanes. normPagePath strips a stray outDir prefix at every ingestion point (a lane worker
+// echoing "docs/src/content/docs/x.md" would otherwise break gather-admitted / the gate / config assembly).
 const _relOutDir = String(outDir).replace(/^\.\//, '').replace(/\/+$/, '')
 const normPagePath = (pp) => {
   let s = String(pp ?? '').replace(/^\.\//, '')
   if (_relOutDir && s.startsWith(_relOutDir + '/')) s = s.slice(_relOutDir.length + 1)
   return s
 }
-
-// --- update mode (re-document changed code, or refine specific pages on request) -----------------
-// mode='update' reopens existing page cards instead of planning from scratch, then re-enters the author
-// loop. updateMode='diff' uses a git ref (since); 'refine' takes args.refine=[{page, ask}]. See header.
-const mode = args?.mode === 'update' ? 'update' : 'fresh'
-const updateMode = args?.updateMode === 'refine' ? 'refine' : 'diff'
-const since = typeof args?.since === 'string' && args.since.trim() ? args.since.trim() : 'HEAD~1'
+// refine: [{page, ask}] — page paths normalized for board-title matching (depends on normPagePath above).
 const refine = Array.isArray(args?.refine)
   ? args.refine
       .filter((r) => r && typeof r.page === 'string' && r.page && typeof r.ask === 'string' && r.ask)
       .map((r) => ({ page: normPagePath(r.page), ask: r.ask }))
   : []
-const planNewModules = args?.planNewModules === true
+if (basePath) log(`basePath="${basePath}" will be injected into framework config where supported`)
+if (i18n) log(`i18n enabled: defaultLocale="${i18n.defaultLocale}", locales=[${i18n.locales.join(', ')}]`)
+if (versioning) log(`versioning enabled: current="${versioning.current}"${versioning.versions.length ? `, versions=[${versioning.versions.join(', ')}]` : ''}`)
 if (mode === 'update') log(`UPDATE mode (${updateMode})${updateMode === 'diff' ? `, since="${since}"` : `, ${refine.length} refine request(s)`}${planNewModules ? ', planNewModules=on' : ''}`)
+if (!outDir) return { error: 'args.outDir is required (dir to write the docs site into)', got: { root, outDir } }
+// --- end args / guards (drift-checked region) ----------------------------------------------------
 
 const ENUM_CAP = 5000        // hard cap on source files enumerated in one run
 const LIVE_CAP = 40          // max pages authored per ROUND; the rest stay in backlog and carry forward
@@ -5647,6 +5694,8 @@ const ENUM_SCHEMA = {
 const PLAN_SCHEMA = {
   type: 'object', required: ['pages'], additionalProperties: false,
   properties: {
+    archetype: { type: 'string', description: 'project archetype per the IA contract: cli | library | service-api | internal-tool | framework-platform (or the closest fit + why)' },
+    siteRecommendation: { enum: ['site', 'single-file', 'embedded'], description: 'advisory output shape for this archetype+scope; recorded even though this run still builds a site' },
     pages: { type: 'array', items: {
       type: 'object', required: ['path', 'title', 'kind', 'group', 'brief', 'diataxisType', 'template', 'scope'], additionalProperties: false,
       properties: {
@@ -5669,8 +5718,11 @@ const PLAN_SCHEMA = {
 const SEED_SCHEMA = {
   type: 'object', additionalProperties: false, required: ['cards'],
   properties: { cards: { type: 'array', items: {
-    type: 'object', additionalProperties: false, required: ['title', 'mdPath', 'status'],
-    properties: { title: { type: 'string' }, mdPath: { type: 'string' }, status: { type: 'string' } } } } },
+    // written = author's "page written" acceptance is ticked; verified = gate's "grounding verified" acceptance
+    // is ticked (legacy single-acceptance cards report verified === written, see the reload prompt).
+    type: 'object', additionalProperties: false, required: ['title', 'mdPath', 'status', 'written', 'verified'],
+    properties: { title: { type: 'string' }, mdPath: { type: 'string' }, status: { type: 'string' },
+      written: { type: 'boolean' }, verified: { type: 'boolean' } } } } },
 }
 
 const SYNC_SCHEMA = {
@@ -5837,10 +5889,11 @@ const CMD = {
   list:   `list [--status s] [--json] -> cards (id,title,status,path)`,
   show:   `show <id> [--json] -> card incl. "description" (holds page path + scope)`,
   init:   `init "<name>"  (errors if a board exists)`,
-  add:    `add "<title>" --status backlog -d "<desc>" --bite "author it" --accept "page written and grounded in source"`,
+  add:    `add "<title>" --status backlog -d "<desc>" --bite "author it" --accept "page written from source" --accept "grounding verified by gate"  (TWO acceptance items, in this order)`,
   done:   `done <id>  (check all bites + acceptance and move to done; survives sync, unlike a bare --status done)`,
-  reopen: `reopen <id> [--gap "<why hollow>"]  (atomic: uncheck acceptance + add gap bite + move doing)`,
-  move:   `move <id> dropped  (set status; "dropped" is terminal and excluded from the active queue + reruns)`,
+  reopen: `reopen <id> [--gap "<why hollow>"]  (atomic: uncheck ALL acceptance + add gap bite + move doing)`,
+  bite:   `bite <id> <index> --group acceptance --done  (tick ONE acceptance item by 1-based index; item 1 = "page written", item 2 = "grounding verified by gate")`,
+  move:   `move <id> blocked|dropped  (set status; both are excluded from the active queue + reruns. blocked = parked for review; dropped = purge)`,
   sync:   `sync  (reconcile cards <-> state.json + board.md; run after edits)`,
 }
 const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
@@ -6119,6 +6172,7 @@ Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
 //    and reopen the cards for changed source (diff) or user asks (refine).
 let pages = mode === 'update' ? null : explicitPages
 let deferred = []
+let docStrategy = null      // {archetype, siteRecommendation} from the fresh Plan; recorded in .docs-plan.md write-back
 let reopened = []          // update: page titles reopened this run
 let newModules = []        // update/diff: changed/added source files covered by no page (flagged)
 let staleByDeletion = []   // update/diff: pages whose scope lost a file (flagged; NOT reopened)
@@ -6154,7 +6208,9 @@ if (mode === 'update') {
       cli('list', 'show', 'reopen', 'sync'),
     { label: 'reopen', schema: REOPEN_SCHEMA },   // strong model (inherits session): a wrong scope-match mis-targets re-authoring
   )
-  if (!r || r.noBoard) return { root, outDir, board, mode, error: `update mode: no board at "${board}" (run docs-from-code fresh first)`, written: false }
+  // Distinguish a dead Reopen agent (transient; retry) from a genuinely missing board (re-run fresh).
+  if (!r) return { root, outDir, board, mode, error: 'update mode: the Reopen stage did not return (transient agent failure); rerun to retry', written: false }
+  if (r.noBoard) return { root, outDir, board, mode, error: `update mode: no board at "${board}" (run docs-from-code fresh first)`, written: false }
   reopened = r.reopened ?? []
   newModules = r.newModules ?? []
   staleByDeletion = r.staleByDeletion ?? []
@@ -6185,7 +6241,7 @@ if (mode === 'update') {
         `kind, group (sidebar group), brief, diataxisType (the one reader need), template (section skeleton), ` +
         `scope (the source files it documents).\n\nNEW source files:\n${JSON.stringify(newModules)}\n\n` +
         `IA CONTRACT\n${IA_CONTRACT}\n\nAuthoring contract for reference:\n${authoringContract}`,
-      { label: 'plan-new-modules', schema: PLAN_SCHEMA },
+      { label: 'plan-new-modules', schema: PLAN_SCHEMA },   // strong model (inherits session): planning/decompose sets the page IA, errors propagate (model-routing.md)
     )
     newPlannedPages = (np?.pages ?? []).filter(Boolean)
     if (newPlannedPages.length) { pages = pages.concat(newPlannedPages); log(`planned ${newPlannedPages.length} new-module page(s)`) }
@@ -6219,8 +6275,12 @@ if (!pages) {
       (brief ? `Author brief / focus:\n${brief}\n\n` : '') +
       lanesBlock +
       `READ the entry points first to frame the IA: the README, the package/manifest file, and the public ` +
-      `exports / main modules / CLI entry. Then produce a FOCUSED set of pages (prefer FEWER, well-scoped ` +
-      `pages over many thin ones). For each page give:\n` +
+      `exports / main modules / CLI entry. From those, IDENTIFY the project archetype (Archetypes section of ` +
+      `the IA contract) and return it as \`archetype\` plus a \`siteRecommendation\` (site|single-file|embedded -- ` +
+      `the honest output shape for this archetype+scope, recorded even though this run still builds a site). ` +
+      `Then produce a FOCUSED set of pages (prefer FEWER, well-scoped pages over many thin ones) that covers the ` +
+      `archetype's must-have doc set + the minimum-viable baseline, and omits what its skip column deprioritizes. ` +
+      `For each page give:\n` +
       `- path: repo-relative under "${outDir}", e.g. src/content/docs/reference/cli.md (use .mdx ONLY if it needs components)\n` +
       `- title, kind (index|splash|guide|reference), group (sidebar group label), brief (what it must cover).\n` +
       `- diataxisType: the ONE reader need this page serves.\n` +
@@ -6237,6 +6297,7 @@ if (!pages) {
   )
   pages = (plan?.pages ?? []).filter(Boolean)
   deferred = plan?.deferred ?? []
+  if (plan?.archetype || plan?.siteRecommendation) docStrategy = { archetype: plan.archetype, siteRecommendation: plan.siteRecommendation }
   // Merge lane-generated pages into the plan. Exclude any generated path the planner independently
   // re-planned (planner wins: its scope + brief may be richer). Generated pages not in the plan go
   // in as pre-authored entries (they're already on disk; Seed will mark them done immediately).
@@ -6270,16 +6331,20 @@ const descOf = (p) => `path=${p.path} | diataxis=${p.diataxisType} | scope=${(p.
 const seed = await agent(
   `Ensure an Eatahorse board exists at "${board}" and holds one card per page below. Steps:\n` +
     `1. \`report --json\`; if it errors (no board), \`init "Docs: ${root.replace(/"/g, "'")}"\`.\n` +
-    `2. \`list --json\` to see existing cards. For EACH page whose "path" is NOT already a card title:\n` +
+    `2. \`list --json\` to see existing cards. Every NEW card gets TWO acceptance items IN ORDER: ` +
+    `"page written from source" (the author ticks) then "grounding verified by gate" (only the gate ticks). ` +
+    `For EACH page whose "path" is NOT already a card title:\n` +
     `   - If the page description contains "generated=true" (lane worker already wrote it): ` +
-    `\`add "<path>" -d "<description>" --accept "page written and grounded in source"\` (it lands in backlog).\n` +
-    `   - Otherwise: \`add "<path>" --status backlog -d "<description>" --bite "author it" --accept "page written and grounded in source"\`.\n` +
+    `\`add "<path>" -d "<description>" --accept "page written from source" --accept "grounding verified by gate"\` (lands in backlog).\n` +
+    `   - Otherwise: \`add "<path>" --status backlog -d "<description>" --bite "author it" --accept "page written from source" --accept "grounding verified by gate"\`.\n` +
     `   Do NOT re-add existing titles and do NOT change cards already done (supports resume).\n` +
     `2b. For every card you ADDED for a "generated=true" page, run \`done <id>\` (get the id from \`list --json\`) ` +
-    `to tick its acceptance and move it to done. A bare \`--status done\` is NOT enough: an unchecked ` +
-    `acceptance check reverts the card to doing on the next sync, so generated pages would fall out of the ` +
-    `admitted set. \`done\` actually checks the acceptance, so the card stays done.\n` +
-    `3. \`sync\`, then \`list --json\`. Return EVERY card as {title, mdPath (its "path" field), status}.\n` +
+    `to tick BOTH acceptance items and move it to done (lane-extracted pages are trusted, they skip the gate). ` +
+    `A bare \`--status done\` is NOT enough: an unchecked acceptance check reverts the card to doing on the next ` +
+    `sync, so generated pages would fall out of the admitted set. \`done\` checks all acceptance, so it stays done.\n` +
+    `3. \`sync\`, then \`list --json\`. Return EVERY card as {title, mdPath (its "path" field), status, ` +
+    `written (its FIRST "Acceptance checks" item is ticked), verified (it has a SECOND acceptance item AND it is ` +
+    `ticked; for a legacy card with only ONE acceptance item, report verified = written)}.\n` +
     `Do not author anything yet.\n\n${cli('report', 'init', 'add', 'done', 'sync', 'list')}\n\n` +
     `Pages (title=path, with description):\n${JSON.stringify(pages.map((p) => ({ title: p.path, description: descOf(p) })))}`,
   { label: 'seed', model: 'haiku', schema: SEED_SCHEMA },
@@ -6287,38 +6352,94 @@ const seed = await agent(
 if (!seed?.cards?.length) return { root, outDir, board, error: 'seed returned no cards', written: false }
 const cardByTitle = new Map(seed.cards.map((c) => [c.title, c]))
 
-// 4 + 5. Author rounds (loop-until-dry) + grounding gate. Authors write ONLY their own page file + own card
-//    markdown and run NO CLI; ONE sync agent per round is the sole state writer; the gate re-reads the page's
-//    SCOPE source and reopens pages whose claims aren't code-backed. Caps mirror eatahorse-research.js.
-//    Generated pages skip this loop (already seeded as done); they go straight to the quality gate.
-const notDone = (c) => c.status !== 'done' && c.status !== 'dropped'
-let pending = seed.cards.filter(notDone).map((c) => c.title)
+// 4 + 5. Author rounds (loop-until-dry) + FULL-COVERAGE grounding gate. Grounding is a DURABLE per-page board
+//    fact, not a sampled spot-check (the headline claim "grounding is the real gate" made true mechanically):
+//    each card carries TWO acceptance items — [0] "page written" (author ticks) and [1] "grounding verified by
+//    gate" (only the gate ticks). Eatahorse derives `done` from ALL acceptance, so a card reaches `done` — and
+//    thus the admitted set — ONLY after the gate verifies it. The loop runs two queues off the board snapshot:
+//    authorQueue (not written) and gateQueue (written, awaiting grounding). Authors write ONLY their own page +
+//    card and run NO CLI; one sync agent is the sole state writer. A card the gate rejects MAX_ATTEMPTS times is
+//    PARKED in `blocked` (surfaced, not silently dropped) and skipped by reruns. Generated pages are seeded done
+//    (both acceptance ticked) and bypass the loop. Legacy single-acceptance cards report verified===written, so
+//    pre-existing boards keep working without a forced re-ground.
+const notDone = (c) => c.status !== 'done' && c.status !== 'dropped' && c.status !== 'blocked'
+const attemptsOK = (t) => (attempts.get(t) ?? 0) < MAX_ATTEMPTS
+let cards = seed.cards            // [{title, mdPath, status, written, verified}]; the board snapshot
 let round = 0
-let activeRemaining = pending.length
+let activeRemaining = cards.filter(notDone).length
 const touched = new Set()
-const attempts = new Map()
-const keepRetryable = (titles) => {
-  const giveUp = titles.filter((t) => (attempts.get(t) ?? 0) >= MAX_ATTEMPTS)
-  if (giveUp.length) log(`dropping ${giveUp.length} page(s) after ${MAX_ATTEMPTS} failed rounds: ${giveUp.join(', ')}`)
-  return titles.filter((t) => (attempts.get(t) ?? 0) < MAX_ATTEMPTS)
+const attempts = new Map()        // title -> count of grounding-gate REJECTIONS (not author rounds)
+// Reload the board snapshot (status + per-card acceptance flags) — the source of truth between stages.
+const reloadCards = async () => {
+  const r = await agent(
+    `\`python3 "${scriptPath}" --board "${board}" list --json\`. Return EVERY card as {title, mdPath (its ` +
+      `"path"), status, written (its FIRST "Acceptance checks" item is ticked), verified (it has a SECOND ` +
+      `acceptance item AND it is ticked; for a legacy card with only ONE acceptance item, verified = written)}.` +
+      `\n\n${cli('list')}`,
+    { label: `reload:${round}`, phase: 'Author', model: 'haiku', schema: SEED_SCHEMA },
+  )
+  if (r?.cards?.length) { for (const c of r.cards) cardByTitle.set(c.title, c); return r.cards }
+  return cards
+}
+
+// Quality gate (shape + syntax leak), shared by the fresh assemble and the update back-half so a
+// re-authored page gets the same scrutiny as a fresh one. Checks Diataxis adherence, internal link/asset
+// resolution, and crosswalk no-leak (Starlight syntax in non-Starlight output). Opus: a weak gate
+// rubber-stamps. Returns { admitted:Set<normalized path>, dropped:[] }; on a dead agent it admits all
+// (fail-open, matching the prior inline behavior). Pass it page objects with {path, diataxisType}.
+const runQualityGate = async (pagesToCheck) => {
+  const allAdmitted = () => new Set(pagesToCheck.map((p) => normPagePath(p.path)))
+  if (!pagesToCheck.length) return { admitted: allAdmitted(), dropped: [] }
+  // STARLIGHT_LEAK_PATTERNS comes from the shared frameworks substrate (generated block above).
+  const leakNote = framework !== 'starlight' && STARLIGHT_LEAK_PATTERNS.length
+    ? `SYNTAX LEAK CHECK — REJECT any page that contains Starlight-specific patterns. These must NOT ` +
+      `appear in ${framework} output:\n${STARLIGHT_LEAK_PATTERNS.map((p) => `  - ${p}`).join('\n')}\n`
+    : ''
+  const docsGate = await agent(
+    `You are the quality gate for a ${framework} docs site at "${outDir}". The grounding gate already ` +
+    `confirmed each page's concrete claims are backed by source code. Now check SHAPE for each page:\n` +
+    `${pagesToCheck.map((p, i) => `${i + 1}. ${outDir}/${p.path}  (declared type: ${p.diataxisType})`).join('\n')}\n\n` +
+    `For EACH page above:\n` +
+    `1. READ the page file.\n` +
+    `2. Check ALL three criteria and report specific issues for any that fail:\n` +
+    `   a. DIATAXIS: Does the page serve exactly the declared Diátaxis type and NOT mix modes? ` +
+    `(A reference must be exhaustive/scannable with no narrative; a tutorial must be task-ordered ` +
+    `with a visible outcome; a how-to must be goal-then-steps-then-verify; an explanation must ` +
+    `discuss context/why without step-by-step.) Mode-mixing fails.\n` +
+    `   b. LINKS/ASSETS: Are all internal links and image src paths resolvable under "${outDir}"? ` +
+    `External http/https URLs are fine; only check relative internal paths.\n` +
+    `   c. CROSSWALK NO-LEAK: ${leakNote || 'N/A (Starlight is the target; no leak check).'}\n` +
+    `3. For each page return {path, pass, issues} — pass=true only if ALL checks pass. ` +
+    `issues is an empty array when pass=true; list every specific issue when pass=false.\n\n` +
+    `A page that fails on ONE criterion is dropped before config assembly. Be strict.\n\n` +
+    `Return: pages (per-page verdict), admitted (paths of pass=true pages), dropped (paths of pass=false pages), summary.\n\n` +
+    `IA CONTRACT\n${IA_CONTRACT}`,
+    { label: 'docs-quality-gate', phase: 'Quality gate', model: 'opus', schema: DOCS_GATE_SCHEMA },
+  )
+  if (!docsGate) return { admitted: allAdmitted(), dropped: [] }
+  // The gate is shown pages as `${outDir}/${p.path}` and echoes verdict paths with that prefix, while
+  // p.path is contentRoot-relative — normalize BOTH sides or the filter drops every page.
+  const admitted = new Set((docsGate.admitted ?? pagesToCheck.map((p) => p.path)).map((t) => normPagePath(t)))
+  return { admitted, dropped: docsGate.dropped ?? [] }
 }
 
 phase('Author')
-while (pending.length && round < maxRounds && (!budget.total || budget.remaining() > BUDGET_FLOOR)) {
-  const retryable = keepRetryable(pending)
-  const retry = retryable.filter((t) => touched.has(t))
-  const fresh = retryable.filter((t) => !touched.has(t)).slice(0, Math.max(0, RUN_TOUCH_CAP - touched.size))
-  // Reserve a floor of fresh slots so a big retry backlog (many reopened pages) can't starve fresh pages
-  // out of every round: cap retries at LIVE_CAP-freshFloor when fresh work is waiting. freshFloor=0 when
-  // no fresh remain -> full retries (unchanged). ponytail: 25% floor, tune if retries dominate badly.
+while (round < maxRounds && (!budget.total || budget.remaining() > BUDGET_FLOOR)) {
+  // authorQueue: needs authoring (not yet written, still retryable). gateQueue: written, awaiting grounding.
+  const authorable = cards.filter((c) => notDone(c) && !c.written && attemptsOK(c.title)).map((c) => c.title)
+  const gateableTop = cards.filter((c) => notDone(c) && c.written && !c.verified)
+  // --- AUTHOR batch (capped, with a fresh-page floor so a retry backlog can't starve fresh pages) ---
+  const retry = authorable.filter((t) => touched.has(t))
+  const fresh = authorable.filter((t) => !touched.has(t)).slice(0, Math.max(0, RUN_TOUCH_CAP - touched.size))
   const freshFloor = Math.min(fresh.length, Math.ceil(LIVE_CAP * 0.25))
   const batch = [...retry.slice(0, LIVE_CAP - freshFloor), ...fresh].slice(0, LIVE_CAP)
-  if (!batch.length) break
+  // Stop when there's nothing to author THIS round (batch empty, e.g. RUN_TOUCH_CAP hit) AND nothing to gate —
+  // otherwise a touch-capped backlog would spin reload-only rounds up to maxRounds.
+  if (!batch.length && !gateableTop.length) break
   round++
-  for (const t of batch) {
-    attempts.set(t, (attempts.get(t) ?? 0) + 1)
-    touched.add(t)
-  }
+
+  if (batch.length) {
+  for (const t of batch) touched.add(t)
   log(`round ${round}: authoring ${batch.length} page(s) (${touched.size}/${pages.length} touched this run)`)
   await parallel(
     batch.map((title) => () => {
@@ -6339,10 +6460,12 @@ while (pending.length && round < maxRounds && (!budget.total || budget.remaining
           `(a reference is exhaustive/scannable with no narrative; an explanation discusses why/tradeoffs).\n\n` +
           `3. EDIT the card markdown file "${card?.mdPath ?? '(find it under ' + board + '/tasks by title)'}": put ONE ` +
           `line in "## Notes" — the written page path + a one-line grounding summary (which source backs it). ` +
-          `Tick EVERY checkbox in "## One-bite-at-a-time plan" and "## Acceptance checks" (- [ ] -> - [x]); ` +
-          `ticking acceptance marks the card done on the next sync. Leave frontmatter and other sections intact.\n\n` +
+          `Tick EVERY checkbox in "## One-bite-at-a-time plan" AND ONLY the FIRST item in "## Acceptance checks" ` +
+          `("page written from source") (- [ ] -> - [x]). Do NOT tick the SECOND acceptance item ("grounding ` +
+          `verified by gate") — that one is the gate's; the card stays out of "done" until the gate ticks it. ` +
+          `Leave frontmatter and other sections intact.\n\n` +
           `If the scope is unreadable/empty so the page can't be grounded, say so in "## Notes" and do NOT tick ` +
-          `acceptance (leave it for the gate).\n\n` +
+          `any acceptance item (leave it for the gate).\n\n` +
           (mode === 'update'
             ? `THIS IS AN UPDATE. The page already exists at that path — READ it first, then revise it to reflect ` +
               `the current source. If the card carries gap notes from a reopen (a "source changed since …" or ` +
@@ -6362,59 +6485,82 @@ while (pending.length && round < maxRounds && (!budget.total || budget.remaining
     { label: `sync:${round}`, phase: 'Author', model: 'haiku', schema: SYNC_SCHEMA },
   )
   if (sync) activeRemaining = sync.activeRemaining
+  }  // end AUTHOR
 
-  // Grounding gate (strong model, fresh context): re-read each sampled page's SCOPE SOURCE and the written
-  // page; reopen any whose claims the code doesn't back. This is the REAL verifier (hallucinated-API guard),
-  // not shape-checking. Reopened cards re-queue for the next round.
-  phase('Gate')
-  // Scale the grounding sample to the round's batch instead of a flat 8, so coverage tracks the work done
-  // (the headline claim is "grounding is the real gate"). Capped at 12 to keep the single gate agent bounded.
-  const sampleN = Math.max(1, Math.min(batch.length, 12))
-  const gate = await agent(
-    `You are a GROUNDING gate for a code->docs board at "${board}"; the site is written under "${outDir}". ` +
-      `Sample up to ${sampleN} cards marked done (\`list --status done --json\`, then \`show <id> --json\`). For each ` +
-      `sampled card: read its "description" to get the page path + scope, READ those scope SOURCE files, and ` +
-      `READ the written page at "${outDir}/<path>". Judge whether the page's concrete claims (signatures, ` +
-      `exports, config keys, CLI flags, examples) are actually BACKED by the source — not hallucinated, vague, ` +
-      `or empty. For any page NOT grounded, reopen it atomically: \`reopen <id> --gap "<what's unbacked>"\` ` +
-      `(unchecks acceptance, notes the gap, moves to doing). Then \`sync\`. Return reopened (hollow) card ` +
-      `TITLES and how many you checked.\n\n${cli('list', 'show', 'reopen', 'sync')}`,
-    { label: `gate:${round}`, phase: 'Gate', schema: GATE_SCHEMA },
-  )
-  log(`gate round ${round}: grounded ${gate?.checked ?? 0} page(s) (sample target ${sampleN}), reopened ${gate?.hollow?.length ?? 0}`)
+  // Reload so freshly-written cards enter the gate queue this same round.
+  cards = await reloadCards()
 
-  // Re-derive the carry queue from the board (source of truth).
-  const reload = await agent(
-    `\`python3 "${scriptPath}" --board "${board}" list --json\`. Return EVERY card as {title, mdPath (its ` +
-      `"path"), status}.\n\n${cli('list')}`,
-    { label: `reload:${round}`, phase: 'Author', model: 'haiku', schema: SEED_SCHEMA },
-  )
-  if (reload?.cards?.length) {
-    for (const c of reload.cards) cardByTitle.set(c.title, c)
-    const active = reload.cards.filter(notDone).map((c) => c.title)
-    // Persist give-ups to the board: a page that failed MAX_ATTEMPTS rounds is moved to "dropped" so a
-    // RERUN's notDone seed filter skips it. The in-memory `attempts` Map evaporates at run end; without
-    // this an ungroundable page (scope unreadable) is re-authored fresh on every rerun, forever.
-    const giveUp = active.filter((t) => (attempts.get(t) ?? 0) >= MAX_ATTEMPTS)
-    if (giveUp.length) {
-      await agent(
-        `On the eatahorse board at "${board}", mark these permanently-failing page cards "dropped" (they ` +
-          `failed ${MAX_ATTEMPTS} grounding rounds — scope unreadable or ungroundable). For each TITLE: find ` +
-          `its card id via \`list --json\`, then \`move <id> dropped\`. Then \`sync\`. Change nothing else.\n` +
-          `TITLES: ${JSON.stringify(giveUp)}\n\n${cli('list', 'move', 'sync')}`,
-        { label: `drop:${round}`, phase: 'Author', model: 'haiku' },
-      )
-    }
-    pending = keepRetryable(active)
-  } else {
-    pending = []
+  // Author-miss give-up: a page the author could not write (scope unreadable, agent died) never reaches
+  // the gate, so without this it would refill `authorable` every round and every rerun forever. Count an
+  // author miss toward the SAME MAX_ATTEMPTS budget as a gate rejection, so the giveUp parker below moves
+  // a persistently-unwritable page to `blocked` for human review instead of looping silently.
+  for (const t of batch) {
+    const c = cardByTitle.get(t)
+    if (c && !c.written) attempts.set(t, (attempts.get(t) ?? 0) + 1)
   }
+
+  // --- GROUNDING GATE (FULL COVERAGE, fanned out): the REAL verifier (hallucinated-API guard). For EVERY
+  //     written-but-unverified card, re-read its SCOPE source + the written page; if backed, tick acceptance[1]
+  //     (-> done); else reopen (unchecks BOTH acceptance -> back to authorQueue) and count a rejection. ---
+  const gateable = cards.filter((c) => notDone(c) && c.written && !c.verified).map((c) => c.title)
+  if (gateable.length) {
+    phase('Gate')
+    const GATE_CHUNK = 8   // cards per gate agent; fan out so full coverage stays bounded per agent
+    const chunks = []
+    for (let i = 0; i < gateable.length; i += GATE_CHUNK) chunks.push(gateable.slice(i, i + GATE_CHUNK))
+    const verdicts = await parallel(
+      chunks.map((titles, ci) => () =>
+        agent(
+          `You are a GROUNDING gate for a code->docs board at "${board}"; the site is under "${outDir}". For EACH ` +
+            `card TITLE below: \`show <id> --json\` (its "description" holds the page path + scope), READ those ` +
+            `scope SOURCE files, and READ the written page at "${outDir}/<path>". Judge whether the page's ` +
+            `concrete claims (signatures, exports, config keys, CLI flags, examples) are actually BACKED by the ` +
+            `source — not hallucinated, vague, or empty.\n` +
+            `- GROUNDED: tick its grounding check with \`bite <id> 2 --group acceptance --done\` (index is ` +
+            `1-based; item 2 = "grounding verified by gate", item 1 is the author's "page written"). This ` +
+            `completes the card -> done on sync.\n` +
+            `- NOT grounded: \`reopen <id> --gap "<what's unbacked>"\` (unchecks acceptance, back to the author).\n` +
+            `Then \`sync\`. Return hollow = the card TITLES you reopened, and checked = how many you examined.\n` +
+            `TITLES: ${JSON.stringify(titles)}\n\n${cli('show', 'bite', 'reopen', 'sync')}`,
+          { label: `gate:${round}.${ci}`, phase: 'Gate', schema: GATE_SCHEMA },
+        ),
+      ),
+    )
+    const rejected = verdicts.filter(Boolean).flatMap((v) => v.hollow ?? [])
+    const checked = verdicts.filter(Boolean).reduce((n, v) => n + (v.checked ?? 0), 0)
+    for (const t of rejected) attempts.set(t, (attempts.get(t) ?? 0) + 1)
+    log(`gate round ${round}: grounded ${Math.max(0, checked - rejected.length)}/${gateable.length} awaiting page(s), reopened ${rejected.length}`)
+    cards = await reloadCards()
+  }
+
+  // --- Give-ups -> PARKED in `blocked`. A card the gate rejected MAX_ATTEMPTS times (still unverified) is moved
+  //     to the `blocked` lane — surfaced for human review with its gap (already on the card from reopen --gap),
+  //     and skipped by reruns (notDone excludes blocked). `dropped` stays reserved for true purge. The in-memory
+  //     `attempts` Map evaporates at run end; parking on the board is what makes the give-up durable. ---
+  const giveUp = cards.filter((c) => notDone(c) && !c.verified && (attempts.get(c.title) ?? 0) >= MAX_ATTEMPTS).map((c) => c.title)
+  if (giveUp.length) {
+    await agent(
+      `On the eatahorse board at "${board}", PARK these pages that failed grounding ${MAX_ATTEMPTS} times in the ` +
+        `"blocked" lane for human review (their gap notes are already on the cards). For each TITLE: find its id ` +
+        `via \`list --json\`, then \`move <id> blocked\`. Then \`sync\`. Change nothing else.\n` +
+        `TITLES: ${JSON.stringify(giveUp)}\n\n${cli('list', 'move', 'sync')}`,
+      { label: `block:${round}`, phase: 'Author', model: 'haiku' },
+    )
+    const blockedSet = new Set(giveUp)
+    cards = cards.map((c) => (blockedSet.has(c.title) ? { ...c, status: 'blocked' } : c))
+    log(`parked ${giveUp.length} page(s) in blocked after ${MAX_ATTEMPTS} failed grounding rounds: ${giveUp.join(', ')}`)
+  }
+  activeRemaining = cards.filter(notDone).length
 }
+
+const pending = cards.filter(notDone).map((c) => c.title)
+const blockedPages = cards.filter((c) => c.status === 'blocked').map((c) => c.title)
+if (blockedPages.length) log(`blocked: ${blockedPages.length} page(s) parked for review (failed grounding): ${blockedPages.join(', ')}`)
 
 const carryOver = pending.filter((t) => !touched.has(t)).length
 if (carryOver) log(`carry-over: ${carryOver} page(s) left in backlog (touched ${touched.size}/${pages.length} this run); rerun to continue`)
 const stopReason =
-  activeRemaining <= 0 ? 'all pages done'
+  activeRemaining <= 0 ? (blockedPages.length ? 'all resolved (some blocked)' : 'all pages done')
   : touched.size >= RUN_TOUCH_CAP && carryOver ? 'run touch cap (backlog carried)'
   : round >= maxRounds ? 'round cap'
   : pending.length ? 'budget floor'
@@ -6432,7 +6578,10 @@ if (mode === 'update') {
   ))?.titles ?? []
   const uDoneSet = new Set(uTitles.map((t) => normPagePath(t)))
   const uDone = pages.filter((p) => uDoneSet.has(normPagePath(p.path)))
-  const changedSet = new Set([...reopened, ...newPlannedPages.map((p) => p.path)].map((t) => normPagePath(t)))
+  // "Changed this run" = `touched` (titles the author loop actually re-authored), NOT the Reopen agent's
+  // self-reported reopened[]: if the agent reopened a card on the board but omitted it from its return,
+  // keying off reopened[] would skip link/asset resolution for a genuinely re-authored page.
+  const changedSet = new Set([...touched, ...newPlannedPages.map((p) => p.path)].map((t) => normPagePath(t)))
   const uChanged = uDone.filter((p) => changedSet.has(normPagePath(p.path)))
   log(`update: ${uChanged.length} changed page(s) re-admitted; ${uDone.length} done overall`)
   // Re-authoring may introduce new local asset/link references — fix only the pages that changed.
@@ -6440,6 +6589,24 @@ if (mode === 'update') {
     phase('Resolve links/assets')
     const lr = await resolveLinksAndAssets(uChanged, outDir, fwEntry, framework)
     log(`links/assets: ${lr.copied?.length ?? 0} copied, ${lr.rewritten?.length ?? 0} rewritten, ${lr.skipped?.length ?? 0} skipped`)
+    // Quality gate on the re-authored pages. Fresh mode runs this before assemble; the update back-half
+    // returns earlier, so without this a re-authored page could ship a Diataxis mode-mix or a Starlight
+    // syntax leak (non-Starlight target) uncaught. Failures are REOPENED (not dropped from config — the
+    // page already has a sidebar entry), so a later run re-authors them, mirroring staleByDeletion.
+    phase('Quality gate')
+    const qg = await runQualityGate(uChanged)
+    if (qg.dropped.length) {
+      log(`update quality gate: ${qg.dropped.length} re-authored page(s) failed shape/leak checks, reopening for review: ${qg.dropped.join(', ')}`)
+      await agent(
+        `On the eatahorse board at "${board}", reopen pages that failed the docs quality gate so a later ` +
+          `run re-authors them. For each TITLE: \`list --json\` to find its id, then ` +
+          `\`reopen <id> --gap "quality gate: fix Diataxis mode-mix or syntax-leak issues"\`. Then \`sync\`. ` +
+          `Change nothing else.\nTITLES: ${JSON.stringify(qg.dropped.map((t) => normPagePath(t)))}\n\n${cli('list', 'reopen', 'sync')}`,
+        { label: 'update-quality-reopen', model: 'haiku' },
+      )
+    } else {
+      log(`update quality gate: all ${uChanged.length} re-authored page(s) passed shape/leak checks`)
+    }
   }
   // Config: PATCH only for genuinely new pages (add-to-existing). Existing pages keep their sidebar entries.
   let configWritten = false
@@ -6494,6 +6661,7 @@ if (mode === 'update') {
         : `- pages refined per request: ${JSON.stringify(reopened)}\n` +
           `- requested pages NOT found on the board: ${JSON.stringify(unmatched)}\n`) +
       `- docs site: "${outDir}"; board: "${board}"; done pages: ${uDone.length}; new pages this run: ${JSON.stringify(newPlannedPages.map((p) => p.path))}\n` +
+      (blockedPages.length ? `- CONSTRAINT — pages PARKED in "blocked" (failed grounding ${MAX_ATTEMPTS}x; \`move <id> ready\` to retry after fixing scope): ${JSON.stringify(blockedPages)}\n` : '') +
       `Keep it short; do not document the obvious file tree.`,
     { label: 'write-back', model: 'sonnet' },
   )
@@ -6502,7 +6670,7 @@ if (mode === 'update') {
     since: updateMode === 'diff' ? since : null,
     reopened, newModules, staleByDeletion, unmatched,
     newPages: newPlannedPages.map((p) => p.path),
-    admitted: uDone.length, configWritten,
+    admitted: uDone.length, blocked: blockedPages, configWritten,
     touched: touched.size, rounds: round, stopReason,
     written: true, ok: true, error: null,
   }
@@ -6545,42 +6713,10 @@ if (admittedPages.length) {
 //     checks the structural/shape concerns the grounding gate does not cover.
 if (admittedPages.length) {
   phase('Quality gate')
-  // STARLIGHT_LEAK_PATTERNS comes from the shared frameworks substrate (generated block above).
-  const leakNote = framework !== 'starlight' && STARLIGHT_LEAK_PATTERNS.length
-    ? `SYNTAX LEAK CHECK — REJECT any page that contains Starlight-specific patterns. These must NOT ` +
-      `appear in ${framework} output:\n${STARLIGHT_LEAK_PATTERNS.map((p) => `  - ${p}`).join('\n')}\n`
-    : ''
-  const docsGate = await agent(
-    `You are the quality gate for a ${framework} docs site at "${outDir}". The grounding gate already ` +
-    `confirmed each page's concrete claims are backed by source code. Now check SHAPE for each page:\n` +
-    `${admittedPages.map((p, i) => `${i + 1}. ${outDir}/${p.path}  (declared type: ${p.diataxisType})`).join('\n')}\n\n` +
-    `For EACH page above:\n` +
-    `1. READ the page file.\n` +
-    `2. Check ALL three criteria and report specific issues for any that fail:\n` +
-    `   a. DIATAXIS: Does the page serve exactly the declared Diátaxis type and NOT mix modes? ` +
-    `(A reference must be exhaustive/scannable with no narrative; a tutorial must be task-ordered ` +
-    `with a visible outcome; a how-to must be goal-then-steps-then-verify; an explanation must ` +
-    `discuss context/why without step-by-step.) Mode-mixing fails.\n` +
-    `   b. LINKS/ASSETS: Are all internal links and image src paths resolvable under "${outDir}"? ` +
-    `External http/https URLs are fine; only check relative internal paths.\n` +
-    `   c. CROSSWALK NO-LEAK: ${leakNote || 'N/A (Starlight is the target; no leak check).'}\n` +
-    `3. For each page return {path, pass, issues} — pass=true only if ALL checks pass. ` +
-    `issues is an empty array when pass=true; list every specific issue when pass=false.\n\n` +
-    `A page that fails on ONE criterion is dropped before config assembly. Be strict.\n\n` +
-    `Return: pages (per-page verdict), admitted (paths of pass=true pages), dropped (paths of pass=false pages), summary.\n\n` +
-    `IA CONTRACT\n${IA_CONTRACT}`,
-    { label: 'docs-quality-gate', phase: 'Quality gate', model: 'opus', schema: DOCS_GATE_SCHEMA },
-  )
-  if (docsGate) {
-    // The gate is shown pages as `${outDir}/${p.path}` and echoes verdict paths with that prefix, while
-    // p.path is contentRoot-relative — normalize BOTH sides or the filter drops every page (the bug that
-    // made admitted collapse to 0 even when the gate passed pages). Mirror gather-admitted.
-    const gateAdmitted = new Set((docsGate.admitted ?? admittedPages.map((p) => p.path)).map((t) => normPagePath(t)))
-    const gateDropped = docsGate.dropped ?? []
-    if (gateDropped.length) log(`quality gate dropped ${gateDropped.length} page(s): ${gateDropped.join(', ')}`)
-    admittedPages = admittedPages.filter((p) => gateAdmitted.has(normPagePath(p.path)))
-    log(`quality gate: ${admittedPages.length} page(s) admitted for config assembly`)
-  }
+  const qg = await runQualityGate(admittedPages)
+  if (qg.dropped.length) log(`quality gate dropped ${qg.dropped.length} page(s): ${qg.dropped.join(', ')}`)
+  admittedPages = admittedPages.filter((p) => qg.admitted.has(normPagePath(p.path)))
+  log(`quality gate: ${admittedPages.length} page(s) admitted for config assembly`)
 }
 
 // 6b. Assemble — sonnet, single serialized finalize. Wire the admitted pages into config (content.config.ts
@@ -6607,7 +6743,10 @@ const final = admittedPages.length
         `4. Light IA pass: confirm each admitted page matches its declared Diátaxis type; fix tiny shape ` +
         `mismatches in place with Edit, note them in decisions. (Deep grounding already happened upstream.)\n` +
         `5. Write ${outDir}/.docs-plan.md: the admitted page list + sidebar structure + decisions + the deferred ` +
-        `pages below (needs human brief). This is the durable record.\n` +
+        `pages below (needs human brief). This is the durable record. Include a "Doc strategy" line so a ` +
+        `maintainer can act on it: archetype=${docStrategy?.archetype ?? '(unframed)'}, recommended-shape=` +
+        `${docStrategy?.siteRecommendation ?? 'site'} (if single-file or embedded, note a full site may be more ` +
+        `than this project needs).\n` +
         `   deferred: ${JSON.stringify(deferred)}\n` +
         buildStep + `\n` +
         `Return configWritten, buildResult, planPath, decisions, summary.\n\n` +
@@ -6679,6 +6818,7 @@ await agent(
     `CONSTRAINTS so a rerun does not re-walk them — the DEFERRED pages that ` +
     `need a human brief and any source skipped. Keep it short; do not document the obvious file tree.\n\n` +
     `Deferred (needs human brief): ${JSON.stringify(deferred)}\n` +
+    (blockedPages.length ? `CONSTRAINT — pages PARKED in "blocked" (failed grounding ${MAX_ATTEMPTS}x; \`move <id> ready\` on the board to retry after fixing scope): ${JSON.stringify(blockedPages)}\n` : '') +
     `stopReason="${stopReason}"; rounds=${round}; admitted page paths: ${JSON.stringify(admittedPages.map((p) => p.path))}\n` +
     `Finalizer summary: ${final?.summary ?? '(none)'} ; buildResult: ${final?.buildResult ?? '(none)'}`,
   { label: 'write-back', model: 'sonnet' },
@@ -6693,6 +6833,7 @@ return {
   planned: pages.length,
   generated: generatedPages.length,
   admitted: admittedPages.length,
+  blocked: blockedPages,
   deferred: deferred.length,
   undocumentedCount: docGaps.length,
   touched: touched.size,

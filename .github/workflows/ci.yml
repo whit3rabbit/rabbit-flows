@@ -22,6 +22,29 @@ jobs:
       - name: Workflow runtime-rule lint
         run: python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py .claude/workflows --strict
 
+  # recon self-checks. Blocking. The precise (tree-sitter) backend is the most-shipped path but was
+  # exercised by NO automated gate before this job — stdlib-only CI is blind to call-graph/import
+  # regressions that only show up on the precise backend (and to the backend-parity harness, which
+  # needs both backends to compare). So run BOTH: stdlib (degraded) and the tree-sitter venv (precise).
+  recon:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/workflow-kit/skills/secure-review/scripts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: plugins/workflow-kit/skills/secure-review/scripts/requirements.txt
+      - name: recon tests — stdlib (degraded backend)
+        run: python3 test_recon.py
+      - name: recon tests — tree-sitter venv (precise backend + parity harness)
+        run: |
+          bash setup_venv.sh
+          .venv/bin/python test_recon.py
+
   # Best-effort guard. `plugin validate` is believed to be an offline static check (no login, no API
   # key) but that is UNVERIFIED — the `check` job above is the reliable gate. Uses Anthropic's tested
   # install script, not the deprecated npm package; install.sh drops the binary in ~/.local/bin.

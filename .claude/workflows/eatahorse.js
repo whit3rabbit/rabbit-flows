@@ -56,7 +56,9 @@
 export const meta = {
   name: 'eatahorse',
   description:
-    'Decompose a goal into an Eatahorse Kanban board and gate the plan; optionally work it unattended one bite at a time in a Ralph-style loop, a fresh-context completion-gated worker each iteration, then write back the decisions.',
+    'Break a goal into a Kanban board of small tasks and check the plan, then optionally work the board unattended one task at a time, verifying each task before moving on.',
+  whenToUse:
+    'Use to plan a goal as small trackable tasks, or to work that board hands-off. Front door: the eatahorse skill.',
   phases: [
     { title: 'Probe' },
     { title: 'Decompose' },

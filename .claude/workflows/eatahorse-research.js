@@ -46,7 +46,9 @@
 export const meta = {
   name: 'eatahorse-research',
   description:
-    'Research every file in a folder using an Eatahorse board as a durable resumable ledger: enumerate, auto-pick scale by file count, seed one card per unit, then loop research rounds of parallel workers gated and synced until dry, and synthesize a cited report.',
+    'Research every file in a folder and synthesize a cited report. Progress is tracked on a resumable board so large trees run in batches.',
+  whenToUse:
+    'Use to understand a folder file by file and get a cited report. Front door: the eatahorse skill.',
   phases: [
     { title: 'Enumerate' },
     { title: 'Seed' },
