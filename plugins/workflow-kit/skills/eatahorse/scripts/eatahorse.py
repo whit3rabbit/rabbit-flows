@@ -611,6 +611,15 @@ def create_task(
     depends_on: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     state = load_state(board)
+    # Idempotent on external_ids: if any namespace:value already maps to a task, return it instead of
+    # creating a duplicate. Cross-round port seeding re-runs `add` for the same source unit when a worker
+    # mis-reads the board; without this guard `add` always allocates a fresh id (no uniqueness check), so
+    # the unit gets two cards and is ported twice. First write wins; the existing card's data is untouched.
+    if external_ids:
+        for ns, val in external_ids.items():
+            existing = find_task_by_external_id(state, ns, val)
+            if existing:
+                return state["tasks"][existing]
     title = title.strip()
     if not title:
         raise EatahorseError("Task title cannot be empty")

@@ -140,6 +140,135 @@ C's gate trustworthy. Two design forks were resolved toward the LIGHTER option (
   it on a 3-file slice before trusting it. The cross-board edge (port card → comprehension card) stays an
   `external_ids` join, not a `depends_on` edge (`depends_on` orders cards within ONE `state.json`).
 
+## v2 hardening round — EH-PORT-19..24 (2026-06-25)
+
+Post-v2 review found two blocking bugs + four coherence/robustness gaps in the orchestration layer (the
+`.js` workflows — no automated tests; verified by `validate.py` lint + reasoning). All fixes are
+prompt/control-flow only: NO `eatahorse.py`/`build_inventory.py`/`diff_test.py` change, so the 38 Python
+tests are untouched and still green.
+
+- **EH-PORT-19 — equivalence completion deadlock (`eatahorse.js`).** Port decompose acceptance (c) under
+  `verifyEquivalence` referenced a record written by the POST-loop Verify-equivalence phase, so a card could
+  never reach `done` in-loop → that phase then found 0 done cards → loop stalled with ports stuck in `doing`.
+  Fixed: (c) now always names a proof runnable DURING the loop (`testCmd` passes, else a concrete manual
+  check). Verify-equivalence is purely an independent post-hoc reopener (same shape as the invariant gate).
+- **EH-PORT-20 — standalone equivalence pass (`eatahorse.js` + pipeline text).** The pipeline's recommended
+  follow-up (`eatahorse … verifyEquivalence:true`) died on the 0-active probe bail because a cleared port
+  board has 0 active cards and Verify-equivalence lives after the loop. Added `verifyOnly:true` (PORT_MODE,
+  implies `verifyEquivalence`): requires an existing board, relaxes the 0-active bail, skips
+  decompose/seed/plan-gate AND the execute loop (`!verifyOnly &&` in the while head), runs Verify-equivalence
+  on the done cards, `stopReason:'verify-only'`, `executed:false`. Pipeline header/write-back/return now
+  recommend `verifyEquivalence:true verifyOnly:true`.
+- **EH-PORT-21 — cycle-aware port planning (`eatahorse.js`, decompose prompt only).** SCC members can't compile
+  standalone, so a plain "project builds" acceptance bounced the first member forever. Stub-then-fill via the
+  decompose prompt: for units in `inventory.cycles`, all-but-one member is accepted as a syntactically-valid
+  stub (cyclic peers may be stubbed/forward-declared); ONE cluster-entry member carries "the whole cycle
+  compiles together". Kept one card per unit (NOT collapsed — collapse breaks the single-namespace `source:`
+  external_id join; `ponytail:` ceiling noted in-file). `would_cycle` already drops the back-edge → defined
+  stub-first order.
+- **EH-PORT-22 — pipeline rides the DAG (`eatahorse-port-pipeline.js`).** The round agent recomputed
+  "portable = deps comprehended AND ported" in prose and never used `next`. Rewritten: comprehension gates
+  card CREATION (seed a card only when ALL its intra-repo deps are comprehended, so every dep-add edge can be
+  wired), and the port-board DAG + `next` gates port ORDER (`next` refuses dep-blocked cards). One ordering
+  surface (the port board), composing with EH-PORT-12. NOTE: inventory.json is written by the research Graph
+  phase at the END of comprehension, so it is unavailable mid-overlap — the port board, not inventory.json,
+  is necessarily the shared surface. Added `next` to the pipeline CMD map (one-way; `next` already in
+  `eatahorse.js`).
+- **EH-PORT-23 — comprehend gate validates the extraction block (`eatahorse-research.js`).** In
+  `extract:'port'` the sampling gate now also reopens any sampled card whose `## Notes` lacks a parseable
+  ```json extraction block, won't parse, or whose `path` != the card title (`PORT_GATE_RULE`, appended to the
+  gate prompt; `GATE_SCHEMA.hollow` already carries the reopened titles).
+- **EH-PORT-24 — guard Seed's dep wiring (`eatahorse.js`).** Seed now returns `{wired, skipped, dangling}`
+  (`SEED_RESULT_SCHEMA`); a nonzero skipped/dangling is logged loudly (ordering for those cards silently
+  reverts to the band tiebreak otherwise). The plan-gate spot-checks each PORT card's `deps <id>` edges and
+  flags missing/dangling ones in `adjustments` (`deps` added to its CLI slice).
+
+Deferred (not in this round): EH-PORT-25 (characterization-test pre-port for test-less repos) and the
+EH-PORT-26 polish that 20 didn't already touch (pipeline `maxTokens`, README Contents tree refresh for
+`build_inventory.py`/`diff_test.py`/tests). The port pipeline remains RUNTIME-UNVERIFIED — smoke EH-PORT-22's
+DAG-pull + EH-PORT-20's `verifyOnly` on a tiny slice before trusting them.
+
+## EH-PORT-26 polish + drift test (2026-06-25)
+
+Closed the EH-PORT-26 leftovers and added the one statically-checkable test the system lacked. No
+`eatahorse.py`/`build_inventory.py`/`diff_test.py` change → the 38 Python tests stay green; no manifest/
+skill change → `npm run check`/`npm test` unaffected.
+
+- **`test_cmd_drift.py` (NEW gap-closer).** The FOUR inline `CMD` maps (`eatahorse.js`,
+  `eatahorse-research.js`, `eatahorse-port-pipeline.js`, `docs-from-code.js`) are hand-synced to
+  `eatahorse.py`'s argparse verbs (no runtime sharing — VM sandbox). A renamed/removed verb broke a
+  workflow SILENTLY at run time with no test. The new stdlib self-check parses the verb set from
+  `add_parser("…")` and asserts the FIRST TOKEN of every `CMD` value (the verb, e.g. `dep-add`, `add-bite`)
+  exists — it does NOT assert key-equality across copies (they intentionally slice different subsets).
+  Walks up to the repo root; SKIPs cleanly in the installed/bundled skill copy (dev-only). Currently
+  checks 42 entries × 4 workflows against 16 verbs. Wired into project + skill CLAUDE.md command lists.
+- **EH-PORT-26(a) pipeline `maxTokens` clamp (`eatahorse-port-pipeline.js`).** `tokensLeft()` was bare
+  `budget.remaining()`; now mirrors `eatahorse.js`:
+  `Math.min(budget.remaining(), maxTokens ? Math.max(0, maxTokens - budget.spent()) : Infinity)`, with a
+  `maxTokens` arg (default null) + header Knobs line.
+- **EH-PORT-26(b) README Contents tree (`plugins/workflow-kit/skills/eatahorse/README.md`).** Added the 6
+  omitted files (`build_inventory.py`, `diff_test.py`, three `test_*.py`, root `CLAUDE.md`) plus the new
+  `test_cmd_drift.py`.
+- **EH-PORT-25 stays DEFERRED by decision** (diff_test already does source-oracle differential testing;
+  char-tests are mainly a pre-port golden net — not worth the scope this round).
+
+## Smoke runbook (EH-PORT-20/21/22) — inline fixture, run on demand
+
+The three runtime pieces have NO automated test (pure orchestration over live agents). Validate them on
+this tiny fixture before trusting them on a real tree. Live runs spawn many agents — run when you intend
+to spend the tokens. Recreate the fixture (do NOT commit it); covers a dep chain (leaf → SCC) AND a
+mutual-recursion SCC.
+
+Fixture `src/` (3 files):
+
+```python
+# src/leaf.py  — layer 0, no intra-repo deps
+def base(n):
+    return abs(int(n))
+
+# src/even.py  — depends on leaf + odd (SCC with odd)
+from odd import is_odd
+from leaf import base
+def is_even(n):
+    n = base(n)
+    return True if n == 0 else is_odd(n - 1)
+
+# src/odd.py   — depends on leaf + even (SCC with even)
+from even import is_even
+from leaf import base
+def is_odd(n):
+    n = base(n)
+    return False if n == 0 else is_even(n - 1)
+```
+
+Run (EH-PORT-22 pipeline, then EH-PORT-20 standalone verify):
+
+```js
+// EH-PORT-22 — overlap comprehend + port; the DAG must order leaf before the even/odd SCC.
+Workflow({ name: 'eatahorse-port-pipeline', args: {
+  root: 'src', targetLang: 'javascript', targetDir: 'out',
+  board: '.eatahorse-port', researchBoard: '.eatahorse-comprehend',
+  inventory: 'src.inventory.json', maxRounds: 8, maxTokens: 400000,
+}})
+
+// EH-PORT-20 — standalone equivalence pass against the now-CLEARED port board (must not 0-active bail).
+Workflow({ name: 'eatahorse', args: {
+  grounding: 'src.inventory.json', board: '.eatahorse-port',
+  targetLang: 'javascript', targetDir: 'out',
+  verifyEquivalence: true, verifyOnly: true,
+}})
+```
+
+Expected observations:
+- **EH-PORT-22:** `leaf.py` is ported (card moves to `done`) BEFORE either `even.py`/`odd.py` card is
+  pulled; `next` never offers a card whose dep card isn't `done`. Check `port-round:*` notes + the port
+  board: no card ported out of dependency order.
+- **EH-PORT-21:** the `even`/`odd` SCC ports without a reopen loop — one cluster-entry member carries
+  "the whole cycle compiles together", the other is accepted as a syntactically-valid stub first. Neither
+  card ping-pongs `done`→`reopen` forever.
+- **EH-PORT-20:** the verify pass runs against the cleared board (no `0 active` bail), writes equivalence
+  records into the done cards' Notes, `stopReason:'verify-only'`, `executed:false`, and does NOT re-port.
+
 ## CMD-sync note
 
 `eatahorse.js` `CMD.add` now advertises `[--external-id ns:val]` (the flag already existed in
@@ -147,3 +276,36 @@ C's gate trustworthy. Two design forks were resolved toward the LIGHTER option (
 use `--external-id` (they only read/reopen/sync), so no cross-workflow sync was required this round. See
 `plugins/workflow-kit/skills/eatahorse/CLAUDE.md` for the three-copy hand-sync rule when a real
 `eatahorse.py` subcommand/flag changes.
+
+## EH-PORT-27 — code-review fixes (2026-06-25)
+
+`/code-review xhigh` of the EH-PORT-19..26 round found real defects in the port pipeline's seed/loop
+logic and one verifyOnly precedence bug. All fixes are prompt/control-flow except the one CLI guard
+(create_task idempotency), which has a new test. `npm run check` + all Python suites stay green.
+
+- **Transitive seed hole (`eatahorse-port-pipeline.js`).** The one-pass seed wired `dep-add <card> --on
+  <depCard>` per unit, but `add_dep` ERRORS if the dep card doesn't exist (`resolve_task_id`, eatahorse.py)
+  and "comprehended" does not imply "carded": in a chain A→B→C with C uncomprehended, A seeds (dep B
+  comprehended) but B does not (dep C uncomprehended), so `dep-add A --on B` errored or dropped the edge
+  and `next` offered A out of order. The "seeding only when all deps comprehended guarantees every edge
+  can be wired" claim was false one level deep. Fixed: TWO-pass seed — 3a ADD-ALL cards, 3b WIRE (a card
+  whose dep is uncomprehended is parked `blocked`, which `next` excludes, until 3c UNBLOCK in a later
+  round wires + releases it). Out-of-order port is now structurally impossible.
+- **Post-comprehension spin (`eatahorse-port-pipeline.js`).** The empty-streak cap only counted while
+  `!comprehendDone`; once comprehension finished, a round that ported nothing with cards still unported
+  fell to `else { emptyStreak = 0 }`, resetting the counter and spinning to maxRounds (60), one worker
+  agent per round. Fixed: count any `!portedNow` round toward EMPTY_CAP regardless of comprehension state.
+- **Pipeline SCC acceptance (`eatahorse-port-pipeline.js`).** Unlike `eatahorse.js` EH-PORT-21, the pipeline
+  had no cycle-aware acceptance. Added a step-4 clause: when a `dep-add` was cycle-rejected (SCC pair),
+  port both members with cyclic peer refs stubbed/forward-declared and accept the stub, don't block on a
+  full build until both are ported.
+- **Duplicate port cards (`eatahorse.py` create_task).** `add` had no external_id uniqueness check, so a
+  worker re-reading the board across rounds could seed two cards for one source unit → ported twice. Made
+  `create_task` idempotent on external_ids (returns the existing card via `find_task_by_external_id`).
+  New test `test_create_task_idempotent_on_external_id`. Benefits both pipeline seed and eatahorse.js Seed.
+- **verifyOnly vs resume (`eatahorse.js`).** verifyOnly on a board with active cards fell into the resume
+  arm (logged "Resuming", but the `!verifyOnly`-gated loop did no work) and returned `resumed:true`.
+  Fixed: `if (verifyOnly)` now precedes `else if (resume)`; warns when active cards remain (they are NOT
+  ported in verify-only); `resumed: resume && !verifyOnly`.
+- **maxTokens:0 falsy trap (`eatahorse-port-pipeline.js` + `eatahorse-research.js`).** `maxTokens ? ... :
+  Infinity` treated 0 as "no ceiling"; changed to `maxTokens != null`.

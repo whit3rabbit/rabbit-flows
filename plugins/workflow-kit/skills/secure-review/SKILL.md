@@ -176,6 +176,28 @@ sufficient".
   index, NULL/None deref on malformed input, use-after-free / double-free, type confusion on tagged
   unions/variants, unchecked return from a fallible call.
 
+### Sink/source catalog (concrete APIs — a hit is a LEAD, still trace reachability)
+
+Distilled from public knowledge, mirrored in the workflow's inline `SINK_CATALOG` (runtime source).
+A name below is a starting point, not a verdict: resolve constants and confirm an entry-point→sink
+path before flagging, or the gate drops it.
+
+- **Injection** — py `subprocess(...,shell=True)`/`os.system`/`eval`/`exec`, `cursor.execute(f"...")`;
+  js `child_process.exec(Sync)`/`eval`/`new Function`, ``db.query(`${x}`)``; java `Runtime.exec`/
+  `ProcessBuilder`, `Statement.executeQuery(concat)`; go `exec.Command("sh","-c",x)`, `db.Query(fmt.Sprintf)`;
+  rust `std::process::Command`, `format!`-built SQL.
+- **SSRF** — untrusted url into a fetcher with no allowlist: py `requests`/`urllib`/`httpx .get(url)`;
+  js `fetch`/`axios`/`http.get(url)`; java `new URL(u).openStream`/`HttpClient`; go `http.Get`/`http.NewRequest`;
+  rust `reqwest::get(url)`.
+- **Deserialization** — py `pickle.load`/`yaml.load`(no SafeLoader)/`marshal`; js `node-serialize`,
+  JSON-driven eval, `__proto__`/`constructor` prototype pollution; java `ObjectInputStream.readObject`/
+  `XMLDecoder`; go `gob`/decoder of untrusted; rust `serde` from untrusted (deny-unknown off).
+- **XXE** — untrusted XML with external entities on: java `DocumentBuilderFactory`/`SAXParser` without
+  disallow-doctype; py `lxml`/`xml.etree` with `resolve_entities`; any parser leaving DTD/external entities enabled.
+- **Path/file** — user input into open/join without normalization, plus zip-slip on archive extract and
+  symlink follow: py `os.path.join`/`open`; js `fs.*`/`path.join`; java `new File(path)`/`Files`;
+  go `os.Open`/`filepath.Join`; rust `std::fs`/`Path::join`.
+
 ## Discipline (the part that keeps the gate's job honest)
 
 - **Trace reachability.** A pattern is not a vulnerability until untrusted input can reach it in

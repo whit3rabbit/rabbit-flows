@@ -216,6 +216,26 @@ def test_external_id_survives_sync():
             "external_ids must survive sync (state-merge setdefault, not frontmatter)"
 
 
+def test_create_task_idempotent_on_external_id(): # EH-PORT-27
+    # `add` re-run for the same source unit (a worker that mis-reads the board across rounds) must NOT
+    # create a duplicate card, or the unit gets ported twice. create_task is idempotent on external_ids:
+    # a second add with the same namespace:value returns the EXISTING card, leaving its data untouched.
+    with tempfile.TemporaryDirectory() as d:
+        board = Path(d) / ".eatahorse"
+        eh.init_board(board, "Test")
+        first = eh.create_task(board, "Port src/a.py", bites=["b"], status="ready",
+                               external_ids={"source": "src/a.py"})
+        again = eh.create_task(board, "Port src/a.py AGAIN", bites=["b"], status="ready",
+                               external_ids={"source": "src/a.py"})
+        assert again["id"] == first["id"], "re-add with same external_id must return the existing card"
+        assert again["title"] == "Port src/a.py", "first write wins; existing card data is untouched"
+        assert len(eh.load_state(board)["tasks"]) == 1, "no duplicate card created"
+        # A DIFFERENT external_id still creates a new card.
+        other = eh.create_task(board, "Port src/b.py", bites=["b"], status="ready",
+                               external_ids={"source": "src/b.py"})
+        assert other["id"] != first["id"] and len(eh.load_state(board)["tasks"]) == 2
+
+
 def test_priority_bands_topo_order():
     # Port mode orders cards by a ZERO-PADDED priority band so eatahorse's LEXICAL priority sort equals
     # dependency (topo) order: P00=leaf is picked first. The zero-pad is the whole point — without it
@@ -377,6 +397,7 @@ def main():
         test_move_done_empty_card_sticks,
         test_notes_json_block_roundtrips,
         test_external_id_survives_sync,
+        test_create_task_idempotent_on_external_id,
         test_priority_bands_topo_order,
         test_depends_on_roundtrips,
         test_would_cycle_and_dep_add,

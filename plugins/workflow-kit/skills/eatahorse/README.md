@@ -10,9 +10,16 @@ It is intentionally lighter than formal specification workflows. It creates a `.
 eatahorse/
 ├── SKILL.md
 ├── README.md
+├── CLAUDE.md
 ├── scripts/
 │   ├── eatahorse.py
-│   └── eatahorse_hook.py
+│   ├── eatahorse_hook.py
+│   ├── build_inventory.py        # deterministic Kahn topo/layer/cycle pass (port inventory)
+│   ├── diff_test.py              # differential-equivalence harness (source-oracle vs target)
+│   ├── test_eatahorse.py
+│   ├── test_build_inventory.py
+│   ├── test_diff_test.py
+│   └── test_cmd_drift.py         # workflow CMD maps vs eatahorse.py verbs (drift guard)
 ├── resources/
 │   ├── BOARD_FORMAT.md
 │   ├── EXAMPLES.md

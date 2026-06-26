@@ -192,8 +192,10 @@ const maxTokens = args?.maxTokens ?? null
 const budgetFloor = args?.budgetFloor ?? 50_000
 // Tokens left = min(platform budget remaining, our own maxTokens ceiling remaining). budget.remaining()
 // is Infinity when no platform target is set; our ceiling bounds it. Most restrictive wins.
+// `maxTokens != null` (not truthiness): a caller passing maxTokens:0 means "spend nothing", NOT "no
+// ceiling" — a falsy-zero check would invert that and run unbounded.
 const tokensLeft = () =>
-  Math.min(budget.remaining(), maxTokens ? Math.max(0, maxTokens - budget.spent()) : Infinity)
+  Math.min(budget.remaining(), maxTokens != null ? Math.max(0, maxTokens - budget.spent()) : Infinity)
 
 const LIVE_CAP = 400        // max files researched per ROUND; the rest stay in backlog and carry forward
 const RUN_TOUCH_CAP = 700   // ponytail: per-RUN ceiling on distinct files researched; keeps workers+sync+gate+gather under the 1000-agent lifetime cap. rerun continues from backlog. raise if a run must cover more in one pass.
@@ -236,6 +238,13 @@ const EXTRACT_BLOCK =
       `   Rules: use [] for empty lists; "deps" are INTRA-repo only (paths under the researched root), never ` +
       `stdlib/third-party (those go in externalDeps); the "path" must equal this card's title. If the file is ` +
       `unreadable/binary, still emit the block with empty lists and behavior:"unreadable".\n`
+    : ''
+// EH-PORT-23: in port mode the gate must also enforce the EXTRACTION block, not just prose support — a card
+// with hollow/missing JSON would otherwise pass the gate and then drop out of the Graph inventory silently.
+const PORT_GATE_RULE =
+  extract === 'port'
+    ? ` ALSO reopen any sampled card whose "## Notes" lacks a parseable fenced \`\`\`json extraction block ` +
+      `({path,exports,deps,...}), whose block will not parse, or whose "path" field does not equal the card title.`
     : ''
 
 // 1. Enumerate — haiku, mechanical. List the files to research. Script can't touch the FS.
@@ -355,9 +364,10 @@ while (pending.length && round < maxRounds && tokensLeft() > budgetFloor) {
       `marked done (\`list --status done --json\`, then \`show <id>\`). For each sampled card, READ the ` +
       `actual file named by its title and judge whether its "## Notes" are genuinely supported (not ` +
       `vague/hallucinated/empty). For any card whose notes are NOT supported, reopen it atomically: ` +
-      `\`reopen <id> --gap "<why hollow>"\` (unchecks acceptance, notes the gap, moves it back to doing). ` +
+      `\`reopen <id> --gap "<why hollow>"\` (unchecks acceptance, notes the gap, moves it back to doing).` +
+      PORT_GATE_RULE +
       // gate samples + reopens: list/show to read, the atomic reopen verb, then sync.
-      `Then \`sync\`. Return the reopened (hollow) card TITLES and how many you checked.\n\n${cli('list', 'show', 'reopen', 'sync')}`,
+      ` Then \`sync\`. Return the reopened (hollow) card TITLES and how many you checked.\n\n${cli('list', 'show', 'reopen', 'sync')}`,
     { label: `gate:${round}`, phase: 'Gate', schema: GATE_SCHEMA },
   )
 

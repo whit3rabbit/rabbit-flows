@@ -156,3 +156,50 @@ Closed a code-review pass on `security-audit.js` + `recon.py`. Files: `security-
   and `_calls_subset` gated the whole test on the go grammar; now skip only when no fixture grammar is present.
 - CONSTRAINT (still holds): every new recon CLI flag must be mirrored in reconBlock — `--format` was already
   documented there, so no reconBlock edit this round. Green under BOTH stdlib AND venv (63/63) + `npm run check`.
+
+## cyber-skills distillation: 2026-06-25
+
+**Goal:** fold `github.com/mukul975/Anthropic-Cybersecurity-Skills` (754 community skills) into the
+stack. DECISION: distill knowledge into existing fixed-cost surfaces; do NOT import the library.
+Repo is community-reviewed (not Anthropic), Apache-2.0, ships executable helper scripts, ~90%
+offensive/operational. **Its scripts were deliberately NOT run** (running third-party code inside a
+don't-trust-code tool is a supply-chain contradiction) and nothing executable was mined — only public
+CWE/OWASP/sink knowledge was distilled. Files: `security-audit.js`, `secure-review/SKILL.md`,
+`audit-codebase/SKILL.md`. No new args, no manifest/contract drift.
+
+- **SARIF CWE/OWASP enrichment (primary win, zero model tokens).** `CATEGORY_META` (ordered keyword
+  table, specific-first) + `classifyCategory(category, evidence)` map the gate's free-form `category`
+  to canonical `{ruleId, name, cwe, owasp}`. `buildSarif()` now sets a stable slug `ruleId`, adds
+  `properties.cwe/owasp/security-severity` (crit 9.0/high 7.0/med 5.0/low-info 3.0) + `tags`
+  (`security`, `external/cwe/cwe-NNN`, `owasp/…`) so GitHub code-scanning ingests severity, and
+  populates the previously-empty driver `rules[]` (deduped reportingDescriptors, CWE helpUri).
+  Unmatched categories fall through to today's behavior. Secrets get CWE-798 + 7.0. Code-native
+  CWE/OWASP only — the repo's ATT&CK/D3FEND/CSF mappings are SOC-oriented, rejected for SARIF.
+- **`SINK_CATALOG` distilled const (opt-in recall).** Compact per-language (py/js/java/go/rust)
+  sink/source APIs for injection/SSRF/deserialization/XXE/path, injected once into every Haiku lane
+  prompt after STEP 2 (beside `LANE_FEWSHOT`). Mirrored into `secure-review/SKILL.md` "What to look
+  for" (inline prompt is runtime source). Additive recall — measure on a known-vulnerable fixture
+  before trusting; a catalog hit is a LEAD, the gate still drops bare grep hits.
+- **Front-door reference read.** `audit-codebase/SKILL.md` does ONE gated `Read` of the `secure-review`
+  reference rows for the chosen focus classes (skipped when focus=all). Conversational path only;
+  does not touch the workflow runtime.
+
+VERIFIED: `validate.py --strict` clean, `npm run check` four gates pass, and a source-extracted
+`buildSarif` spot-check (SSRF→CWE-918 slug+tags+driver rule, secret CWE-798, unmatched pass-through,
+empty-input valid run) passes. recon.py untouched, so `test_recon.py` not in scope.
+
+CONSTRAINTS (do not re-litigate):
+- `CATEGORY_META` order is load-bearing: memory subclasses + deserialization/ssrf/xxe/path precede the
+  generic injection catch-all (`/inject|eval/`), else SSRF/SQLi collapse into `code-injection`.
+- `SINK_CATALOG` lives in TWO copies (inline `const` = runtime source; `secure-review/SKILL.md` =
+  portable). Refresh both together; the inline one is authoritative (`agent()` can't load the skill).
+- Distillation, NOT import: the cyber-skills repo's helper scripts must never be executed by the audit.
+
+## classifyCategory evidence-match fix (2026-06-25)
+
+`/code-review xhigh` found `classifyCategory` matched the regex against `${category} ${evidence}`
+combined, contradicting its own comment ("keyword-matches the gate's category"). A raw-code token in the
+evidence (e.g. `eval`, `symlink`, `inject`) could hijack a finding whose gate category was specific and
+correct, emitting the wrong CWE/ruleId/OWASP into the SARIF (pre-diff used `f.category` verbatim). Fixed:
+match the category FIRST (authoritative); fall back to evidence ONLY when the category alone matches
+nothing — evidence can break a tie for a generic/unmapped category but can never override a specific one.

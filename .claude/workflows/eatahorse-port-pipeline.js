@@ -11,8 +11,9 @@
 //
 // HEAVY + OPT-IN + RUNTIME-UNVERIFIED: this is the most expensive, most speculative piece of the port v2.
 // It cannot be unit-tested (it is pure orchestration over live agents); validate it on a TINY slice before
-// trusting it. Equivalence verification is NOT folded in — run `eatahorse verifyEquivalence:true` as a
-// separate pass afterward (keeps this lean; see eatahorse.js / docs/eatahorse-workflow-log.md).
+// trusting it. Equivalence verification is NOT folded in — run `eatahorse grounding=<inventory>
+// verifyEquivalence:true verifyOnly:true` as a separate pass afterward (verifyOnly skips the 0-active bail so
+// it runs against the cleared port board; keeps this lean; see eatahorse.js / docs/eatahorse-workflow-log.md).
 //
 // Knobs (args):
 //   root           source folder to port (required)
@@ -25,6 +26,7 @@
 //   testCmd        proving command; passed through as a port constraint
 //   scriptPath     eatahorse.py (default bundled skill copy)
 //   maxRounds      scheduler round cap (default 60) — backstop independent of budget
+//   maxTokens      per-run OUTPUT-token ceiling (default null = none); bounds budget.remaining()
 //   budgetFloor    stop opening rounds below this many remaining tokens (default 50000)
 //   workerModel    model for the per-unit port agents (default "sonnet")
 //
@@ -69,6 +71,7 @@ const question = args?.question ?? `Comprehend every file as a unit to port to $
 const testCmd = args?.testCmd ?? ''
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
 const maxRounds = Math.min(args?.maxRounds ?? 60, 200)
+const maxTokens = args?.maxTokens ?? null
 const budgetFloor = args?.budgetFloor ?? 50_000
 const workerModel = args?.workerModel ?? 'sonnet'
 
@@ -81,13 +84,19 @@ const CMD = {
   depadd:  `dep-add <id> --on <depId>  (rejects cycles)`,
   list:    `list [--status s] [--json]`,
   show:    `show <id> [--json]`,
+  next:    `next [--json] -> top active card whose deps are all done (won't offer a dep-blocked card)`,
   bite:    `bite <id> <i> [--done|--open] [--group bites|acceptance]  (1-based)`,
   move:    `move <id> <backlog|ready|doing|blocked|done|dropped>`,
   sync:    `sync`,
   report:  `report --json`,
 }
 const cli = (b, ...k) => CLI_HEAD(b) + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
-const tokensLeft = () => budget.remaining()
+// Tokens left = min(platform budget remaining, our own maxTokens ceiling remaining). budget.remaining()
+// is Infinity when no platform target is set; our ceiling bounds it. Most restrictive wins.
+// `maxTokens != null` (not truthiness): a caller passing maxTokens:0 means "spend nothing", NOT "no
+// ceiling" — a falsy-zero check would invert that and run unbounded.
+const tokensLeft = () =>
+  Math.min(budget.remaining(), maxTokens != null ? Math.max(0, maxTokens - budget.spent()) : Infinity)
 
 // Concurrency: comprehend (the unmodified research workflow) and the port scheduler run together. They
 // share ONLY this closure flag — never a writer. comprehend writes the research board; the scheduler
@@ -135,32 +144,64 @@ const pipelineResults = await parallel([
         const ported = [...portedAll]
         const finalDrain = comprehendDone // once true, relax the "deps must be ported" gate to avoid a stall
         const round = await agent(
+          // EH-PORT-22: this round does NOT recompute "portable" in prose. It SEEDS port cards with real
+          // dep-add edges, then lets the port board's DAG + `next` decide port ORDER — `next` refuses any card
+          // whose deps aren't done. The DAG gates port ORDER. One ordering surface (the port board), composing
+          // with EH-PORT-12.
+          // EH-PORT-27: seeding is TWO-pass (add ALL cards, THEN wire) because `dep-add` errors on a missing
+          // dep card — "comprehended" does not imply "carded". A card whose dep is not comprehended yet is
+          // parked `blocked` (which `next` excludes) until a later round wires + unblocks it, so a transitive
+          // chain can never be ported out of order. (The old one-pass seed wired per-unit and ERRORED, or
+          // dropped the edge and let `next` offer the card early — its "every edge can be wired" claim was
+          // false one level deep.)
           `You are ONE round of a port scheduler. Source tree "${root}" is being comprehended into the ` +
-            `research board at "${researchBoard}" CONCURRENTLY (it may still be in progress). Your job: port ` +
-            `every unit that is now PORTABLE to ${targetLang} under "${targetDir}", onto the PORT board at ` +
-            `"${board}".\n` +
-            `Already ported this run (do NOT re-port): ${JSON.stringify(ported)}.\n` +
+            `research board at "${researchBoard}" CONCURRENTLY (it may still be in progress). Your job: SEED ` +
+            `port cards for newly-comprehended units, then port whatever the DAG now allows, onto the PORT ` +
+            `board at "${board}".\n` +
+            `Already ported this run (for your awareness; the board is the source of truth): ${JSON.stringify(ported)}.\n` +
             `Steps:\n` +
             `1. If the port board does not exist yet, \`init "Port to ${targetLang}"\` on it (board "${board}").\n` +
             `2. Read comprehended units: on the RESEARCH board "${researchBoard}", \`list --status done --json\`, ` +
             `then \`show <id> --json\` for each and parse the fenced \`\`\`json block in its notes ` +
-            `({path, exports, deps, ...}). These are the units comprehended SO FAR.\n` +
-            `3. A unit is PORTABLE when every one of its INTRA-repo deps is itself (a) comprehended (present ` +
-            `in step 2) AND (b) already ported (in the "already ported" set OR ported earlier this round).\n` +
-            `4. For each NOT-yet-ported portable unit, leaf-first: \`add\` a port card on "${board}" ` +
-            `(--external-id source:<path>, --status doing, -d describing the source path + public API to keep), ` +
-            `wire \`dep-add\` edges to the port cards of its deps (resolve via their source: external_id from ` +
-            `\`list --json\`), DO THE PORT (write the ${targetLang} file under "${targetDir}", keep the public ` +
-            `API stable, do NOT edit source), then tick the card's acceptance and \`sync\`.\n` +
-            `5. \`sync\` the port board.\n` +
+            `({path, exports, deps, ...}). These are the units comprehended SO FAR (path + its INTRA-repo deps).\n` +
+            `3. SEED cards (do NOT port yet) in TWO passes, because \`dep-add\` ERRORS if the dep card does ` +
+            `not exist — so every card must be created BEFORE any edge is wired. "Comprehended" does NOT ` +
+            `imply "carded": a unit is only carded once you add it.\n` +
+            `   3a. ADD-ALL: \`list --json\` the PORT board to see which units already have a card (match on ` +
+            `external_ids.source). For EVERY comprehended unit from step 2 with NO card yet, \`add\` a ` +
+            `backlog card (--external-id source:<path>, -d describing the source path + the public API to ` +
+            `keep). Add them ALL before wiring any edge.\n` +
+            `   3b. WIRE: now every comprehended unit has a card. For each card, for each of its intra-repo ` +
+            `deps: if the dep has a card (it is comprehended), \`dep-add <card> --on <depCard>\` (resolve ` +
+            `depCard via its source: external_id). If the dep has NO card (not comprehended yet), \`move ` +
+            `<card> blocked\` and note the missing dep — \`next\` skips blocked cards, so the card cannot be ` +
+            `ported out of order; a later round wires it and unblocks it. If a \`dep-add\` is REJECTED as a ` +
+            `cycle, the two units are mutually dependent (an SCC): leave that back-edge off and note the pair ` +
+            `— it is handled at port time (step 4).\n` +
+            `   3c. UNBLOCK: re-check every card currently \`blocked\`. If all its intra-repo deps now have ` +
+            `cards, wire the still-missing edges and \`move <card> backlog\` so \`next\` can offer it once ` +
+            `its deps are done.\n` +
             (finalDrain
-              ? `NOTE: comprehension is FINISHED. If a comprehended unit is still blocked only because a dep ` +
-                `was never comprehended (external/cyclic), port it anyway leaf-first and say so in the note.\n`
-              : `NOTE: comprehension is STILL RUNNING — only port what is genuinely portable now; more units ` +
-                `will appear in later rounds. Do not wait or spin.\n`) +
+              ? `   Because comprehension is FINISHED: a still-\`blocked\` card depends on a unit that was ` +
+                `NEVER comprehended (external/cyclic). \`move\` each such card \`backlog\` and wire only the ` +
+                `edges whose dep cards exist, so the board drains instead of stalling on a dep that will ` +
+                `never arrive.\n`
+              : '') +
+            `4. PORT via the DAG: repeatedly \`next --json\` on the PORT board. \`next\` only returns a card ` +
+            `whose deps are all done, so you never port out of order. For each card it returns: \`move <id> ` +
+            `doing\`, DO THE PORT (write the ${targetLang} file under "${targetDir}", keep the public API ` +
+            `stable, do NOT edit source files). If the card is part of an SCC pair you noted in 3b (a cyclic ` +
+            `peer not yet ported), write it with the peer references STUBBED / forward-declared so the file is ` +
+            `syntactically valid, and do NOT block its acceptance on a full project build until both members ` +
+            `are ported — accept it as a valid stub. Then tick the card's acceptance bites and \`sync\`. ` +
+            `Repeat until \`next\` returns no card. Do NOT port a card \`next\` did not offer.\n` +
+            `5. \`sync\` the port board, then \`report --json\`.\n` +
+            (finalDrain
+              ? ``
+              : `NOTE: comprehension is STILL RUNNING — more units appear in later rounds. Do not wait or spin.\n`) +
             `Return portedThisRound (source paths you ported now), comprehendedNotPorted (comprehended units ` +
             `not yet ported, including dep-blocked), and a short note.\n\n` +
-            `RESEARCH board reads:\n${cli(researchBoard, 'list', 'show')}\n\nPORT board writes:\n${cli(board, 'init', 'add', 'depadd', 'list', 'show', 'bite', 'move', 'sync', 'report')}`,
+            `RESEARCH board reads:\n${cli(researchBoard, 'list', 'show')}\n\nPORT board writes:\n${cli(board, 'init', 'add', 'depadd', 'list', 'show', 'next', 'bite', 'move', 'sync', 'report')}`,
           { label: `port-round:${r}`, phase: 'Pipeline', model: workerModel, schema: ROUND_SCHEMA },
         )
         if (!round) {
@@ -175,8 +216,12 @@ const pipelineResults = await parallel([
         rounds.push({ round: r, ported: portedNow, remaining: round.comprehendedNotPorted })
         // Done when comprehension finished and this round left nothing comprehended-but-unported.
         if (comprehendDone && (round.comprehendedNotPorted ?? 0) <= 0 && !portedNow) break
-        // Backoff while comprehension is still running and nothing got ported this round.
-        if (!comprehendDone && !portedNow) {
+        // EH-PORT-27: a round that ports NOTHING is empty whether or not comprehension is still running.
+        // Pre-comprehension it means "no portable units yet"; POST-comprehension with cards still unported
+        // it means a genuine stall (dep-blocked / cyclic / unsatisfiable acceptance). Count BOTH toward the
+        // cap — gating the streak on `!comprehendDone` (the old bug) reset it every post-comprehension round
+        // and spun the scheduler to maxRounds, one worker agent per round, doing no useful work.
+        if (!portedNow) {
           if (++emptyStreak >= EMPTY_CAP) { stalledEarly = true; break }
         } else {
           emptyStreak = 0
@@ -184,9 +229,9 @@ const pipelineResults = await parallel([
       }
       if (stalledEarly)
         log(
-          `Scheduler stopped after ${EMPTY_CAP} consecutive empty rounds while comprehension was still ` +
-            `running — the overlap isn't producing portable units. Run \`eatahorse grounding="${inventory}"\` ` +
-            `after comprehension finishes to port the remainder (no work lost).`,
+          `Scheduler stopped after ${EMPTY_CAP} consecutive rounds that ported nothing — the remaining ` +
+            `units are dep-blocked, cyclic, or could not satisfy acceptance. Run \`eatahorse ` +
+            `grounding="${inventory}"\` to port the remainder (no work lost).`,
         )
       // Sentinel object, not the bare count: r===0 (e.g. budget exhausted before the first round) is falsy
       // and would be dropped by the filter(Boolean) below, masquerading as a crashed scheduler thunk.
@@ -209,8 +254,8 @@ await agent(
     `2. Append a short dated section to the project's CLAUDE.md (create if absent; MERGE, do not clobber): ` +
     `what was ported (count), what remains active, the inventory at "${inventory}", the test command ` +
     `("${testCmd || 'none given'}"), and a reminder that EQUIVALENCE was NOT verified here — run ` +
-    `\`eatahorse grounding="${inventory}" verifyEquivalence:true\` (or the board's verify pass) to confirm ` +
-    `behavior parity. Keep it short.\n` +
+    `\`eatahorse grounding="${inventory}" verifyEquivalence:true verifyOnly:true\` to confirm behavior ` +
+    `parity against the cleared port board. Keep it short.\n` +
     `3. Do not change any task status.\n\n${cli(board, 'report', 'list')}`,
   { label: 'write-back', model: 'sonnet' },
 )
@@ -225,6 +270,6 @@ return {
   portedCount: portedAll.size,
   ported: [...portedAll],
   rounds,
-  note: 'Equivalence NOT verified here — run eatahorse verifyEquivalence:true as a separate pass.',
+  note: `Equivalence NOT verified here — run eatahorse grounding="${inventory}" verifyEquivalence:true verifyOnly:true as a separate pass.`,
   written: true,
 }

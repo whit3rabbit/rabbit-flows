@@ -14,9 +14,11 @@ maps** (especially the shared `reopen` verb). No runtime sharing — VM sandbox.
 that USE a verb carry it: the dep verbs + `--depends-on` live in `eatahorse.js` and
 `eatahorse-port-pipeline.js`; `eatahorse-research.js`/`docs-from-code.js` don't port, so they omit them.
 
-- Three stdlib self-checks, no framework — run after touching the matching script:
+- Stdlib self-checks, no framework — run after touching the matching script:
   `python3 scripts/test_eatahorse.py` (CLI), `python3 scripts/test_diff_test.py` (differential
-  equivalence harness), `python3 scripts/test_build_inventory.py` (Kahn inventory pass).
+  equivalence harness), `python3 scripts/test_build_inventory.py` (Kahn inventory pass),
+  `python3 scripts/test_cmd_drift.py` (guards the four-copy `CMD` hand-sync above: every verb a
+  workflow advertises must exist in `eatahorse.py`; SKIPs when run outside the repo).
 - **Single-writer invariant** the workflows rely on: a round's workers edit ONLY their own card
   markdown and run NO CLI; exactly one sync agent writes `state.json`/`board.md`. The PostToolUse
   autosync was removed as that exact race — only Stop/SessionEnd sync remains, silenced by

@@ -46,6 +46,11 @@ only**, point the user at the built-in `/security-review` instead.
    - **secretsScan** (`auto` default / `on` / `off`) - the deterministic secret scan; `auto` runs it
      when a scanner is present.
 
+   After the focus pick, do ONE `Read` of the bundled `secure-review` skill's `SKILL.md` and skim only
+   the "What to look for" rows for the chosen classes (and its sink/source catalog) so your hand-back
+   summary speaks the right sinks. One read, gated behind the focus selection - never a library scan,
+   and never the workflow runtime (lanes carry that contract inline). Skip it when focus = all.
+
 3. **Preview, then launch.** Show the user a compact preview of the `args` (at least `scope`,
    `focus`, `gateRounds`, `mode`). The audit only READS source and writes its inventory under
    `.security-audit/` - it does not modify the audited code - so a standard run may launch directly

@@ -242,6 +242,27 @@ const GATE_FEWSHOT =
   `  INVALID: recon const LIMIT -> 16, dest buf is 4096; 16 <= 4096, bounded. => {"verdict":"INVALID",\n` +
   `         "entry_point":"NONE","severity":"info","crux":"const LIMIT=16 <= dest 4096 — bounded, not overflowable"}`
 
+// Distilled sink/source catalog (knowledge, not imported code). Names the concrete dangerous APIs per
+// language for the high-value classes so a Haiku lane recognizes a lead it might otherwise skim past.
+// A hit is still only a LEAD: the lane must trace reachability + resolve constants before flagging
+// (the gate drops bare grep hits). Fixed token cost, injected once into every lane after STEP 2.
+const SINK_CATALOG =
+  `SINK/SOURCE CATALOG (concrete dangerous APIs by language — a hit is a LEAD; still trace reachability + resolve constants):\n` +
+  `  injection: py subprocess(...,shell=True)/os.system/eval/exec, cursor.execute(f"...");` +
+  ` js child_process.exec(Sync)/eval/new Function, db.query(\`\${x}\`);` +
+  ` java Runtime.exec/ProcessBuilder, Statement.executeQuery(concat);` +
+  ` go exec.Command("sh","-c",x), db.Query(fmt.Sprintf);` +
+  ` rust std::process::Command, format!-built SQL.\n` +
+  `  ssrf: untrusted url into a fetcher with no allowlist — py requests/urllib/httpx .get(url);` +
+  ` js fetch/axios/http.get(url); java new URL(u).openStream/HttpClient; go http.Get/http.NewRequest; rust reqwest::get(url).\n` +
+  `  deserialization: py pickle.load/yaml.load(no SafeLoader)/marshal;` +
+  ` js node-serialize, JSON-driven eval, __proto__/constructor prototype pollution;` +
+  ` java ObjectInputStream.readObject/XMLDecoder; go gob/decoder of untrusted; rust serde from untrusted (deny-unknown off).\n` +
+  `  xxe: untrusted XML with external entities on — java DocumentBuilderFactory/SAXParser without disallow-doctype;` +
+  ` py lxml/xml.etree with resolve_entities; any parser leaving DTD/external entities enabled.\n` +
+  `  path/file: user input into open/join without normalization, plus zip-slip on archive extract + symlink follow —` +
+  ` py os.path.join/open; js fs.*/path.join; java new File(path)/Files; go os.Open/filepath.Join; rust std::fs/Path::join.`
+
 // Tolerate a bare string (mirrors deep-research) so `/security-audit <path>` works, not just `{scope}`.
 const scope = typeof args === 'string' ? args : args?.scope ?? '.'
 const focus = args?.focus // optional array of vuln classes to prioritize
@@ -491,7 +512,7 @@ const laneResults = await parallel(
           `(traversal, zip-slip, symlink), deserialization / SSRF / XXE, supply-chain. For ` +
           `memory-unsafe languages also: buffer overflow, integer overflow or wrap used as a size/index, ` +
           `NULL/None deref on malformed input, use-after-free or double-free, type confusion on tagged ` +
-          `unions/variants, and unchecked return from a fallible call.\n\n` +
+          `unions/variants, and unchecked return from a fallible call.\n\n${SINK_CATALOG}\n\n` +
           `STEP 3 — flag concrete, evidence-backed risks. For each: type "finding", "where" = file:line, ` +
           `"evidence" = the exact code/pattern, resolved constant values, and the reachability path from ` +
           `the entry point to the sink (use recon \`callers\` to confirm the function is reachable — ` +
@@ -885,27 +906,89 @@ if (writeBaseline && (confirmed.length || residualUncertain.length || secretFind
   baselineWritten = true
 }
 
+// Deterministic vuln-class -> CWE/OWASP map (distilled from public MITRE CWE + OWASP Top 10 2021;
+// NOT from any third-party skill repo — knowledge only, nothing executable mined). The gate emits a
+// free-form `category` string, so classifyCategory keyword-matches it (mirrors the HIGH_SIGNAL regex
+// idiom) and returns the canonical entry, or null to keep today's pass-through. Order = specific first:
+// memory subclasses + deserialization/ssrf/xxe/path before the generic injection catch-all.
+const CATEGORY_META = [
+  { re: /use[-\s]?after[-\s]?free|\buaf\b/, ruleId: 'use-after-free', name: 'Use after free', cwe: 'CWE-416' },
+  { re: /double[-\s]?free/, ruleId: 'double-free', name: 'Double free', cwe: 'CWE-415' },
+  { re: /type confusion/, ruleId: 'type-confusion', name: 'Type confusion', cwe: 'CWE-843' },
+  { re: /integer (over|under)flow|integer wrap|\bint overflow\b/, ruleId: 'integer-overflow', name: 'Integer overflow or wraparound', cwe: 'CWE-190' },
+  { re: /buffer overflow|out[-\s]?of[-\s]?bounds|oob (write|read)|stack overflow|heap overflow/, ruleId: 'buffer-overflow', name: 'Out-of-bounds write', cwe: 'CWE-787' },
+  { re: /null( pointer)? deref|none deref|nullptr|nil deref/, ruleId: 'null-deref', name: 'NULL pointer dereference', cwe: 'CWE-476' },
+  { re: /unchecked return|ignored return|unchecked error/, ruleId: 'unchecked-return', name: 'Unchecked return value', cwe: 'CWE-252' },
+  { re: /deserial/, ruleId: 'deserialization', name: 'Deserialization of untrusted data', cwe: 'CWE-502', owasp: 'A08:2021' },
+  { re: /\bssrf\b|server[-\s]?side request/, ruleId: 'ssrf', name: 'Server-side request forgery', cwe: 'CWE-918', owasp: 'A10:2021' },
+  { re: /\bxxe\b|xml external entit/, ruleId: 'xxe', name: 'XML external entity', cwe: 'CWE-611', owasp: 'A05:2021' },
+  { re: /traversal|zip[-\s]?slip|path inject|symlink/, ruleId: 'path-traversal', name: 'Path traversal', cwe: 'CWE-22', owasp: 'A01:2021' },
+  { re: /sql ?inj|\bsqli\b/, ruleId: 'sql-injection', name: 'SQL injection', cwe: 'CWE-89', owasp: 'A03:2021' },
+  { re: /command inj|shell inj|os command|\brce\b/, ruleId: 'command-injection', name: 'OS command injection', cwe: 'CWE-78', owasp: 'A03:2021' },
+  { re: /\bxss\b|cross[-\s]?site script/, ruleId: 'xss', name: 'Cross-site scripting', cwe: 'CWE-79', owasp: 'A03:2021' },
+  { re: /idor|broken (authz|access)|access control|privilege|missing authoriz/, ruleId: 'broken-access-control', name: 'Improper access control', cwe: 'CWE-862', owasp: 'A01:2021' },
+  { re: /secret|credential|hardcoded (key|password|token)|api[-\s]?key/, ruleId: 'hardcoded-credentials', name: 'Use of hard-coded credentials', cwe: 'CWE-798', owasp: 'A07:2021' },
+  { re: /supply[-\s]?chain|unpinned|postinstall|lockfile|vulnerable depend/, ruleId: 'supply-chain', name: 'Vulnerable/outdated component', cwe: 'CWE-1357', owasp: 'A06:2021' },
+  // Generic injection catch-all LAST (eval/template/code injection not matched above).
+  { re: /inject|\beval\b|template inject|code inject/, ruleId: 'code-injection', name: 'Code injection', cwe: 'CWE-94', owasp: 'A03:2021' },
+]
+function classifyCategory(category, evidence) {
+  // Match the gate's category FIRST (it is the authoritative label). Only when the category alone matches
+  // nothing do we fall back to the evidence text. A raw-code token in the evidence (e.g. `eval`, `symlink`,
+  // `inject`) must never OVERRIDE a specific, correct category — it may only break a tie when the category
+  // is generic or unmapped. (One combined haystack let an earlier-array entry hijack a correct specific
+  // category and emit the wrong CWE/ruleId into the SARIF.)
+  const cat = `${category || ''}`.toLowerCase()
+  for (const m of CATEGORY_META) if (m.re.test(cat)) return m
+  const ev = `${evidence || ''}`.toLowerCase()
+  for (const m of CATEGORY_META) if (m.re.test(ev)) return m
+  return null
+}
+
 // SARIF v2.1.0 builder — pure JS (no recon/FS), so the script builds the object and the finalize agent
 // writes it verbatim. Turns confirmed findings + deterministic secrets into a code-scanning-ingestible
 // file (post to GitHub code-scanning / gate merges) — the rerun-every-release use case wants pipeline
 // output, not just markdown. An empty results array is still valid + useful ("ran, no findings").
+// classifyCategory enriches each result with CWE/OWASP + a numeric security-severity GitHub ingests.
 function buildSarif(confirmedFindings, secrets, auditScope, coverageModel) {
   const levelOf = (sev) => (sev === 'critical' || sev === 'high' ? 'error' : sev === 'medium' ? 'warning' : 'note')
+  const secSev = (sev) => (sev === 'critical' ? '9.0' : sev === 'high' ? '7.0' : sev === 'medium' ? '5.0' : '3.0')
+  const cweNum = (cwe) => (cwe || '').replace(/^CWE-/i, '')
+  const tagsFor = (meta) => ['security', `external/cwe/cwe-${cweNum(meta.cwe)}`, ...(meta.owasp ? [`owasp/${meta.owasp}`] : [])]
   const locsFor = (where) => {
     const m = /^(.*?):(\d+)/.exec(where || '')
     const phys = { artifactLocation: { uri: m ? m[1] : (where || 'unknown') } }
     if (m) phys.region = { startLine: parseInt(m[2], 10) }
     return [{ physicalLocation: phys }]
   }
+  const rulesById = new Map() // dedup reportingDescriptors for the driver's rules[]
+  const addRule = (meta) => {
+    if (rulesById.has(meta.ruleId)) return
+    rulesById.set(meta.ruleId, {
+      id: meta.ruleId,
+      name: meta.name,
+      shortDescription: { text: meta.name },
+      helpUri: `https://cwe.mitre.org/data/definitions/${cweNum(meta.cwe)}.html`,
+      properties: { tags: tagsFor(meta), cwe: meta.cwe, ...(meta.owasp ? { owasp: meta.owasp } : {}) },
+    })
+  }
   const results = []
   for (const f of confirmedFindings) {
+    const meta = classifyCategory(f.category, f.evidence)
     const text = `${f.why || f.evidence || 'security finding'}${f.crux ? ` [crux: ${f.crux}]` : ''}`.trim()
+    const props = { severity: f.severity, entry_point: f.entry_point, fingerprint: f.fingerprint, confidence: f.confidence, 'security-severity': secSev(f.severity) }
+    if (meta) {
+      props.cwe = meta.cwe
+      if (meta.owasp) props.owasp = meta.owasp
+      props.tags = tagsFor(meta)
+      addRule(meta)
+    }
     results.push({
-      ruleId: f.category || 'finding',
+      ruleId: meta ? meta.ruleId : (f.category || 'finding'),
       level: levelOf(f.severity),
       message: { text: text || 'security finding' },
       locations: locsFor(f.where),
-      properties: { severity: f.severity, entry_point: f.entry_point, fingerprint: f.fingerprint, confidence: f.confidence },
+      properties: props,
     })
   }
   for (const s of secrets) {
@@ -914,14 +997,14 @@ function buildSarif(confirmedFindings, secrets, auditScope, coverageModel) {
       level: 'error',
       message: { text: `${s.rule_description || 'secret detected'} (deterministic scan — verify)` },
       locations: locsFor(s.line != null ? `${s.file}:${s.line}` : s.file),
-      properties: { category: 'secret', fingerprint: s.fingerprint, entropy: s.entropy },
+      properties: { category: 'secret', fingerprint: s.fingerprint, entropy: s.entropy, cwe: 'CWE-798', 'security-severity': '7.0', tags: ['security', 'external/cwe/cwe-798'] },
     })
   }
   return {
     $schema: 'https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json',
     version: '2.1.0',
     runs: [{
-      tool: { driver: { name: 'security-audit', informationUri: 'https://github.com/whit3rabbit/rabbit-flows', rules: [] } },
+      tool: { driver: { name: 'security-audit', informationUri: 'https://github.com/whit3rabbit/rabbit-flows', rules: [...rulesById.values()] } },
       properties: { scope: auditScope, coverage: coverageModel },
       results,
     }],

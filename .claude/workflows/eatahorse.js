@@ -166,6 +166,19 @@ const PLAN_GATE_SCHEMA = {
   },
 }
 
+// EH-PORT-24: Seed reports its dependency-edge wiring so a silently-dropped edge (the DAG's safety quietly
+// vanishing back to the priority-band tiebreak) becomes a visible signal the plan-gate can act on.
+const SEED_RESULT_SCHEMA = {
+  type: 'object',
+  additionalProperties: true, // keep the agent's own count fields too
+  required: ['wired', 'skipped', 'dangling'],
+  properties: {
+    wired: { type: 'integer' },                              // dep-add edges successfully added
+    skipped: { type: 'integer' },                            // dep paths with no matching card / cycle-rejected
+    dangling: { type: 'array', items: { type: 'string' } },  // dep source paths that resolved to no card
+  },
+}
+
 const STEP_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -258,7 +271,11 @@ const PORT_MODE = !!grounding
 // bundled diff_test.py (sibling of eatahorse.py by default). srcRunner/tgtRunner are command TEMPLATES the
 // agent specializes per unit — each must read a JSON args list on stdin and print a JSON result (see
 // diff_test.py contract). Without runners the agent falls back to a manual check and labels confidence low.
-const verifyEquivalence = (args?.verifyEquivalence ?? false) && PORT_MODE
+// EH-PORT-20: verifyOnly runs the Verify-equivalence phase against an ALREADY-DONE port board without
+// re-porting (the pipeline's recommended follow-up pass, which otherwise dies on the 0-active probe bail).
+// It implies verifyEquivalence and short-circuits decompose/seed/plan-gate + the execute loop below.
+const verifyOnly = (args?.verifyOnly ?? false) && PORT_MODE
+const verifyEquivalence = ((args?.verifyEquivalence ?? false) || verifyOnly) && PORT_MODE
 // diff_test.py sits beside eatahorse.py. Replace the eatahorse.py filename when scriptPath ends in it;
 // for a non-standard scriptPath (symlink/wrapper not ending eatahorse.py) swap the final path segment so
 // we still point at a real sibling instead of silently reusing the wrong binary.
@@ -355,9 +372,20 @@ if (!probe) {
   }
 }
 
+// EH-PORT-20: verifyOnly works the EXISTING done cards — a board is its precondition, not an error.
+if (verifyOnly && !probe.exists) {
+  return {
+    goal,
+    board,
+    error: `verifyOnly: no board at "${board}" to verify. Run a port first, then re-run with verifyOnly.`,
+    written: false,
+  }
+}
+
 // Existing board with nothing active = the collision trap (complete or foreign board). Fail LOUD instead
-// of sweeping into the loop and reporting "board cleared" as if the run succeeded.
-if (probe && probe.exists && probe.active <= 0) {
+// of sweeping into the loop and reporting "board cleared" as if the run succeeded. EXCEPTION: verifyOnly,
+// for which a complete (0-active) board is exactly the precondition.
+if (probe && probe.exists && probe.active <= 0 && !verifyOnly) {
   return {
     goal,
     board,
@@ -370,7 +398,17 @@ if (probe && probe.exists && probe.active <= 0) {
 
 let plan = null
 let gate = null
-if (resume) {
+if (verifyOnly) {
+  // EH-PORT-20: verify existing DONE cards only; never port. Checked BEFORE resume — verifyOnly on a board
+  // that still has active cards must NOT silently fall into the resume arm (which logs "Resuming" yet does
+  // no work, since the execute loop is gated `!verifyOnly`). If active cards remain, say they are skipped.
+  if (probe.active > 0)
+    log(
+      `verify-only: board "${board}" still has ${probe.active} active card(s) — they are NOT ported in ` +
+        `verify-only mode; only DONE cards are verified. Resume the board separately to port them.`,
+    )
+  else log(`verify-only: working existing done cards on "${board}"; skipping decompose/seed/plan-gate.`)
+} else if (resume) {
   // Existing board mid-flight: skip decompose/seed/plan-gate and work the cards already on it.
   log(`Resuming board "${board}": ${probe.active} active card(s). Skipping decompose/seed/plan-gate.`)
 } else {
@@ -400,13 +438,31 @@ if (resume) {
         `${targetDir ? ` under ${targetDir}` : ''}; then reconcile its public API against the inventory apiSurface.\n` +
         `   - acceptance (each MUST name its evidence surface): (a) the ported unit compiles / the project ` +
         `builds; (b) the public API matches the inventory apiSurface for <path>; (c) behavior parity` +
-        `${verifyEquivalence
-            ? ` — an \`equivalence\` record is written to the card's Notes (method/cases/counterexamples/coverage/confidence) by the verify-equivalence phase, with counterexamples=0`
-            : testCmd ? ` — \`${testCmd}\` passes` : ` (NO test command was given — state the concrete manual check)`}.\n` +
+        // EH-PORT-19: (c) names a proof runnable DURING the loop (testCmd or a manual check), NEVER "a record
+        // written by the verify-equivalence phase" — that phase is POST-loop, so referencing it deadlocks the
+        // card (can't reach done in-loop -> verify-equivalence then finds 0 done cards). verifyEquivalence is an
+        // INDEPENDENT post-hoc reopener (same shape as the invariant gate), not an in-loop acceptance item.
+        `${testCmd ? ` — \`${testCmd}\` passes` : ` (NO test command was given — state the concrete manual check)`}.\n` +
         `   - externalId: "source:<path>" (back-links the port card to its source unit).\n` +
         `   - dependsOn: the unit's INTRA-REPO dep paths (the inventory unit's "deps" array — repo-relative ` +
         `source paths only, NOT external packages). Seed turns these into real dependency edges so the loop ` +
         `never ports a unit before the units it depends on. Omit or [] for a leaf.\n` +
+        // EH-PORT-21: cycle-aware acceptance. An SCC member can't compile standalone (it references a peer not
+        // yet ported), so a plain "the project builds" acceptance bounces it forever. Stub-then-fill: all-but-one
+        // member is accepted as a syntactically-valid stub; ONE member carries the cluster-compiles check. Seed's
+        // would_cycle drops the back-edge, giving the SCC a defined stub-first port order. (Kept as one card per
+        // unit, NOT collapsed — collapse breaks the single-namespace source: external_id join.)
+        // ponytail: cycle handling is a decompose-prompt nudge, not structural. Ceiling: it relies on the agent
+        // reading inventory.cycles correctly. Upgrade if SCCs get large/common -> a real multi-source card model
+        // (eatahorse.py external_ids would need a list per namespace, not a scalar).
+        `2b. CYCLES: if a unit's "path" appears in the inventory "cycles" array (a strongly-connected group of ` +
+        `mutually-dependent units), it CANNOT compile on its own. For such SCC members, phrase acceptance (a) ` +
+        `as "<path> is written with its full public API; references to cyclic peers may be stubbed / ` +
+        `forward-declared; the file is syntactically valid in ${targetLang || 'the target language'}" — EXCEPT ` +
+        `for ONE chosen member of each cycle (the cluster entry), whose acceptance (a) is "the whole cycle ` +
+        `[list the member paths] compiles together". Keep (b)/(c) as normal. Order the stub members ahead of ` +
+        `the cluster-entry member; their dependsOn edges may be partly dropped by the cycle-breaker at seed ` +
+        `time — that is expected, not an error.\n` +
         `3. Use a short project name like "Port to ${targetLang || 'target'}". Return {project, cards}.` +
         INVARIANTS,
       { label: 'decompose', schema: PORT_CARDS_SCHEMA },
@@ -436,7 +492,7 @@ if (resume) {
   // 2. Seed — Haiku (mechanical). One agent creates the board (probe proved it's absent) and adds every card.
   //    Deterministic mapping from the decompose JSON; no judgment, so cheapest model.
   phase('Seed')
-  await agent(
+  const seedResult = await agent(
     `Create an Eatahorse board and seed it with the cards below. Use EXACTLY the board dir "${board}" for ` +
       `every command — do NOT invent, switch to, or improvise a different dir even if one already exists. ` +
       `Steps:\n` +
@@ -452,14 +508,26 @@ if (resume) {
       `the card whose external_ids.source equals that path, and run \`dep-add <card-id> --on <dep-card-id>\`. ` +
       `Skip a dep path with no matching card (it is an external/untracked unit). dep-add rejects cycles — if ` +
       `one is rejected, leave it and note it.\n` +
-      `4. Run \`sync\`, then \`report --json\` and report the resulting counts.\n` +
+      `4. Run \`sync\`, then \`report --json\` and report the resulting counts. ALSO report the dependency ` +
+      `wiring from step 3: \`wired\` (edges you added), \`skipped\` (dep paths with no matching card or ` +
+      `cycle-rejected), and \`dangling\` (the list of dep SOURCE PATHS that resolved to no card). In normal ` +
+      `(non-port) mode no card has dependsOn, so report wired=0, skipped=0, dangling=[].\n` +
       // seed only creates cards: init/add + sync/report (+ CARD_RULE for well-shaped cards). The init line
       // is spelled out WITH --board so a cheap agent can't drop the flag (which would let resolve_board walk
       // up to a parent board, diverging from where add/report write).
       `Do NOT start working any task. Only create cards.\n\n${cli('report', 'init', 'add', 'list', 'depadd', 'sync')}\n${CARD_RULE}\n\n` +
       `Cards (JSON):\n${JSON.stringify(plan.cards)}`,
-    { label: 'seed', model: 'haiku' },
+    { label: 'seed', model: 'haiku', schema: SEED_RESULT_SCHEMA },
   )
+  // EH-PORT-24: surface dropped edges loudly. A nonzero skipped/dangling means the DAG's ordering safety
+  // partly reverted to the priority-band tiebreak — the plan-gate below double-checks coverage per card.
+  if (PORT_MODE && seedResult && (seedResult.skipped || seedResult.dangling?.length)) {
+    log(
+      `Seed dep wiring: ${seedResult.wired ?? 0} edge(s) wired, ${seedResult.skipped ?? 0} skipped` +
+        (seedResult.dangling?.length ? `; dangling dep paths: ${seedResult.dangling.join(', ')}` : '') +
+        `. Ordering for those cards falls back to the priority band — verify they still port after their deps.`,
+    )
+  }
 
   // 3. Plan gate — Opus, FRESH context (admission gate for the plan). Reads the seeded board, drops/splits
   //    cards that aren't independent or whose acceptance isn't checkable, and reports the active count. The
@@ -474,10 +542,18 @@ if (resume) {
       `with no acceptance check (or only a vague/non-checkable one): add a concrete, observable one before ` +
       `passing it, since a card with no real acceptance auto-completes on a single check with nothing proving it. ` +
       `Also REJECT acceptance that does not NAME its evidence surface (a runnable command, an inspectable path, ` +
-      `or a concrete observable): make it name one before passing. Then run \`sync\` ` +
+      `or a concrete observable): make it name one before passing. ` +
+      // EH-PORT-24: in PORT MODE, spot-check that the DAG edges Seed was supposed to wire actually exist, so a
+      // silently-dropped edge surfaces here instead of degrading ordering to the band tiebreak unnoticed.
+      (PORT_MODE
+        ? `Because this is a PORT board, ALSO spot-check the dependency DAG: for each card whose description ` +
+          `names intra-repo dependencies, run \`deps <id>\` and confirm it has the expected "depends_on" ` +
+          `edges. Note any card missing an expected edge (or any dangling dep) in the adjustments. `
+        : '') +
+      `Then run \`sync\` ` +
       `and \`report --json\`. Return: ready (is the plan coherent enough to execute), the adjustments you ` +
-      // plan-gate inspects + edits in place: list/show to read, remove/addbite/add to fix, sync/report.
-      `applied, and activeRemaining (the report's "active" count).\n\n${cli('list', 'show', 'remove', 'addbite', 'add', 'sync', 'report')}\n${CARD_RULE}`,
+      // plan-gate inspects + edits in place: list/show/deps to read, remove/addbite/add to fix, sync/report.
+      `applied, and activeRemaining (the report's "active" count).\n\n${cli('list', 'show', 'deps', 'remove', 'addbite', 'add', 'sync', 'report')}\n${CARD_RULE}`,
     { label: 'plan-gate', schema: PLAN_GATE_SCHEMA },
   )
   if (!gate) return { goal, board, error: 'plan gate returned nothing', written: false }
@@ -501,8 +577,9 @@ const project = plan?.project ?? probe.project ?? 'Eatahorse'
 const cardsSeeded = plan?.cards?.length ?? 0
 
 // Plan-only (default): stop here. The board is written; nothing was executed. (On resume the board already
-// existed; planReady/adjustments come from the gate only on the fresh path.)
-if (!execute) {
+// existed; planReady/adjustments come from the gate only on the fresh path.) verifyOnly skips this — it does
+// no execute loop but MUST reach the Verify-equivalence phase below.
+if (!execute && !verifyOnly) {
   return {
     goal,
     board,
@@ -535,6 +612,7 @@ const trace = []
 
 phase('Execute')
 while (
+  !verifyOnly && // EH-PORT-20: verifyOnly never re-ports; it falls straight through to Verify-equivalence
   active > 0 &&
   stall < STALL_CAP &&
   iter < maxIterations &&
@@ -685,8 +763,9 @@ if (verifyEquivalence) {
 
 // Computed AFTER verify-equivalence so it reflects the post-reopen `active` (a reopened card means the
 // board is no longer "cleared"). Used by write-back and the final return.
-const stopReason =
-  active <= 0
+const stopReason = verifyOnly
+  ? 'verify-only'
+  : active <= 0
     ? 'board cleared'
     : stall >= STALL_CAP
     ? 'stalled (no progress)'
@@ -718,9 +797,10 @@ return {
   board,
   project,
   cardsSeeded,
-  resumed: resume,
+  resumed: resume && !verifyOnly, // verifyOnly takes precedence over resume; it ports nothing
+  verifyOnly,
   planReady: gate?.ready ?? null,
-  executed: true,
+  executed: execute && !verifyOnly, // verifyOnly ran no port work; it only verified existing done cards
   portMode: PORT_MODE,
   grounding: grounding || undefined,
   iterations: iter,
