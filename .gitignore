@@ -187,3 +187,6 @@ CLAUDE.local.md
 
 # st (syntext) local index cache
 .syntext/
+
+# playwright-mcp scratch output (console logs, page snapshots)
+.playwright-mcp/
