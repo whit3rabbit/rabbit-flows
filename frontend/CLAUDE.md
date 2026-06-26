@@ -7,14 +7,23 @@ reads real workflow files from `.claude/workflows/` and can validate generated c
 
 ## Architecture
 
-- **SPA** (`flow.html` + `flow-canvas.js`): React + ReactFlow served locally from
-  `frontend/vendor/` (no CDN, no build step). Mounted as a `<flow-canvas>` custom element. Workflow library persists in
-  localStorage; manager modal supports new/rename/duplicate/delete + JSON import/export.
-- **Backend** (`server.js`): stdlib `http` server (no npm deps). Serves static files
-  from `frontend/` and exposes a JSON API for workflow CRUD and validation.
-- **Parser** (`parser.js`): best-effort AST-to-graph parser. Extracts `agent`/`parallel`/
-  `pipeline`/`phase` calls from workflow `.js` sources and maps them to canvas nodes.
-  See "Parse limitations" below.
+- **SPA** (`flow.html` + `src/*.js`): React + ReactFlow served locally from `frontend/vendor/`
+  (no CDN). Source is native ES modules under `src/`; the entry is `src/main.js`, mounted as a
+  `<flow-canvas>` custom element. Workflow library persists in localStorage; manager modal
+  supports new/rename/duplicate/delete + JSON import/export. **Build:** Vite (a devDependency)
+  bundles to `dist/` for standalone static hosting; in dev and Docker the server serves `src/`
+  directly, so no build is required to run.
+- **Backend** (`server.js` + `src/server/*.js`): stdlib `http` server, **zero runtime deps**.
+  `server.js` is the request dispatcher + listen; `src/server/` holds the pieces — `config.js`
+  (paths/env), `http-util.js` (transport: MIME, JSON, capped body reader), `security.js`
+  (name sanitisation + loopback/token auth), `handlers.js` (the route handlers). Serves static
+  files from `frontend/` and exposes a JSON API for workflow CRUD and validation.
+- **Parser** (`parser.js` + `src/parser/*.js`): best-effort source-to-graph parser. `parser.js`
+  is the public entry — loaded in the browser via `import('/parser.js')` and in Node by
+  `test-parser.mjs`. `src/parser/` holds `scan.js` (string-literal-aware helpers), `meta.js`
+  (the `export const meta` block), `calls.js` (the `agent`/`parallel`/`pipeline`/`phase` scan).
+  Extracts those calls from workflow `.js` sources and maps them to canvas nodes. See "Parse
+  limitations" below.
 
 ## API surface
 
@@ -33,19 +42,54 @@ are loopback-open but require an `Authorization: Bearer $RFD_TOKEN` header from 
 peer; if `RFD_TOKEN` is unset, remote mutations are refused. The SPA reads its token from
 `localStorage['rfd_token']`. Keep it loopback-only unless you set `RFD_TOKEN`.
 
+**Same-origin only.** Responses carry NO `Access-Control-Allow-Origin`, and there is no CORS
+preflight handler — the SPA is served from the same origin as the API, so it needs neither. This
+keeps a cross-origin page from reading workflow source / the skill catalog / the server's own
+files. On top of loopback/token auth, mutations also enforce an **Origin check** (`originAllowed`
+in `security.js`): a request whose `Origin` is a different site is refused (403), closing the
+CSRF-to-loopback hole — loopback trust alone is insufficient because the victim's own browser
+connects from loopback. Non-browser clients (curl/node) send no `Origin` and are allowed (they
+still face loopback/token). Do NOT re-add `Access-Control-Allow-Origin` or a permissive OPTIONS
+handler without restoring an Origin allowlist on the mutating routes.
+
 ## Files
 
-- `flow-canvas.js` — the runnable SPA. Vendored React + ReactFlow (`vendor/`), no build.
-- `vendor/` — pinned React 18.3.1, ReactDOM 18.3.1, ReactFlow 11.11.4 (UMD + CSS), served by `server.js`. Committed on purpose; re-download to upgrade.
-- `flow.html` — minimal host page. Open this to use the app.
-- `server.js` — stdlib HTTP server (Node 20+). No `node_modules` needed.
-- `parser.js` — best-effort workflow-JS-to-graph parser (see parse limitations).
-- `package.json` — records Node version constraint only; no runtime deps.
+- `flow.html` — minimal host page; loads `src/main.js`. Open this to use the app.
+- `src/` — browser SPA ES modules. `main.js` (boot), `canvas.js` (shell state/layout), plus
+  `toolbar`/`palette`/`inspector`/`manager`/`codepanel`/`flowpane` (UI), `nodes`/`graph`/`visual`
+  (rendering), `api` (backend calls), `library` (localStorage), `codegen` (graph→code).
+  - `src/parser/` — parser internals: `scan.js`, `meta.js`, `calls.js` (entry is `../parser.js`).
+  - `src/server/` — Node server internals: `config.js`, `http-util.js`, `security.js`, `handlers.js`.
+- `parser.js` — public parser entry (browser + Node); thin facade over `src/parser/`.
+- `server.js` — stdlib HTTP server entry (Node 18+): dispatcher + listen over `src/server/`.
+- `vendor/` — pinned React 18.3.1, ReactDOM 18.3.1, ReactFlow 11.11.4 (UMD + CSS), served by
+  `server.js`. Committed on purpose; re-download to upgrade. Not bundled by Vite.
+- `package.json` — Node engine + the `start`/`build`/`lint`/`test` scripts; **devDependencies only**
+  (Vite + ESLint). The server and parser import zero runtime deps.
+- `vite.config.js` / `eslint.config.js` — build + lint config. ESLint splits browser (`src/**`,
+  minus `src/server/`) from Node (`server.js`, `src/server/**`, `parser.js`, tests, configs).
 - `test-parser.mjs` — `parser.js` self-checks. Run: `node frontend/test-parser.mjs` (exits 0/1).
 - `Dockerfile` — builds the server image with python3 for `/api/validate`.
 - `docker-compose.yml` — convenience compose wrapper (mounts `.claude/` read-only).
-- `index.html` — older DCLogic mockup. Needs `support.js` (absent). Do not use; the server
-  serves `flow.html` at `/`, not this file.
+- Every source file is kept under 400 lines (tests may exceed); split a module rather than grow it.
+
+## Build / test / lint (npm or pnpm)
+
+Scripts are package-manager-agnostic — every command works under both `npm run …` and `pnpm …`
+(all deps are explicit devDependencies, so pnpm's strict `node_modules` is fine). No lockfile is
+committed; add one (`package-lock.json` OR `pnpm-lock.yaml`, not both) if you want pinned installs.
+
+```bash
+cd frontend
+npm install        # or: pnpm install
+npm run build      # or: pnpm build   — vite build → dist/
+npm run lint       # or: pnpm lint    — eslint .
+npm test           # or: pnpm test    — node test-parser.mjs (27 assertions)
+npm start          # or: pnpm start   — node server.js
+```
+
+Running the app needs NO install or build (the server serves `src/` directly); install is only
+for `build`/`lint`. Verified clean under both managers after the modular refactor.
 
 ## Run locally
 

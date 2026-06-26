@@ -159,6 +159,7 @@ durable knowledge, append it to that file (one per workflow), and add a pointer 
 | `docs-from-code` / `docs-create` / `docs-migrate` / docs factory | `docs/docs-from-code-workflow-log.md` |
 | `scaffold` / `new-project` | `docs/scaffold-workflow-log.md` |
 | `eatahorse` / `eatahorse-research` / `eatahorse.py` / port pipeline | `docs/eatahorse-workflow-log.md` |
+| `frontend/` Visual Workflow Designer (server, parser, codegen) | `docs/frontend-designer-workflow-log.md` + `frontend/CLAUDE.md` |
 
 Workflow OUTPUT can be sensitive: a `security-audit` run writes a vulnerability inventory to
 `.security-audit/` — gitignored here, and the workflow ensures gitignore in any target repo. Do not

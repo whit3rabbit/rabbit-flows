@@ -1,0 +1,407 @@
+// canvas.js — Shell React component: application state and layout.
+// Delegates rendering to toolbar/palette/inspector/manager/codepanel/flowpane modules.
+
+import { SANS, MONO, DIMS } from './visual.js';
+import { edgeStyle, toRFNodes, toRFEdges } from './graph.js';
+import { genCode }                          from './codegen.js';
+import { seedLib, loadLib, persistLib, wfUid, countKinds } from './library.js';
+import { fetchWorkflowList, fetchWorkflowSource, saveWorkflow, validateSource, fetchSkillCatalog } from './api.js';
+import { buildInspector }    from './inspector.js';
+import { buildManagerOverlay } from './manager.js';
+import { buildCodePanel }     from './codepanel.js';
+import { buildPalette }       from './palette.js';
+import { buildToolbar }       from './toolbar.js';
+import { buildFlowPane }      from './flowpane.js';
+
+let React, h, RF, addEdge, ReactFlowProvider,
+    useNodesState, useEdgesState, useReactFlow, MarkerType;
+
+export function initCanvas(ReactIn, RFIn) {
+  React = ReactIn; RF = RFIn; h = React.createElement;
+  ({ addEdge, ReactFlowProvider, useNodesState, useEdgesState, useReactFlow, MarkerType } = RF);
+}
+
+let UID = 1000;
+
+export function Shell() {
+  const rf = useReactFlow();
+  const wrapRef = React.useRef(null);
+  const initLib  = React.useMemo(loadLib, []);
+  const [library,      setLibrary]      = React.useState(initLib);
+  const [activeId,     setActiveId]     = React.useState(initLib[0].id);
+  const [nodes,        setNodes,        onNodesChange] = useNodesState(initLib[0].nodes);
+  const [edges,        setEdges,        onEdgesChange] = useEdgesState(initLib[0].edges);
+  const [selId,        setSelId]        = React.useState(null);
+  const [codeOpen,     setCodeOpen]     = React.useState(false);
+  const [managerOpen,  setManagerOpen]  = React.useState(false);
+  const [renaming,     setRenaming]     = React.useState(null);
+  const [toast,        setToast]        = React.useState(null);
+  const toastT = React.useRef(null);
+  // validateResult: null | { ok: bool, output: string } | { pending: true }
+  const [validateResult, setValidateResult] = React.useState(null);
+  // repoWorkflows: null = not loaded yet; [] = server down or empty
+  const [repoWorkflows,  setRepoWorkflows]  = React.useState(null);
+  const [lossyCount,     setLossyCount]     = React.useState(null);
+  const [repoLoading,    setRepoLoading]    = React.useState(null);
+  const [skillCatalog,   setSkillCatalog]   = React.useState([]);
+
+  // ── mount effects ──────────────────────────────────────────────────────
+  React.useEffect(() => { fetchWorkflowList().then(setRepoWorkflows); }, []);
+  React.useEffect(() => { fetchSkillCatalog().then(setSkillCatalog); }, []);
+
+  // ── viewport helpers ───────────────────────────────────────────────────
+  const myFit = React.useCallback(() => {
+    const pane = wrapRef.current;
+    if (!pane) return false;
+    window.dispatchEvent(new Event('resize'));
+    const ns = rf.getNodes().filter((n) => n.width);
+    if (!ns.length) return false;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    ns.forEach((n) => {
+      const w = n.width, hh = n.height || 60;
+      x0 = Math.min(x0, n.position.x); y0 = Math.min(y0, n.position.y);
+      x1 = Math.max(x1, n.position.x + w); y1 = Math.max(y1, n.position.y + hh);
+    });
+    const cw = pane.clientWidth, ch = pane.clientHeight, bw = x1 - x0, bh = y1 - y0;
+    const z = Math.max(0.2, Math.min((cw * 0.86) / bw, (ch * 0.86) / bh, 1.5));
+    rf.setViewport({ x: (cw - bw * z) / 2 - x0 * z, y: (ch - bh * z) / 2 - y0 * z, zoom: z });
+    return true;
+  }, [rf]);
+
+  const zoomBy = React.useCallback((f) => {
+    const pane = wrapRef.current; if (!pane) return;
+    window.dispatchEvent(new Event('resize'));
+    const vp = rf.getViewport();
+    const z2 = Math.max(0.2, Math.min(1.8, vp.zoom * f));
+    const cx = pane.clientWidth / 2, cy = pane.clientHeight / 2;
+    const wx = (cx - vp.x) / vp.zoom, wy = (cy - vp.y) / vp.zoom;
+    rf.setViewport({ x: cx - wx * z2, y: cy - wy * z2, zoom: z2 });
+  }, [rf]);
+
+  const fitBusy = React.useRef(false);
+  const fitRetry = React.useCallback(() => {
+    if (fitBusy.current) return;
+    fitBusy.current = true;
+    let tries = 0;
+    const t = () => {
+      tries++;
+      const before = JSON.stringify(rf.getViewport());
+      myFit();
+      if (JSON.stringify(rf.getViewport()) !== before) { fitBusy.current = false; return; }
+      if (tries < 40) setTimeout(t, 90); else fitBusy.current = false;
+    };
+    setTimeout(t, 80);
+  }, [rf, myFit]);
+
+  React.useEffect(() => { fitRetry(); }, []);
+
+  // Persistent measure loop: RF's ResizeObserver doesn't fire in this embedded context.
+  const idSig = nodes.map((n) => n.id).join('|');
+  React.useEffect(() => {
+    let idle = 0;
+    const stamp = () => {
+      const root = wrapRef.current && wrapRef.current.querySelector('.react-flow');
+      if (!root) return;
+      const z = rf.getViewport().zoom || 1;
+      const upd = {};
+      rf.getNodes().forEach((n) => {
+        if (n.width != null) return;
+        const el = root.querySelector('.react-flow__node[data-id="' + n.id + '"]');
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        if (r.width) upd[n.id] = [Math.round(r.width / z), Math.round(r.height / z)];
+      });
+      if (Object.keys(upd).length) {
+        idle = 0;
+        setNodes((nds) => nds.map((n) => upd[n.id] ? Object.assign({}, n, { width: upd[n.id][0], height: upd[n.id][1] }) : n));
+        return;
+      }
+      if (rf.getNodes().every((n) => n.width != null) && ++idle > 2) clearInterval(iv);
+    };
+    const iv = setInterval(stamp, 150);
+    return () => clearInterval(iv);
+  }, [idSig]);
+
+  const showToast = (m) => { clearTimeout(toastT.current); setToast(m); toastT.current = setTimeout(() => setToast(null), 2600); };
+
+  // ── library operations ─────────────────────────────────────────────────
+  const saveInto = (lib) => lib.map((w) => w.id === activeId ? Object.assign({}, w, { nodes, edges }) : w);
+
+  const openWorkflow = (id) => {
+    if (id === activeId) { setManagerOpen(false); return; }
+    const lib2 = saveInto(library), w = lib2.find((x) => x.id === id);
+    setLibrary(lib2); persistLib(lib2);
+    if (w) { setNodes(w.nodes); setEdges(w.edges); setActiveId(id); }
+    setSelId(null); setManagerOpen(false); fitRetry(); setLossyCount(null);
+  };
+
+  const newWorkflow = () => {
+    const lib2 = saveInto(library), id = wfUid();
+    const trig = { id: 'trigger', type: 'trigger', position: { x: 360, y: 60 }, zIndex: 1, draggable: true, connectable: true, selectable: true, style: { width: DIMS.trigger[0], height: DIMS.trigger[1] }, data: { kind: 'trigger', label: '/new-workflow', detail: 'slash command', model: null, schema: null, phase: null, body: null } };
+    const w = { id, name: 'Untitled workflow', desc: 'A new workflow — drag blocks from the palette to build it out.', nodes: [trig], edges: [] };
+    const nl = lib2.concat([w]); setLibrary(nl); persistLib(nl);
+    setNodes(w.nodes); setEdges(w.edges); setActiveId(id); setSelId(null); setManagerOpen(false); fitRetry();
+  };
+
+  const duplicateWorkflow = (id) => {
+    const base = id === activeId ? saveInto(library) : library;
+    const src = base.find((w) => w.id === id); if (!src) return;
+    const copy = { id: wfUid(), name: src.name + ' copy', desc: src.desc, nodes: JSON.parse(JSON.stringify(src.nodes)), edges: JSON.parse(JSON.stringify(src.edges)) };
+    const nl = base.concat([copy]); setLibrary(nl); persistLib(nl);
+  };
+
+  const deleteWorkflow = (id) => {
+    const nl = library.filter((w) => w.id !== id);
+    const finalLib = nl.length ? nl : seedLib();
+    setLibrary(finalLib); persistLib(finalLib);
+    if (id === activeId) { const w = finalLib[0]; setNodes(w.nodes); setEdges(w.edges); setActiveId(w.id); setSelId(null); fitRetry(); }
+  };
+
+  const commitRename = () => {
+    if (!renaming) return;
+    const { id, value } = renaming;
+    const nl = library.map((w) => w.id === id ? Object.assign({}, w, { name: (value || '').trim() || w.name }) : w);
+    setLibrary(nl); persistLib(nl); setRenaming(null);
+  };
+
+  const exportActive = () => {
+    const w = saveInto(library).find((x) => x.id === activeId); if (!w) return;
+    const blob = new Blob([JSON.stringify({ name: w.name, desc: w.desc, nodes: w.nodes, edges: w.edges }, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = (w.name || 'workflow').replace(/[^a-z0-9]+/gi, '-').toLowerCase() + '.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  };
+
+  const fileRef = React.useRef(null);
+  const importFile = (e) => {
+    const f = e.target.files && e.target.files[0]; if (!f) return;
+    const r = new FileReader();
+    r.onload = () => {
+      try {
+        const o = JSON.parse(r.result), id = wfUid();
+        const VALID_KINDS = new Set(['trigger', 'knob', 'agent', 'gate', 'parallel', 'loop', 'phase', 'skill', 'lossy']);
+        const rawNodes = Array.isArray(o.nodes) ? o.nodes : [];
+        // Coerce ids to strings and drop duplicates so a hand-authored/foreign file can't make
+        // two nodes share an id (breaks selection/deletion). Edges match on the string id set.
+        const ids = new Set();
+        const okNodes = rawNodes
+          .filter((n) => n && n.id != null && n.position && n.data && VALID_KINDS.has(n.data.kind))
+          .map((n) => Object.assign({}, n, { id: String(n.id) }))
+          .filter((n) => !ids.has(n.id) && ids.add(n.id));
+        const okEdges = (Array.isArray(o.edges) ? o.edges : [])
+          .filter((e) => e && ids.has(String(e.source)) && ids.has(String(e.target)))
+          .map((e) => Object.assign({}, e, { source: String(e.source), target: String(e.target) }));
+        const w = { id, name: o.name || f.name.replace(/\.json$/i, '') || 'Imported', desc: o.desc || 'Imported workflow.', nodes: okNodes, edges: okEdges };
+        const nl = saveInto(library).concat([w]); setLibrary(nl); persistLib(nl);
+        setNodes(w.nodes); setEdges(w.edges); setActiveId(id); setSelId(null); setManagerOpen(false); fitRetry();
+        const dropped = rawNodes.length - okNodes.length;
+        showToast('Imported "' + w.name + '"' + (dropped > 0 ? ' (' + dropped + ' malformed node(s) skipped)' : ''));
+      } catch (_) { showToast('Import failed — invalid JSON'); }
+    };
+    r.onerror = () => showToast('Import failed — could not read file');
+    r.readAsText(f); e.target.value = '';
+  };
+
+  const resetLibrary = () => {
+    const nl = seedLib(); setLibrary(nl); persistLib(nl);
+    const w = nl[0]; setNodes(w.nodes); setEdges(w.edges); setActiveId(w.id);
+    setSelId(null); setManagerOpen(false); fitRetry(); showToast('Library reset');
+  };
+
+  // ── repo operations ────────────────────────────────────────────────────
+  const loadRepoWorkflow = async (name) => {
+    setRepoLoading(name);
+    try {
+      const { source } = await fetchWorkflowSource(name);
+      const parser = await import('/parser.js');
+      const { meta, nodes: pNodes, edges: pEdges, lossy } = parser.parseWorkflow(source);
+      const metaName = meta.name || name.replace(/\.js$/, '');
+      const metaDesc = meta.description || 'Loaded from repo.';
+      const lossyNodes = lossy.map((l, i) => {
+        const last = pNodes[pNodes.length - 1];
+        const baseY = last ? last.y + (last.h || 84) + 40 + i * 80 : 200 + i * 80;
+        return { id: '__lossy_' + i, kind: 'lossy', label: 'line ' + l.line + ': ' + l.reason, model: null, schema: null, phase: null, detail: null, body: null, x: (last ? last.x : 353), y: baseY, w: 280, h: 60 };
+      });
+      const internalGraph = { metaName, metaDesc, nodes: pNodes.concat(lossyNodes), edges: pEdges };
+      const wf = { id: name, name: metaName, desc: metaDesc, nodes: toRFNodes(internalGraph), edges: toRFEdges(internalGraph) };
+      const lib2 = saveInto(library);
+      const existing = lib2.findIndex((w) => w.id === name);
+      const nl = existing >= 0 ? lib2.map((w, i) => i === existing ? wf : w) : lib2.concat([wf]);
+      setLibrary(nl); persistLib(nl);
+      setNodes(wf.nodes); setEdges(wf.edges); setActiveId(wf.id);
+      setSelId(null); setManagerOpen(false); fitRetry();
+      setLossyCount(lossy.length);
+      if (lossy.length) showToast(lossy.length + ' section(s) could not be parsed (see banner)');
+      else showToast('Loaded "' + metaName + '" from repo');
+    } catch (err) {
+      showToast('Load failed: ' + err.message);
+    } finally {
+      setRepoLoading(null);
+    }
+  };
+
+  const active = library.find((w) => w.id === activeId) || library[0];
+  const g = { metaName: active.name, metaDesc: active.desc };
+  const catalogNamesList = skillCatalog.map((s) => s.name);
+
+  const saveToRepo = async () => {
+    const src  = genCode(nodes, edges, g.metaName, g.metaDesc, catalogNamesList);
+    const slug = (g.metaName || 'workflow').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'workflow';
+    const fname = window.prompt('Save generated workflow to .claude/workflows/', slug + '.js');
+    if (!fname) return;
+    try {
+      let { data, status } = await saveWorkflow(fname, src, false);
+      if (status === 409) {
+        if (!window.confirm(fname + ' already exists. Overwrite it? (the regenerated code is lossy)')) return;
+        ({ data } = await saveWorkflow(fname, src, true));
+      }
+      showToast(data.ok ? 'Saved → .claude/workflows/' + fname : 'Save failed: ' + (data.error || status));
+    } catch (err) {
+      showToast('Save failed: ' + err.message + ' (is the server running?)');
+    }
+  };
+
+  const runValidate = async () => {
+    const src = genCode(nodes, edges, g.metaName, g.metaDesc, catalogNamesList);
+    setValidateResult({ pending: true });
+    try {
+      const data = await validateSource(src);
+      setValidateResult({ ok: data.ok, output: data.output || '' });
+    } catch (err) {
+      setValidateResult({ ok: false, output: 'Network error: ' + err.message + '\n(Is the server running? node frontend/server.js)' });
+    }
+  };
+
+  // ── canvas event handlers ──────────────────────────────────────────────
+  const onConnect = React.useCallback((params) => {
+    setEdges((eds) => addEdge(Object.assign({}, params, { type: 'default', animated: true, style: edgeStyle('flow'), markerEnd: { type: MarkerType.ArrowClosed, color: '#5b6675', width: 15, height: 15 }, data: { kind: 'flow' } }), eds));
+  }, [setEdges]);
+
+  const onNodeClick = React.useCallback((_, n) => setSelId(n.id), []);
+  const onPaneClick = React.useCallback(() => setSelId(null), []);
+
+  const patchData = (id, patch) =>
+    setNodes((nds) => nds.map((n) => n.id === id ? Object.assign({}, n, { data: Object.assign({}, n.data, patch) }) : n));
+
+  const delNode = (id) => {
+    setNodes((nds) => nds.filter((n) => n.id !== id));
+    setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
+    setSelId(null);
+  };
+
+  const onDragOver = (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+  const onDrop = (e) => {
+    e.preventDefault();
+    const kind = e.dataTransfer.getData('application/flowkind');
+    if (!kind || !wrapRef.current) return;
+    const b   = wrapRef.current.getBoundingClientRect();
+    const pos = rf.project({ x: e.clientX - b.left, y: e.clientY - b.top });
+    const dim = DIMS[kind] || [234, 84];
+    // Time-stamped suffix so a dropped node can't collide with ids carried in from an imported
+    // or repo-loaded workflow (which may already use 'n1000'-style ids). UID keeps it unique
+    // within the same millisecond.
+    const id  = 'n' + Date.now().toString(36) + (UID++);
+    const defs = { agent: { label: 'New agent', model: 'sonnet', schema: 'OUTPUT_SCHEMA', detail: 'describe the step' }, gate: { label: 'New gate', model: 'opus', schema: 'GATE_SCHEMA', detail: 'admission decision' }, parallel: { label: 'Parallel group' }, loop: { label: 'Loop' }, phase: { label: 'Phase' }, skill: { label: 'new-skill', detail: 'requires-skills · CLI' }, knob: { label: 'Knob', body: 'arg: default' } }[kind] || {};
+    const isC = kind === 'loop' || kind === 'parallel';
+    const node = { id, type: kind, position: { x: Math.round(pos.x - dim[0] / 2), y: Math.round(pos.y - dim[1] / 2) }, zIndex: isC ? 0 : 1, draggable: true, connectable: !isC, selectable: true, style: { width: dim[0], height: dim[1] }, data: Object.assign({ kind, label: '', model: null, schema: null, phase: null, detail: null, body: null }, defs) };
+    setNodes((nds) => nds.concat(node));
+    setSelId(id);
+  };
+
+  React.useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selId) { e.preventDefault(); delNode(selId); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selId]);
+
+  // local graph validation (stats + cycle check — does NOT call the server)
+  const validate = () => {
+    const { agents: ag, gates: ga } = countKinds(nodes);
+    const adj = {};
+    edges.forEach((e) => { (adj[e.source] = adj[e.source] || []).push(e.target); });
+    const state = {}; let cyclic = false;
+    const dfs = (id) => { state[id] = 1; for (const nx of (adj[id] || [])) { if (state[nx] === 1) { cyclic = true; return; } if (!state[nx]) { dfs(nx); if (cyclic) return; } } state[id] = 2; };
+    for (const n of nodes) { if (!state[n.id]) dfs(n.id); if (cyclic) break; }
+    showToast(ag + ' agents · ' + ga + ' gates · ' + edges.length + ' edges — graph ' + (cyclic ? 'has a CYCLE' : 'is acyclic'));
+  };
+
+  // ── rendered sections ──────────────────────────────────────────────────
+  const sel = selId ? nodes.find((n) => n.id === selId) : null;
+
+  // Toolbar — delegates to toolbar.js
+  const toolbar = buildToolbar({
+    activeName: active.name,
+    onOpenMgr:  () => setManagerOpen(true),
+    onFit:      () => myFit(),
+    onValidate: validate,
+    onZoomIn:   () => zoomBy(1.18),
+    onZoomOut:  () => zoomBy(1 / 1.18),
+    onGenCode:  () => { setValidateResult(null); setCodeOpen(true); },
+  });
+
+  // Palette — delegates to palette.js
+  const palette = buildPalette({ skillCount: skillCatalog.length });
+
+  // Inspector (right sidebar) — delegates to inspector.js
+  const inspectorContent = buildInspector({ sel, nodes, edges, skillCatalog, g, patchData, delNode });
+  const inspectorAside = h('aside', { style: { width: 294, flex: '0 0 294px', background: '#0e1219', borderLeft: '1px solid #1d2530', overflowY: 'auto', zIndex: 20, fontFamily: SANS } }, inspectorContent);
+
+  // Canvas pane — delegates to flowpane.js
+  const flow = buildFlowPane({ wrapRef, nodes, edges, onNodesChange, onEdgesChange, onConnect, onNodeClick, onPaneClick, onDragOver, onDrop, nodeTypes: _nodeTypes, lossyCount });
+
+  // Status bar
+  const status = h('div', { style: { height: 30, flex: '0 0 30px', display: 'flex', alignItems: 'center', gap: 16, padding: '0 14px', background: '#0c1016', borderTop: '1px solid #1d2530', fontSize: 11, color: '#6b7686', fontFamily: MONO, zIndex: 25 } },
+    h('div', null, g.metaName + '  ·  ' + nodes.filter((n) => !['loop', 'parallel'].includes(n.data.kind)).length + ' nodes  ·  ' + nodes.filter((n) => n.data.kind === 'gate').length + ' gates  ·  ' + edges.length + ' edges'),
+    h('div', { style: { flex: 1 } }),
+    h('div', null, 'scroll to zoom · drag canvas to pan · drag handle to connect'));
+
+  // Overlays (toast, code modal, manager modal)
+  const overlays = [];
+  if (toast) overlays.push(h('div', { key: 'toast', style: { position: 'absolute', bottom: 46, left: '50%', transform: 'translateX(-50%)', background: '#11161e', border: '1px solid #243b30', color: '#bfe9d4', padding: '9px 16px', borderRadius: 9, fontSize: 12, display: 'flex', alignItems: 'center', gap: 9, boxShadow: '0 8px 26px rgba(0,0,0,.5)', zIndex: 60, fontFamily: SANS } }, h('span', { style: { color: '#2dd4bf', fontSize: 14 } }, '✓'), toast));
+
+  // Code panel modal — delegates to codepanel.js
+  const closeCode = () => { setCodeOpen(false); setValidateResult(null); };
+  const codePanel = buildCodePanel({
+    codeOpen,
+    code: codeOpen ? genCode(nodes, edges, g.metaName, g.metaDesc, catalogNamesList) : '',
+    validateResult,
+    metaName: g.metaName,
+    onClose:    closeCode,
+    onValidate: () => { setValidateResult(null); runValidate(); },
+    onSave:     saveToRepo,
+  });
+  if (codePanel) overlays.push(codePanel);
+
+  // Manager modal — delegates to manager.js
+  const mgr = buildManagerOverlay({
+    managerOpen, library, activeId, renaming, repoWorkflows, repoLoading,
+    onClose:        () => { commitRename(); setManagerOpen(false); },
+    onOpen:         openWorkflow,
+    onNew:          newWorkflow,
+    onRename:       setRenaming,
+    onCommitRename: commitRename,
+    onDuplicate:    duplicateWorkflow,
+    onDelete:       deleteWorkflow,
+    onImportClick:  () => fileRef.current && fileRef.current.click(),
+    onExportActive: exportActive,
+    onResetLibrary: resetLibrary,
+    onLoadRepo:     loadRepoWorkflow,
+  });
+  if (mgr) overlays.push(mgr);
+
+  return h('div', { style: { position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', background: '#0b0e13', color: '#cdd6e2', fontFamily: SANS, fontSize: 13, overflow: 'hidden' } },
+    toolbar,
+    h('div', { style: { flex: 1, display: 'flex', minHeight: 0 } }, palette, flow, inspectorAside),
+    status, overlays,
+    h('input', { ref: fileRef, type: 'file', accept: 'application/json,.json', onChange: importFile, style: { display: 'none' } }));
+}
+
+let _nodeTypes = {};
+export function setNodeTypes(nt) { _nodeTypes = nt; }
+
+export function App() { return h(ReactFlowProvider, null, h(Shell)); }

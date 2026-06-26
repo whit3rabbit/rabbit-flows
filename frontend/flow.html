@@ -1,8 +1,7 @@
 <!DOCTYPE html>
-<!-- Minimal host for flow-canvas.js (the runnable React Flow app).
-     index.html is the older DCLogic-template mockup and needs support.js (absent) — don't use it to view.
-     Serve from this dir (custom element + CDN scripts want http, not file://):
-       python3 -m http.server 8000   →   http://localhost:8000/flow.html -->
+<!-- Rabbit Flow Designer — SPA host page.
+     In development: node frontend/server.js → http://localhost:3001/
+     In production:  vite build → dist/; node server.js serves dist/ -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -15,6 +14,6 @@
 </head>
 <body>
 <flow-canvas></flow-canvas>
-<script src="./flow-canvas.js"></script>
+<script type="module" src="./src/main.js"></script>
 </body>
 </html>
