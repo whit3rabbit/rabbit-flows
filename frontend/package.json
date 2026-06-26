@@ -1,0 +1,12 @@
+{
+  "name": "rabbit-flow-designer",
+  "version": "0.1.0",
+  "description": "Visual node editor for rabbit-flows workflows",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
