@@ -30,8 +30,10 @@
 //   budgetFloor    stop opening rounds below this many remaining tokens (default 50000)
 //   workerModel    model for the per-unit port agents (default "sonnet")
 //
-// requires-skills: eatahorse
-//   (Bundling only. Workflow stages don't auto-load skills; the CLI surface is distilled INLINE below as
+// requires-skills: eatahorse, eatahorse-port
+//   (eatahorse-port is the conversational FRONT DOOR — it runs AskUserQuestion then launches this
+//    workflow with a clean args object; bundled only, not loaded at runtime. eatahorse:
+//    Workflow stages don't auto-load skills; the CLI surface is distilled INLINE below as
 //    CMD/cli() — a FOURTH hand-synced copy alongside eatahorse.js / eatahorse-research.js / docs-from-code.js.
 //    Mirror it when an eatahorse.py subcommand changes. See plugins/workflow-kit/skills/eatahorse/CLAUDE.md.)
 // Run with /workflows or copy via `npx @whit3rabbit/rabbit-flows`.
@@ -58,22 +60,38 @@ const ROUND_SCHEMA = {
   },
 }
 
-const root = args?.root ?? ''
-const targetLang = args?.targetLang ?? ''
-const targetDir = args?.targetDir ?? ''
+// args may arrive as a stringified object on some launch paths (named launch / GLM harness);
+// the docs claim verbatim JSON but stringified JSON can reach the script (WORKFLOW_ANALYSIS.md
+// "Documentation Gaps"). Normalize so a `'{"root":...}'` blob doesn't read every field as undefined
+// and bail. Same guard as docs-migrate.js / docs-scrape.js.
+let _args = args
+if (typeof _args === 'string') {
+  const t = _args.trim()
+  if (t.startsWith('{') || t.startsWith('[')) { try { _args = JSON.parse(t) } catch {} }
+}
+const root = _args?.root ?? ''
+const targetLang = _args?.targetLang ?? ''
+const targetDir = _args?.targetDir ?? ''
 if (!root || !targetLang || !targetDir)
-  return { error: 'root, targetLang, and targetDir are required', written: false }
+  return {
+    error:
+      'root, targetLang, and targetDir are required. Pass args as a JSON OBJECT, e.g. ' +
+      'args: { root: "bs4", targetLang: "rust", targetDir: "rust-port" } — not a comma string ' +
+      'and not a JSON-stringified object.',
+    got: { root, targetLang, targetDir },
+    written: false,
+  }
 
-const board = args?.board ?? '.eatahorse-port'
-const researchBoard = args?.researchBoard ?? '.eatahorse-comprehend'
-const inventory = args?.inventory ?? root.replace(/\/+$/, '') + '.inventory.json'
-const question = args?.question ?? `Comprehend every file as a unit to port to ${targetLang}: its public API surface, intra-repo dependencies, and behavior.`
-const testCmd = args?.testCmd ?? ''
-const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
-const maxRounds = Math.min(args?.maxRounds ?? 60, 200)
-const maxTokens = args?.maxTokens ?? null
-const budgetFloor = args?.budgetFloor ?? 50_000
-const workerModel = args?.workerModel ?? 'sonnet'
+const board = _args?.board ?? '.eatahorse-port'
+const researchBoard = _args?.researchBoard ?? '.eatahorse-comprehend'
+const inventory = _args?.inventory ?? root.replace(/\/+$/, '') + '.inventory.json'
+const question = _args?.question ?? `Comprehend every file as a unit to port to ${targetLang}: its public API surface, intra-repo dependencies, and behavior.`
+const testCmd = _args?.testCmd ?? ''
+const scriptPath = _args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'
+const maxRounds = Math.min(_args?.maxRounds ?? 60, 200)
+const maxTokens = _args?.maxTokens ?? null
+const budgetFloor = _args?.budgetFloor ?? 50_000
+const workerModel = _args?.workerModel ?? 'sonnet'
 
 // Inline CLI contract (FOURTH copy — see header). Sliced per agent.
 const CLI_HEAD = (b) =>

@@ -47,7 +47,7 @@
       "name": "eatahorse-port-pipeline",
       "file": ".claude/workflows/eatahorse-port-pipeline.js",
       "description": "Pipeline a code port: comprehend a source tree and concurrently start porting each unit as soon as its comprehension lands and its dependencies are ported.",
-      "skills": ["eatahorse"],
+      "skills": ["eatahorse", "eatahorse-port"],
       "agents": []
     },
     {

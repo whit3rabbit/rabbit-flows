@@ -8,7 +8,8 @@
     "eatahorse",
     "eatahorse-research",
     "docs-from-code",
-    "docs-migrate"
+    "docs-migrate",
+    "eatahorse-port-pipeline"
   ],
   "files": {
     "skills/secure-review": {
@@ -49,6 +50,11 @@
     "skills/document-codebase": {
       "type": "skill",
       "name": "document-codebase",
+      "backup": null
+    },
+    "skills/audit-codebase": {
+      "type": "skill",
+      "name": "audit-codebase",
       "backup": null
     }
   }
