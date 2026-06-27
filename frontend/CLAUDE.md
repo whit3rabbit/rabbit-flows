@@ -79,8 +79,10 @@ handler without restoring an Origin allowlist on the mutating routes.
   `GRAPH_JSON_SCHEMA`, and dependency-free `validateGraph()`. Full reference: `docs/flow-schema.md`.
 - `test-parser.mjs` — `parser.js` self-checks. Run: `node frontend/test-parser.mjs` (exits 0/1).
 - `test-schema.mjs` — `schema.js` self-checks: every `.claude/workflows/*.js` parses to a graph that
-  passes `validateGraph()`, plus handle-count / connection-rule / validator checks. `npm test` runs
-  all three suites (test-parser.mjs, test-schema.mjs, test-bundle.mjs).
+  passes `validateGraph()`, plus handle-count / connection-rule / validator checks.
+- `test-codegen.mjs` — `codegen.js` self-checks: guards the `genCode()` leaf->container grouping
+  (the cidById/contBounds precompute). `npm test` runs all four suites (test-parser.mjs,
+  test-schema.mjs, test-bundle.mjs, test-codegen.mjs).
 - `Dockerfile` — builds the server image with python3 for `/api/validate`.
 - `docker-compose.yml` — convenience compose wrapper (mounts `.claude/` read-only).
 - Every source file is kept under 400 lines (tests may exceed); split a module rather than grow it.
@@ -96,7 +98,7 @@ cd frontend
 npm install        # or: pnpm install
 npm run build      # or: pnpm build   — vite build → dist/
 npm run lint       # or: pnpm lint    — eslint .
-npm test           # or: pnpm test    — runs test-parser.mjs && test-schema.mjs && test-bundle.mjs
+npm test           # or: pnpm test    — runs test-parser.mjs && test-schema.mjs && test-bundle.mjs && test-codegen.mjs
 npm start          # or: pnpm start   — node server.js
 ```
 

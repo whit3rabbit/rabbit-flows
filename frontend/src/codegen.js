@@ -51,16 +51,21 @@ export function genCode(nodes, edges, metaName, metaDesc, catalogNames) {
     return [w, hh];
   };
 
+  // Container bounds + id lookup, computed once. dimOf reads stamped style or measured size,
+  // so this stops cidOf from re-running dimOf per container on every containment test.
+  const contBounds = conts.map((c) => {
+    const [cw, ch] = dimOf(c);
+    return { id: c.id, x0: c.position.x, y0: c.position.y, x1: c.position.x + cw, y1: c.position.y + ch };
+  });
+  const contById = new Map(conts.map((c) => [c.id, c]));
+
   // cidOf — a leaf is inside a container if its centre falls within the container bounds.
+  // Called once per leaf to build cidById below; the grouping loop then reads that map (O(1)).
   const cidOf = (n) => {
     const [nw, nh] = dimOf(n);
     const px = n.position.x + nw / 2, py = n.position.y + nh / 2;
-    const c = conts.find((c) => {
-      const [cw, ch] = dimOf(c);
-      return px >= c.position.x && px <= c.position.x + cw &&
-             py >= c.position.y && py <= c.position.y + ch;
-    });
-    return c ? c.id : null;
+    const b = contBounds.find((b) => px >= b.x0 && px <= b.x1 && py >= b.y0 && py <= b.y1);
+    return b ? b.id : null;
   };
 
   // Unique JS identifiers: two labels can camel-collapse to the same name -> duplicate const.
@@ -77,6 +82,10 @@ export function genCode(nodes, edges, metaName, metaDesc, catalogNames) {
     .filter((n) => n.data.kind === 'agent' || n.data.kind === 'gate')
     .slice()
     .sort((a, b) => a.position.y - b.position.y);
+
+  // Memoize each leaf's container once — the group scan below otherwise recomputes the
+  // geometric containment test for the same node on every inner-loop comparison.
+  const cidById = new Map(leaves.map((n) => [n.id, cidOf(n)]));
 
   // 1. requires-skills header
   const skillNodes = nodes.filter((n) => n.data.kind === 'skill');
@@ -132,11 +141,11 @@ export function genCode(nodes, edges, metaName, metaDesc, catalogNames) {
   };
 
   while (i < leaves.length) {
-    const n = leaves[i], cid = cidOf(n);
+    const n = leaves[i], cid = cidById.get(n.id);
     if (cid) {
-      const c = conts.find((x) => x.id === cid);
+      const c = contById.get(cid);
       const grp = [];
-      while (i < leaves.length && cidOf(leaves[i]) === cid) { grp.push(leaves[i]); i++; }
+      while (i < leaves.length && cidById.get(leaves[i].id) === cid) { grp.push(leaves[i]); i++; }
 
       const grpPhases = [];
       grp.forEach((x) => { if (x.data.phase && !grpPhases.includes(x.data.phase)) grpPhases.push(x.data.phase); });

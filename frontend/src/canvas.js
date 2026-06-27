@@ -291,7 +291,14 @@ export function Shell() {
   // Type the new edge from the connected nodes' kinds (schema.js): skill/knob sources become
   // skill/data attachments, everything else a flow edge. An impossible pair falls back to flow,
   // but isValidConnection below blocks it from being drawn in the first place.
-  const kindOf = React.useCallback((id) => (nodes.find((n) => n.id === id) || {}).data?.kind, [nodes]);
+  // Back kindOf with a ref-held Map instead of closing over [nodes], so it (and the
+  // onConnect/isValidConnection handlers below) keep a stable identity and stop churning
+  // ReactFlow's props on every node change. The ref lags one render behind a kind edit, but
+  // both handlers fire only on user connect gestures (async to render), by which time the
+  // effect has run.
+  const kindMapRef = React.useRef(new Map());
+  React.useEffect(() => { kindMapRef.current = new Map(nodes.map((n) => [n.id, n.data.kind])); }, [nodes]);
+  const kindOf = React.useCallback((id) => kindMapRef.current.get(id), []);
   const onConnect = React.useCallback((params) => {
     // edgeTypeFor only ever returns skill/data/flow (loop is never auto-assigned), so there is no
     // 'loop' case to handle here.
@@ -383,9 +390,16 @@ export function Shell() {
   // Canvas pane — delegates to flowpane.js
   const flow = buildFlowPane({ wrapRef, nodes, edges, onNodesChange, onEdgesChange, onConnect, isValidConnection, onNodeClick, onPaneClick, onDragOver, onDrop, nodeTypes: _nodeTypes, lossyCount });
 
-  // Status bar
+  // Status bar — one pass instead of two throwaway .filter() arrays per render. nodeCount is
+  // non-container nodes (not countKinds().agents, which counts agents only).
+  const { nodeCount, gateCount } = nodes.reduce((acc, n) => {
+    const k = n.data.kind;
+    if (k !== 'loop' && k !== 'parallel') acc.nodeCount++;
+    if (k === 'gate') acc.gateCount++;
+    return acc;
+  }, { nodeCount: 0, gateCount: 0 });
   const status = h('div', { style: { height: 30, flex: '0 0 30px', display: 'flex', alignItems: 'center', gap: 16, padding: '0 14px', background: '#0c1016', borderTop: '1px solid #1d2530', fontSize: 11, color: '#6b7686', fontFamily: MONO, zIndex: 25 } },
-    h('div', null, g.metaName + '  ·  ' + nodes.filter((n) => !['loop', 'parallel'].includes(n.data.kind)).length + ' nodes  ·  ' + nodes.filter((n) => n.data.kind === 'gate').length + ' gates  ·  ' + edges.length + ' edges'),
+    h('div', null, g.metaName + '  ·  ' + nodeCount + ' nodes  ·  ' + gateCount + ' gates  ·  ' + edges.length + ' edges'),
     h('div', { style: { flex: 1 } }),
     h('div', null, 'scroll to zoom · drag canvas to pan · drag handle to connect'));
 

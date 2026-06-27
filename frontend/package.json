@@ -7,7 +7,7 @@
     "start": "node server.js",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node test-parser.mjs && node test-schema.mjs && node test-bundle.mjs"
+    "test": "node test-parser.mjs && node test-schema.mjs && node test-bundle.mjs && node test-codegen.mjs"
   },
   "engines": {
     "node": ">=18"

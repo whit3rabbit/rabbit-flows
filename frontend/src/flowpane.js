@@ -5,6 +5,9 @@ import { KINDS, SANS } from './visual.js';
 
 let h, RF, Background, Controls, MiniMap;
 
+// Hoisted so it isn't reallocated on every buildFlowPane call.
+const minimapNodeColor = (n) => (KINDS[n.type] ? KINDS[n.type].color : '#888');
+
 export function initFlowPane(ReactIn, RFIn) {
   h = ReactIn.createElement;
   RF = RFIn;
@@ -31,7 +34,7 @@ export function buildFlowPane({ wrapRef, nodes, edges, onNodesChange, onEdgesCha
     },
       h(Background, { color: '#1a2230', gap: 26, size: 1.2 }),
       h(Controls,   { showInteractive: false }),
-      h(MiniMap,    { nodeColor: (n) => (KINDS[n.type] ? KINDS[n.type].color : '#888'), nodeStrokeWidth: 2, maskColor: 'rgba(8,11,16,.72)', style: { background: '#0e1219', border: '1px solid #1d2530' } })),
+      h(MiniMap,    { nodeColor: minimapNodeColor, nodeStrokeWidth: 2, maskColor: 'rgba(8,11,16,.72)', style: { background: '#0e1219', border: '1px solid #1d2530' } })),
     lossyCount != null && lossyCount > 0 && h('div', {
       style: { position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', background: '#1e1506', border: '1px solid #7c5a12', borderRadius: 8, padding: '6px 14px', fontSize: 11.5, color: '#f5c542', display: 'flex', alignItems: 'center', gap: 8, pointerEvents: 'none', zIndex: 50, fontFamily: SANS, boxShadow: '0 4px 16px rgba(0,0,0,.5)' },
     },

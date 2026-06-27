@@ -219,6 +219,11 @@ export function exportBundle(res, name) {
 // Text types worth gzipping; binary (png/ico) is already compressed, skip it.
 const COMPRESSIBLE = new Set(['.js', '.css', '.html', '.json', '.svg', '.txt']);
 
+// Compressed-buffer cache for /vendor/* only — those bundles are content-immutable
+// (re-download to upgrade), so gzip them at most once per process. src/ is left to gzip
+// per request because live edits must show up.
+const gzCache = new Map();
+
 // Serve a static file from FRONTEND_DIR (with a path-traversal guard).
 export function serveStatic(req, res) {
   let urlPath = req.url.split('?')[0];
@@ -266,13 +271,14 @@ export function serveStatic(req, res) {
       ? 'public, max-age=31536000, immutable'
       : 'no-cache';
 
-    // gzip on the fly when the client accepts it. zlib is stdlib (no new dep); the files are
-    // small and this is a single-user dev tool, so per-request compression is cheap and the
-    // immutable vendor cache means the heavy assets compress at most once per browser.
-    // ponytail: gzipSync per request, no compressed-buffer cache — add one if traffic grows.
+    // gzip on the fly when the client accepts it. zlib is stdlib (no new dep). The heavy vendor
+    // bundles compress once and are served from gzCache thereafter; src/ gzips per request so
+    // live edits show up.
     const acceptsGzip = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
     if (acceptsGzip && COMPRESSIBLE.has(ext) && data.length > 1024) {
-      const gz = zlib.gzipSync(data);
+      const cacheable = urlPath.startsWith('/vendor/');
+      let gz = cacheable ? gzCache.get(urlPath) : undefined;
+      if (!gz) { gz = zlib.gzipSync(data); if (cacheable) gzCache.set(urlPath, gz); }
       res.writeHead(200, {
         ...headers,
         'Content-Encoding': 'gzip',

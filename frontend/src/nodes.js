@@ -5,9 +5,10 @@
 import { KINDS, MODELS, MONO, SANS } from './visual.js';
 
 // Module-level refs populated by init() once the UMD bundles are loaded.
-let h, Handle, Position;
+let React, h, Handle, Position;
 
-export function initNodes(React, RF) {
+export function initNodes(ReactIn, RF) {
+  React = ReactIn;
   h = React.createElement;
   ({ Handle, Position } = RF);
 }
@@ -113,11 +114,21 @@ export function LossyNode(props) {
   );
 }
 
+// Re-render a node body only when its data or selected state changes — skip the re-render RF
+// would otherwise do on every position update during a pan/drag. Safe because the measure loop
+// (canvas.js) rebuilds nodes with Object.assign({}, n, {...}), preserving data identity across
+// position/size changes. ponytail: confirm the win with the React profiler before relying on it;
+// the gain depends on how RF 11 diffs in this embedded setup.
+const sameNode = (a, b) => a.data === b.data && a.selected === b.selected;
+
 export function makeNodeTypes() {
+  const Leaf = React.memo(LeafNode, sameNode);
+  const Container = React.memo(ContainerNode, sameNode);
+  const Lossy = React.memo(LossyNode, sameNode);
   return {
-    agent: LeafNode, gate: LeafNode, skill: LeafNode, knob: LeafNode,
-    trigger: LeafNode, phase: LeafNode,
-    parallel: ContainerNode, loop: ContainerNode,
-    lossy: LossyNode,
+    agent: Leaf, gate: Leaf, skill: Leaf, knob: Leaf,
+    trigger: Leaf, phase: Leaf,
+    parallel: Container, loop: Container,
+    lossy: Lossy,
   };
 }
