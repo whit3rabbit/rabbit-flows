@@ -90,8 +90,9 @@ handler without restoring an Origin allowlist on the mutating routes.
 ## Build / test / lint (npm or pnpm)
 
 Scripts are package-manager-agnostic — every command works under both `npm run …` and `pnpm …`
-(all deps are explicit devDependencies, so pnpm's strict `node_modules` is fine). No lockfile is
-committed; add one (`package-lock.json` OR `pnpm-lock.yaml`, not both) if you want pinned installs.
+(all deps are explicit devDependencies, so pnpm's strict `node_modules` is fine). `package-lock.json`
+is the committed lockfile (npm); keep exactly one lockfile (npm OR pnpm, not both) to avoid double
+dependabot alerts. Regenerate it with `npm install` after changing devDependencies.
 
 ```bash
 cd frontend
