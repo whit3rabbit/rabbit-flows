@@ -324,3 +324,39 @@ logic and one verifyOnly precedence bug. All fixes are prompt/control-flow excep
   both `SKILL.md` copies also gained a WRONG/RIGHT object-vs-string note. **Ceiling:** false-positives on a
   real goal/path that itself enumerates ≥2 arg keys with a `:`/`=` after — actionable error, cost is one
   re-launch. Heuristic self-checked via a `node -e` assert run (both blob forms trip, real goals/paths pass).
+
+## EH-EXEC-01 — residual acceptance, anti-thrash (2026-06-27, `eatahorse.js`)
+
+- **Symptom.** A live `execute:true` run (Tauri vault wiring) STALLED. Several cards' acceptance demanded a
+  LIVE runtime check — a `window.__TAURI__ invoke()` roundtrip through macOS WKWebView — physically
+  impossible to verify in the headless sandbox. The worker prompt said "only check acceptance you can
+  actually back up" but gave NO escape: the card never completed → the Ralph loop re-handed it → each pass
+  re-attempted the impossible verification = thrash, until the harness killed the worker (~180s × 6 retries,
+  ~346k tokens burned). The completion gate was correct to refuse; the worker was wrong to keep retrying.
+  Operator workaround was a manual pre-pass: a separate agent rewrote every card's acceptance to
+  "headless-verifiable portion + documented manual residual." That belonged IN the workflow.
+- **Fix (prompt/control-flow only, no `eatahorse.py`/schema/manifest change — same posture as EH-PORT-19..24).**
+  A **residual** = an acceptance item provable ONLY by a live runtime/GUI/device/network the headless sandbox
+  cannot exercise; NOT a license to skip merely-hard or unfinished work.
+  1. Worker step 4b: verify the headless-checkable portion, append a `residual: <manual check + concrete
+     reason it's impossible here>` line under the card's `## Notes` (reusing the equiv-phase Notes-edit +
+     `sync` pattern), then check the item so the card auto-completes. `show` added to the worker CLI slice.
+  2. Completion gate: an item whose only gap is an environment-impossible check WITH a `residual:` note
+     naming a concrete reason, headless portion confirmed, counts as supported — but REOPEN if the residual
+     is actually runnable headless, names no concrete reason, or any invariant regressed. The `INVARIANTS`
+     block (build clean / `testCmd` green) stays hard — residual never excuses a broken build/tests.
+  3. Decompose (both modes): author runtime-only checks up front as "headless proxy + (manual residual: …)",
+     so fresh runs don't generate the thrash in the first place.
+  4. Write-back: scan all cards' Notes for `residual:` and emit a dated "Manual verification residuals"
+     section in the project CLAUDE.md — the consolidated spot-check queue the operator otherwise rebuilds
+     by hand each run. `show` added to the write-back CLI slice.
+- **Rejected: a structured `[~]` item state in `eatahorse.py`** (queryable `list --residual`, `should_auto_complete`
+  counts it). More code across the parser + completion logic + three test files for a distinction that
+  free-text Notes + the gate's scrutiny already cover. Not worth it until residuals need to be queried
+  board-wide as data rather than read in write-back.
+- **Failure-B note (resume "0 active" bail) — NOT a code change.** The running session diagnosed it as "resume
+  counts only ready/doing"; that is FALSE against the code — `report` "active" counts backlog (eatahorse.py:943)
+  and `next` picks `doing>ready>backlog` (eatahorse.py:785). Promoting backlog→ready was a no-op for the active
+  count; the real cause was elsewhere (most likely a relative-board-path resolving against the workflow cwd, or
+  a transient probe-agent death). Diagnostic before any guard: `report --json` / `next --json` against the real
+  board; only add a guard if a genuine 0-active-with-backlog reproduces.

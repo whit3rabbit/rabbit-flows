@@ -463,7 +463,9 @@ if (verifyOnly) {
         // written by the verify-equivalence phase" — that phase is POST-loop, so referencing it deadlocks the
         // card (can't reach done in-loop -> verify-equivalence then finds 0 done cards). verifyEquivalence is an
         // INDEPENDENT post-hoc reopener (same shape as the invariant gate), not an in-loop acceptance item.
-        `${testCmd ? ` — \`${testCmd}\` passes` : ` (NO test command was given — state the concrete manual check)`}.\n` +
+        `${testCmd ? ` — \`${testCmd}\` passes` : ` (NO test command was given — state the concrete manual check)`}. ` +
+        `If any check needs a live runtime unavailable headless, phrase it as a headless proxy PLUS an explicit ` +
+        `"(manual residual: <live check>)", never a bare runtime assertion.\n` +
         `   - externalId: "source:<path>" (back-links the port card to its source unit).\n` +
         `   - dependsOn: the unit's INTRA-REPO dep paths (the inventory unit's "deps" array — repo-relative ` +
         `source paths only, NOT external packages). Seed turns these into real dependency edges so the loop ` +
@@ -495,7 +497,10 @@ if (verifyOnly) {
         `Rules: each card targets ONE meaningful outcome (not a trivial command); give it 1-3 small executable ` +
         `bites (the next concrete steps) and 1-3 acceptance checks that concretely PROVE the card is done. ` +
         `Each acceptance item must NAME its evidence surface — the exact command that passes, the path that ` +
-        `exists, or the observable behavior — so a verifier can run or inspect it (never "looks good"). Order by ` +
+        `exists, or the observable behavior — so a verifier can run or inspect it (never "looks good"). If a ` +
+        `check is inherently un-runnable in a headless/CI context (needs a live GUI/device/network), phrase it ` +
+        `as the headless-verifiable proxy PLUS an explicit "(manual residual: <live check>)" — never a bare ` +
+        `runtime assertion a headless worker cannot satisfy. Order by ` +
         `priority (P0 highest). Prefer fewer, well-scoped cards; if a card would need a long checklist, split it. ` +
         `Return a short project name and the cards.` +
         INVARIANTS,
@@ -653,11 +658,23 @@ while (
       `4. If, after this bite, every bite AND every acceptance check for the card is satisfied by REAL ` +
       `evidence, check the remaining acceptance items (\`bite <id> <i> --group acceptance --done\`) so the ` +
       `card auto-completes on sync. Only check acceptance you can actually back up.\n` +
+      // Residual escape: an acceptance item that ONLY a live runtime can prove (GUI invoke roundtrip, real
+      // device, paid API) is impossible to verify in this headless sandbox. Without an escape the worker
+      // retries it forever (card never completes -> loop re-hands it) until the harness kills it. Let it
+      // record the impossible check as a residual and move on. Gate scrutinizes; invariants stay hard.
+      `4b. If an acceptance item can ONLY be proven by a live runtime/GUI/device/network this headless ` +
+      `sandbox cannot exercise (e.g. a live GUI \`invoke()\` roundtrip, a real device, a paid API), do NOT ` +
+      `retry it. Verify everything headless-checkable for that item, then append one line ` +
+      `\`residual: <the manual check a human must run, AND the concrete reason it is impossible here>\` ` +
+      `under the card's \`## Notes\` (\`show <id> --json\` gives the card's file path; edit the markdown, ` +
+      `then \`sync\`), and check the item so the card can auto-complete. Residual is ONLY for ` +
+      `environmentally-impossible checks — never for work you ran out of budget for or could not get ` +
+      `working. If the headless portion itself fails, leave it unchecked or block the card; do not residual it.\n` +
       `5. \`sync\`, then \`report --json\`.\n` +
       `Return the step: taskId, a one-line action, progressed (did the board move forward), completed (did ` +
       `this card reach done), blocked, activeRemaining (report's "active"), and a short note with evidence.\n\n` +
-      // loop worker takes one bite: next/move/bite + sync/report. No card-creation commands needed.
-      `${cli('next', 'move', 'bite', 'sync', 'report')}` +
+      // loop worker takes one bite: next/move/bite + sync/report. show is for the residual Notes edit (4b).
+      `${cli('next', 'move', 'show', 'bite', 'sync', 'report')}` +
       PORT_RULE +
       INVARIANTS,
     { label: `bite:${iter}`, phase: 'Execute', model: workerModel, schema: STEP_SCHEMA },
@@ -675,7 +692,12 @@ while (
     const v = await agent(
       `A worker just marked card ${step.taskId} DONE on the Eatahorse board at "${board}". Independently ` +
         `verify it. \`show ${step.taskId} --json\` and check each acceptance item against REAL evidence ` +
-        `(run the proving command, inspect the file/behavior — do not trust the checkbox). ALSO check the ` +
+        `(run the proving command, inspect the file/behavior — do not trust the checkbox). An acceptance ` +
+        `item whose ONLY remaining gap is an environment-impossible live check that carries a \`residual:\` ` +
+        `note (in the card's Notes) naming a CONCRETE environmental reason, and whose headless-verifiable ` +
+        `portion you confirmed, counts as supported — do NOT reopen solely for it. But REOPEN if that ` +
+        `residual check is actually runnable headless (the worker dodged real work), it names no concrete ` +
+        `environmental reason, or any invariant below was regressed. ALSO check the ` +
         `board invariants below: the bite must not have regressed any of them — if an invariant names a ` +
         `runnable command, run it. If every acceptance check is genuinely met AND no invariant was ` +
         `violated, leave it done and set supported=true. If acceptance is unmet OR an invariant was ` +
@@ -806,10 +828,13 @@ await agent(
     `rerun keeps honoring them), and — most important — the REASON each blocked card is blocked (treat ` +
     `these as constraints so the next run skips the dead end). Keep it short; do not document the obvious ` +
     `file tree.\n` +
-    `3. Do not change any task status. Reporting only.\n\n` +
+    `3. Scan every card's \`## Notes\` for \`residual:\` lines (\`show <id>\` per card) and write a dated ` +
+    `"Manual verification residuals" section into that CLAUDE.md — the exact live checks a human must ` +
+    `spot-check in a real runtime (the consolidated spot-check queue). Omit the section if there are none.\n` +
+    `4. Do not change any task status. Reporting only.\n\n` +
     `Run summary: goal="${goal}"; iterations=${iter}; completed=${JSON.stringify(completed)}; ` +
-    // write-back only reads final state: report/list. No mutations.
-    `blocked=${JSON.stringify(blocked)}; constraints=${JSON.stringify(constraints)}; stopReason="${stopReason}".\n\n${cli('report', 'list')}`,
+    // write-back reads final state + Notes: report/list/show. No mutations.
+    `blocked=${JSON.stringify(blocked)}; constraints=${JSON.stringify(constraints)}; stopReason="${stopReason}".\n\n${cli('report', 'list', 'show')}`,
   { label: 'write-back', model: 'sonnet' },
 )
 
