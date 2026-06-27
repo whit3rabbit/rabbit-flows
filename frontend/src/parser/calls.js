@@ -1,7 +1,7 @@
 // calls.js — best-effort scan of agent()/parallel()/pipeline()/phase() calls into
 // canvas nodes + edges. Unrecognised/unbalanced constructs go to lossy[] with {line, reason}.
 
-import { optsOf, stripComments } from './scan.js';
+import { optsOf, stripComments, extractBalancedParen, extractBalancedBraces } from './scan.js';
 
 /** Auto-incrementing ID counter for node IDs. */
 let _uid = 0;
@@ -89,16 +89,27 @@ export function parseCalls(src) {
 
   // Quick-scan patterns. parallel()/pipeline() do NOT require a literal '[' — the idiomatic
   // form is parallel(items.map(() => agent(...))) / pipeline(items, stage1, stage2).
-  const phaseCallRe   = /\bphase\s*\(\s*(['"`])((?:\\.|(?!\1)[^])*?)\1\s*\)/;
-  const agentCallRe   = /\bawait\s+agent\s*\(/;
-  const parallelRe    = /\bawait\s+parallel\s*\(/;
-  const pipelineRe    = /\bawait\s+pipeline\s*\(/;
+  // Global (sticky via lastIndex) so the main loop can search forward from `pos` with no slice.
+  const phaseCallRe   = /\bphase\s*\(\s*(['"`])((?:\\.|(?!\1)[^])*?)\1\s*\)/g;
+  const agentCallRe   = /\bawait\s+agent\s*\(/g;
+  const parallelRe    = /\bawait\s+parallel\s*\(/g;
+  const pipelineRe    = /\bawait\s+pipeline\s*\(/g;
+  const loopRe        = /\b(?:while|for)\s*\(/g;
 
   // We process the full source as a string, tracking position for line numbers.
   let pos = 0;
   const S = stripped;
 
-  function posLine(p) { return S.slice(0, p).split('\n').length; }
+  // Precompute newline offsets once so posLine is a binary search instead of an O(n) slice+split
+  // per call (the whole scan was O(n^2)). ponytail: micro-opt — workflow sources are a few KB, but
+  // it's a one-line win and keeps the scan linear.
+  const nlOffsets = [];
+  for (let i = 0; i < S.length; i++) if (S[i] === '\n') nlOffsets.push(i);
+  function posLine(p) {
+    let lo = 0, hi = nlOffsets.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (nlOffsets[mid] < p) lo = mid + 1; else hi = mid; }
+    return lo + 1; // 1-based: newlines strictly before p, plus 1
+  }
 
   function addNode(node) {
     nodes.push(node);
@@ -109,38 +120,41 @@ export function parseCalls(src) {
     y += VSTEP;
   }
 
-  // Extract a balanced-paren span starting at startPos (which points to the '(').
+  // Extract a balanced-paren span starting at startPos (which points to the '('), string-aware
+  // (parens inside a prompt string don't change depth). Returns {text, end} or null.
   function extractParen(startPos) {
-    let depth = 0, j = startPos;
-    while (j < S.length) {
-      const c = S[j];
-      if (c === '(') depth++;
-      else if (c === ')') { depth--; if (depth === 0) return { text: S.slice(startPos, j + 1), end: j }; }
-      j++;
-    }
-    return null;
+    return extractBalancedParen(S, startPos);
   }
 
   // Scan inner text for agent() calls; return [{model, schema, label, phase, kind}] + push
   // any unbalanced span to lossy. offset is inner's absolute start in S (for line numbers).
+  // String-aware: an `agent(` that appears INSIDE a prompt string (e.g. 'use the agent(x) helper')
+  // is not a call and is skipped, so it neither spawns a phantom node nor a false lossy entry.
   function scanAgents(inner, offset, labelFor) {
-    const re = /\bagent\s*\(/g;
     const found = [];
-    let lm;
-    while ((lm = re.exec(inner)) !== null) {
-      const pStart = lm.index + lm[0].length - 1;
-      let depth = 0, j = pStart, span = null;
-      while (j < inner.length) {
-        const c = inner[j];
-        if (c === '(') depth++;
-        else if (c === ')') { depth--; if (depth === 0) { span = inner.slice(pStart, j + 1); break; } }
-        j++;
-      }
-      if (!span) {
-        lossy.push({ line: posLine(offset + lm.index), reason: 'unbalanced agent() paren inside a container' });
+    let str = null;
+    for (let i = 0; i < inner.length; i++) {
+      const c = inner[i];
+      if (str) {
+        if (c === '\\') { i++; continue; }
+        if (c === str) str = null;
         continue;
       }
-      const optsFrag = optsOf(span);
+      if (c === "'" || c === '"' || c === '`') { str = c; continue; }
+      // `agent` at a word boundary, followed by `(` (optional whitespace) — a real call token.
+      if (c !== 'a' || !inner.startsWith('agent', i)) continue;
+      const prev = i > 0 ? inner[i - 1] : '';
+      if (/[A-Za-z0-9_$]/.test(prev)) continue; // e.g. "subagent" — not the agent() helper
+      let k = i + 5;
+      while (k < inner.length && /\s/.test(inner[k])) k++;
+      if (inner[k] !== '(') continue;
+      const span = extractBalancedParen(inner, k);
+      if (!span) {
+        lossy.push({ line: posLine(offset + i), reason: 'unbalanced agent() paren inside a container' });
+        i = k; // skip past this token; keep scanning for more
+        continue;
+      }
+      const optsFrag = optsOf(span.text);
       const label = extractLabel(optsFrag) || labelFor(found.length);
       found.push({
         model: extractModel(optsFrag),
@@ -149,30 +163,28 @@ export function parseCalls(src) {
         phase: extractPhase(optsFrag) || currentPhase,
         kind: /gate/i.test(label) ? 'gate' : 'agent',
       });
+      i = span.end; // continue after the matched call (loop's i++ moves to the next char)
     }
     return found;
   }
 
+  const SCANNERS = [
+    ['phase', phaseCallRe], ['agent', agentCallRe], ['parallel', parallelRe],
+    ['pipeline', pipelineRe], ['loop', loopRe],
+  ];
+
   while (pos < S.length) {
-    const rest = S.slice(pos);
+    // Find the nearest of the five constructs at or after `pos`. Global regexes searched via
+    // lastIndex (no per-iteration slice); m.index is already absolute in S.
+    let hit = null;
+    for (const [type, re] of SCANNERS) {
+      re.lastIndex = pos;
+      const m = re.exec(S);
+      if (m && (hit === null || m.index < hit.idx)) hit = { type, idx: m.index, m };
+    }
+    if (hit === null) break;
 
-    const phaseM = phaseCallRe.exec(rest);
-    const agentM = agentCallRe.exec(rest);
-    const parallelM = parallelRe.exec(rest);
-    const pipelineM = pipelineRe.exec(rest);
-
-    // Find the nearest match
-    const candidates = [
-      phaseM   ? { type: 'phase',    idx: phaseM.index,    m: phaseM    } : null,
-      agentM   ? { type: 'agent',    idx: agentM.index,    m: agentM    } : null,
-      parallelM? { type: 'parallel', idx: parallelM.index, m: parallelM } : null,
-      pipelineM? { type: 'pipeline', idx: pipelineM.index, m: pipelineM } : null,
-    ].filter(Boolean).sort((a, b) => a.idx - b.idx);
-
-    if (candidates.length === 0) break;
-
-    const hit = candidates[0];
-    const absPos = pos + hit.idx;
+    const absPos = hit.idx;
 
     if (hit.type === 'phase') {
       currentPhase = hit.m[2];
@@ -274,6 +286,70 @@ export function parseCalls(src) {
         })));
       }
       pos = span.end + 1;
+      continue;
+    }
+
+    if (hit.type === 'loop') {
+      // while/for ( header ) { body } — model as a loop container whose body agents are children.
+      // The body's agent() calls are bare (e.g. `const r = await agent(...)`), so scanAgents finds
+      // them. codegen/nodes/schema all support 'loop'; without this they'd flatten to sequential
+      // nodes and the loop container would be lost on a code->graph->code round-trip.
+      const headerParenStart = absPos + hit.m[0].length - 1; // '(' of the loop header
+      const headerSpan = extractParen(headerParenStart);
+      if (!headerSpan) {
+        lossy.push({ line: posLine(absPos), reason: 'unbalanced loop header paren' });
+        pos = absPos + 1;
+        continue;
+      }
+      // Body must be a `{ ... }` block immediately after the header (only whitespace between).
+      // A braceless single-statement loop is left to the normal scan (its agents become sequential).
+      const afterHeader = headerSpan.end + 1;
+      const braceIdx = S.indexOf('{', afterHeader);
+      if (braceIdx === -1 || S.slice(afterHeader, braceIdx).trim() !== '') {
+        pos = afterHeader;
+        continue;
+      }
+      const body = extractBalancedBraces(S, braceIdx);
+      if (!body) {
+        lossy.push({ line: posLine(absPos), reason: 'unbalanced loop body block' });
+        pos = braceIdx + 1;
+        continue;
+      }
+      const laneNodes = scanAgents(body.text, body.start, (i) => 'iter:' + i);
+      if (laneNodes.length === 0) {
+        // Ordinary control-flow loop with no agent() calls — not an unparsed agent construct, so no
+        // lossy note; just skip its body.
+        pos = body.end + 1;
+        continue;
+      }
+
+      const laneW = 150, laneGap = 22;
+      const totalW = laneNodes.length * laneW + (laneNodes.length - 1) * laneGap;
+      const startX = CX - totalW / 2;
+      const cH = DIMS.loop[1];
+      const containerY = y;
+      const containerId = uid('loop');
+      const container = makeNode('loop', 'loop', {
+        id: containerId, phase: currentPhase,
+        x: startX - 24, y: containerY, w: Math.max(totalW + 48, DIMS.loop[0]), h: cH,
+      });
+      nodes.push(container);
+      if (lastNodeId) {
+        edges.push({ id: lastNodeId + '>' + containerId, from: lastNodeId, to: containerId, type: 'flow' });
+      }
+      laneNodes.forEach((ln, i) => {
+        const laneId = uid('agent');
+        nodes.push({
+          id: laneId, kind: ln.kind,
+          label: ln.label, model: ln.model, schema: ln.schema,
+          phase: ln.phase || currentPhase, detail: null, body: null,
+          x: startX + i * (laneW + laneGap), y: containerY + 52, w: laneW, h: 96,
+        });
+        edges.push({ id: containerId + '>' + laneId, from: containerId, to: laneId, type: 'flow' });
+      });
+      lastNodeId = containerId;
+      y = containerY + cH + 56;
+      pos = body.end + 1;
       continue;
     }
 

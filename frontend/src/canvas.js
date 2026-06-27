@@ -1,11 +1,12 @@
 // canvas.js — Shell React component: application state and layout.
 // Delegates rendering to toolbar/palette/inspector/manager/codepanel/flowpane modules.
 
-import { SANS, MONO, DIMS } from './visual.js';
+import { SANS, MONO, DIMS, EC } from './visual.js';
 import { edgeStyle, toRFNodes, toRFEdges } from './graph.js';
+import { edgeTypeFor, connectionAllowed } from './schema.js';
 import { genCode }                          from './codegen.js';
 import { seedLib, loadLib, persistLib, wfUid, countKinds } from './library.js';
-import { fetchWorkflowList, fetchWorkflowSource, saveWorkflow, validateSource, fetchSkillCatalog } from './api.js';
+import { fetchWorkflowList, fetchWorkflowSource, saveWorkflow, validateSource, fetchSkillCatalog, downloadBundle } from './api.js';
 import { buildInspector }    from './inspector.js';
 import { buildManagerOverlay } from './manager.js';
 import { buildCodePanel }     from './codepanel.js';
@@ -33,6 +34,9 @@ export function Shell() {
   const [edges,        setEdges,        onEdgesChange] = useEdgesState(initLib[0].edges);
   const [selId,        setSelId]        = React.useState(null);
   const [codeOpen,     setCodeOpen]     = React.useState(false);
+  // basename (no .js) of the last workflow saved this session — gates "Download bundle", which
+  // reads the on-disk file, so it only makes sense once a save has written one.
+  const [lastSaved,    setLastSaved]    = React.useState(null);
   const [managerOpen,  setManagerOpen]  = React.useState(false);
   const [renaming,     setRenaming]     = React.useState(null);
   const [toast,        setToast]        = React.useState(null);
@@ -188,7 +192,8 @@ export function Shell() {
         const ids = new Set();
         const okNodes = rawNodes
           .filter((n) => n && n.id != null && n.position && n.data && VALID_KINDS.has(n.data.kind))
-          .map((n) => Object.assign({}, n, { id: String(n.id) }))
+          // type drives ReactFlow's nodeTypes lookup; a hand-authored file may set only data.kind.
+          .map((n) => Object.assign({}, n, { id: String(n.id), type: n.type || n.data.kind }))
           .filter((n) => !ids.has(n.id) && ids.add(n.id));
         const okEdges = (Array.isArray(o.edges) ? o.edges : [])
           .filter((e) => e && ids.has(String(e.source)) && ids.has(String(e.target)))
@@ -244,10 +249,17 @@ export function Shell() {
 
   const active = library.find((w) => w.id === activeId) || library[0];
   const g = { metaName: active.name, metaDesc: active.desc };
-  const catalogNamesList = skillCatalog.map((s) => s.name);
+
+  // genCode is otherwise recomputed up to 3x per render (code panel + validate + save). Memoize on
+  // the inputs that affect output; key on skillCatalog (stable) not catalogNamesList (new array each
+  // render, which would defeat the memo).
+  const generatedCode = React.useMemo(
+    () => genCode(nodes, edges, active.name, active.desc, skillCatalog.map((s) => s.name)),
+    [nodes, edges, active.name, active.desc, skillCatalog],
+  );
 
   const saveToRepo = async () => {
-    const src  = genCode(nodes, edges, g.metaName, g.metaDesc, catalogNamesList);
+    const src  = generatedCode;
     const slug = (g.metaName || 'workflow').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'workflow';
     const fname = window.prompt('Save generated workflow to .claude/workflows/', slug + '.js');
     if (!fname) return;
@@ -257,6 +269,7 @@ export function Shell() {
         if (!window.confirm(fname + ' already exists. Overwrite it? (the regenerated code is lossy)')) return;
         ({ data } = await saveWorkflow(fname, src, true));
       }
+      if (data.ok) setLastSaved(fname.replace(/\.js$/, '')); // enable bundle download for this file
       showToast(data.ok ? 'Saved → .claude/workflows/' + fname : 'Save failed: ' + (data.error || status));
     } catch (err) {
       showToast('Save failed: ' + err.message + ' (is the server running?)');
@@ -264,7 +277,7 @@ export function Shell() {
   };
 
   const runValidate = async () => {
-    const src = genCode(nodes, edges, g.metaName, g.metaDesc, catalogNamesList);
+    const src = generatedCode;
     setValidateResult({ pending: true });
     try {
       const data = await validateSource(src);
@@ -275,9 +288,25 @@ export function Shell() {
   };
 
   // ── canvas event handlers ──────────────────────────────────────────────
+  // Type the new edge from the connected nodes' kinds (schema.js): skill/knob sources become
+  // skill/data attachments, everything else a flow edge. An impossible pair falls back to flow,
+  // but isValidConnection below blocks it from being drawn in the first place.
+  const kindOf = React.useCallback((id) => (nodes.find((n) => n.id === id) || {}).data?.kind, [nodes]);
   const onConnect = React.useCallback((params) => {
-    setEdges((eds) => addEdge(Object.assign({}, params, { type: 'default', animated: true, style: edgeStyle('flow'), markerEnd: { type: MarkerType.ArrowClosed, color: '#5b6675', width: 15, height: 15 }, data: { kind: 'flow' } }), eds));
-  }, [setEdges]);
+    // edgeTypeFor only ever returns skill/data/flow (loop is never auto-assigned), so there is no
+    // 'loop' case to handle here.
+    const et = edgeTypeFor(kindOf(params.source), kindOf(params.target)) || 'flow';
+    setEdges((eds) => addEdge(Object.assign({}, params, {
+      type: 'default',
+      animated: et === 'flow',
+      style: edgeStyle(et),
+      markerEnd: { type: MarkerType.ArrowClosed, color: EC[et] || EC.flow, width: 15, height: 15 },
+      data: { kind: et },
+    }), eds));
+  }, [setEdges, kindOf]);
+  // Reject a drag whose source/target kinds have no rule (e.g. phase -> agent, agent -> trigger).
+  const isValidConnection = React.useCallback(
+    (c) => connectionAllowed(kindOf(c.source), kindOf(c.target)), [kindOf]);
 
   const onNodeClick = React.useCallback((_, n) => setSelId(n.id), []);
   const onPaneClick = React.useCallback(() => setSelId(null), []);
@@ -352,7 +381,7 @@ export function Shell() {
   const inspectorAside = h('aside', { style: { width: 294, flex: '0 0 294px', background: '#0e1219', borderLeft: '1px solid #1d2530', overflowY: 'auto', zIndex: 20, fontFamily: SANS } }, inspectorContent);
 
   // Canvas pane — delegates to flowpane.js
-  const flow = buildFlowPane({ wrapRef, nodes, edges, onNodesChange, onEdgesChange, onConnect, onNodeClick, onPaneClick, onDragOver, onDrop, nodeTypes: _nodeTypes, lossyCount });
+  const flow = buildFlowPane({ wrapRef, nodes, edges, onNodesChange, onEdgesChange, onConnect, isValidConnection, onNodeClick, onPaneClick, onDragOver, onDrop, nodeTypes: _nodeTypes, lossyCount });
 
   // Status bar
   const status = h('div', { style: { height: 30, flex: '0 0 30px', display: 'flex', alignItems: 'center', gap: 16, padding: '0 14px', background: '#0c1016', borderTop: '1px solid #1d2530', fontSize: 11, color: '#6b7686', fontFamily: MONO, zIndex: 25 } },
@@ -368,12 +397,14 @@ export function Shell() {
   const closeCode = () => { setCodeOpen(false); setValidateResult(null); };
   const codePanel = buildCodePanel({
     codeOpen,
-    code: codeOpen ? genCode(nodes, edges, g.metaName, g.metaDesc, catalogNamesList) : '',
+    code: codeOpen ? generatedCode : '',
     validateResult,
     metaName: g.metaName,
     onClose:    closeCode,
     onValidate: () => { setValidateResult(null); runValidate(); },
     onSave:     saveToRepo,
+    bundleName: lastSaved, // null until saved this session → button stays disabled
+    onExportBundle: () => { if (lastSaved) downloadBundle(lastSaved); },
   });
   if (codePanel) overlays.push(codePanel);
 

@@ -19,6 +19,9 @@ export const SKILL_ROOTS = [
   path.join(REPO_ROOT, 'plugins', 'workflow-kit', 'skills'),
 ];
 
+// Where bundle export resolves agent .md files referenced by a workflow's // requires-agents header.
+export const AGENTS_DIR = path.join(REPO_ROOT, 'plugins', 'workflow-kit', 'agents');
+
 export const VALIDATE_PY = path.join(
   REPO_ROOT, '.claude', 'skills', 'dynamic-workflow-authoring', 'scripts', 'validate.py',
 );

@@ -234,3 +234,81 @@ console errors, app renders. Raw fallback (no `Accept-Encoding`) still serves fu
 Constraint: do NOT add `Content-Length` of the raw buffer when `Content-Encoding: gzip` is set — the
 length must match the gzipped bytes (it does; `Vary: Accept-Encoding` is sent so proxies don't mix
 encodings).
+
+## Graph schema layer (2026-06-26)
+
+Formalized the previously-implicit graph contract (was scattered across `visual.js` KINDS/EC/DIMS,
+`nodes.js` handles, `graph.js` internal↔RF, `parser.js`) into one canonical source.
+
+- **`src/schema.js`** owns it: `NODE_KINDS`/`EDGE_TYPES` (imported from `visual.js`, no drift),
+  `HANDLES` (per-kind connection-point inventory), `CONNECTION_RULES` + `edgeTypeFor`/
+  `connectionAllowed`, Draft-07 `GRAPH_JSON_SCHEMA`, and dependency-free `validateGraph()`.
+  No ajv — frontend stays zero-runtime-dep. Full reference: `docs/flow-schema.md`.
+- **Connection rules now enforced in the canvas**: `onConnect` auto-types edges by endpoint kind
+  (skill→skill, knob→data, else flow); new `isValidConnection` (canvas.js → flowpane.js) rejects
+  illegal drags. Turned the previously-dead `skill`/`data` edge types live.
+- **`test-schema.mjs`** is the validation gate: parses all 10 `.claude/workflows/*.js`, asserts each
+  conforms; `npm test` runs it after `test-parser.mjs`.
+
+Key finding: the parser only emits a **3-kind / 1-edge-type subset** (`agent`/`parallel`/`gate` +
+`flow`) from real workflows — corpus totals 91 agent / 16 parallel / 11 gate / 108 flow, zero
+loop/skill/data/trigger/knob/phase. `phase` is a node attribute, not a node. The other 6 palette
+kinds + 3 edge types are hand-authoring-only and do NOT survive a code→graph→code round-trip
+(consistent with the documented lossy round-trip). All 10 workflows already conformed — none edited.
+
+Gotcha: `canvas.js` was already 407 lines (over the 400 ceiling) at HEAD before this work; the
+schema wiring pushed it to ~422. Split the edge-builder into `graph.js` if compliance matters.
+
+## Self-review fixes round (2026-06-26, all 11 findings)
+
+A self-review of the modular `frontend/` surfaced 11 findings; all fixed and verified
+(test-parser 25 PASS incl. 3 new, test-schema/bundle green, eslint clean, `npm run check` green,
+Playwright in-app render check, validate.py on generated code).
+
+**Parser — the load-bearing two.**
+- The paren scan in `calls.js` (`extractParen`, `scanAgents`) was NOT string-literal aware, so a
+  prompt with a stray paren (`agent('rate this :)', ...)`) truncated the span and an `agent(` token
+  *inside* a prompt string (`'use the agent(x) helper'`) spawned a phantom node / false lossy. Added
+  string-aware `extractBalancedParen(src, startIdx)` to `scan.js` (mirrors `extractBalancedBraces`,
+  tracks quote state); `extractParen` now delegates to it and `scanAgents` is a string-aware walk
+  that skips in-string tokens. Locked by AC7 (paren-in-prompt) + AC8 (phantom `agent(`).
+- `while`/`for (...) { ... }` loops were never scanned — body agents flattened to sequential nodes,
+  the `loop` container lost on round-trip (codegen/nodes/schema all already supported `loop`). Added
+  a `loop` branch: skip the header paren, take the `{ }` body via `extractBalancedBraces`, scanAgents
+  the body, emit a `loop` container + child lanes + `container->lane` flow edges (mirrors `parallel`).
+  Braceless or agent-less loop bodies are skipped silently (not lossy). Now fires on 4 real workflows
+  (docs-create, docs-from-code, eatahorse, eatahorse-research); all still pass `validateGraph`. AC9.
+
+**Codegen.** `camel()` emitted invalid identifiers for digit-leading labels (`"2nd pass"` →
+`const 2ndPass`, a SyntaxError that fails validate.py). Now prefixes `_` when the name starts with a
+digit (`_2ndPass`); verified by generating + `validate.py --strict` (OK).
+
+**Render (F4).** `ContainerNode` rendered only a div+label — no `<Handle>`s — but the parser threads
+flow edges through the box and ReactFlow 11 needs a handle to attach an edge. Added the hidden
+target(Top)/source(Bottom) handles the schema already declared. Playwright-confirmed on security-audit:
+5 containers × 2 handles, 11 fan-out + 5 into-container edges all drawn with geometry.
+
+**Server (F5).** `serveStatic` served every file under `FRONTEND_DIR` over GET (server.js,
+src/server/*.js, package.json, configs, tests) — fine on loopback, but readable under
+`HOST=0.0.0.0`+`RFD_TOKEN`. Added an allowlist on the RESOLVED relative path (so `/src/../server.js`
+can't sneak past a urlPath prefix): only `flow.html`, `parser.js`, `vendor/**`, `src/**` minus
+`src/server/**`. Curl-verified: assets 200, server source / package.json / `/src/../server.js` 404.
+
+**Perf + cleanup.** `calls.js` main scan was O(n²) (`S.slice(pos)` per iter + `posLine` slicing from
+0): now global regexes searched via `lastIndex` (no slice) + a precomputed newline-offset array with
+binary-search `posLine`. `canvas.js`: `genCode` memoized (`useMemo` keyed on nodes/edges/name/desc/
+skillCatalog — NOT `catalogNamesList`, which was a fresh array each render and would defeat the memo;
+removed that dead const); `importFile` now sets `type: n.type || n.data.kind` so a hand-authored
+file with only `data.kind` renders; dead `et === 'loop'` branches dropped from `onConnect`
+(`edgeTypeFor` never returns loop). `meta.js` phase-title scan made string-aware (a `title:` inside
+another value's string is no longer mistaken for a phase). `frontend/CLAUDE.md`: `npm test` comment
+fixed (runs 3 suites, not just test-parser) and loops added to Parse limitations.
+
+Constraints carried forward:
+- ReactFlow edge identity is in the DOM `data-testid` (`rf__edge-<from>><to>`), NOT `data-id` — needed
+  for any future in-app edge assertion.
+- The serveStatic allowlist is keyed on `path.relative(FRONTEND_DIR, filePath)` with `path.sep`. Any
+  new root-level SPA asset must be added to it or it 404s (favicon already 404s, harmless).
+- Loop detection treats EVERY `while`/`for` with agent calls in a braced body as a loop container.
+  Agent-less control-flow loops are skipped silently — do not "fix" that into a lossy note (it would
+  add noise on real workflows that loop for non-agent reasons).

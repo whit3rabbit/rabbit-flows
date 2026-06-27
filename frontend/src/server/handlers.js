@@ -10,6 +10,7 @@ import { spawnSync } from 'child_process';
 import { FRONTEND_DIR, WORKFLOWS_DIR, SKILL_ROOTS, VALIDATE_PY } from './config.js';
 import { json, notFound, readBody, mimeFor } from './http-util.js';
 import { sanitizeWorkflowName } from './security.js';
+import { gatherBundle } from './bundle.js';
 
 // GET /api/workflows — list .js basenames
 export function listWorkflows(res) {
@@ -195,6 +196,26 @@ export function listSkills(res) {
   json(res, 200, skills);
 }
 
+// GET /api/bundle/:name — stream a .zip bundling the workflow + its declared skills/agents.
+// Read-tier (no mutation token): it only reads files already exposed by /api/workflows/:name and
+// /api/skills and builds the zip in-process (no child spawn, no write). Same-origin still applies.
+export function exportBundle(res, name) {
+  let out;
+  try {
+    out = gatherBundle(name);
+  } catch (e) {
+    if (e && e.status) json(res, e.status, { error: e.message });
+    else json(res, 500, { error: `bundle failed: ${e && e.message ? e.message : e}` });
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': 'application/zip',
+    'Content-Disposition': `attachment; filename="${out.filename}"`,
+    'Content-Length': out.buffer.length,
+  });
+  res.end(out.buffer);
+}
+
 // Text types worth gzipping; binary (png/ico) is already compressed, skip it.
 const COMPRESSIBLE = new Set(['.js', '.css', '.html', '.json', '.svg', '.txt']);
 
@@ -208,6 +229,23 @@ export function serveStatic(req, res) {
   if (!filePath.startsWith(FRONTEND_DIR + path.sep) && filePath !== FRONTEND_DIR) {
     res.writeHead(403);
     res.end('Forbidden');
+    return;
+  }
+
+  // Allowlist the SPA's real assets only. The traversal guard keeps requests inside FRONTEND_DIR,
+  // but that still exposes server.js, src/server/*.js, package.json, configs, and tests over GET.
+  // Checked on the RESOLVED relative path so `/src/../server.js` can't sneak past a urlPath prefix.
+  const rel = path.relative(FRONTEND_DIR, filePath);
+  const srcPrefix = 'src' + path.sep;
+  const serverPrefix = path.join('src', 'server') + path.sep;
+  const allowed =
+    rel === 'flow.html' ||
+    rel === 'parser.js' ||
+    rel.startsWith('vendor' + path.sep) ||
+    (rel.startsWith(srcPrefix) && !rel.startsWith(serverPrefix));
+  if (!allowed) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('404 Not Found');
     return;
   }
 

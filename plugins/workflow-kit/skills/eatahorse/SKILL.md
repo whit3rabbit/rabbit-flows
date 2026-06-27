@@ -201,7 +201,9 @@ background with no user IO, so gather and validate these here first):
    unattended edits to the project; do NOT call `Workflow` in the same turn as the preview. A plan-only
    `execute:false` run may launch directly.
 5. Launch: `Workflow({ name: "eatahorse", args: { goal, execute, board, maxIterations, maxTokens, budgetFloor, workerModel, constraints } })`.
-   Omit args you did not gather — the workflow defaults them.
+   Omit args you did not gather — the workflow defaults them. Pass `args` as a real JSON **object**, never a
+   single string. WRONG: `args: "goal: X, execute: true"`. RIGHT: `args: { goal: "X", execute: true }`. A
+   stringified blob makes the workflow bail loud (`goal` swallows `execute`/`board`/`constraints` → silent plan-only).
    - **Resume:** point `board` at an existing board that still has active cards → the workflow skips
      decompose/seed/plan-gate and works the cards already there (use this to continue an interrupted run).
    - **Collision guard:** if `board` points at a board that exists but has 0 active cards (complete, or a

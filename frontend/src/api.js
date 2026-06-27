@@ -53,6 +53,18 @@ export async function validateSource(src) {
   return r.json();
 }
 
+// downloadBundle — trigger a browser download of GET /api/bundle/:name (a .zip of the saved
+// workflow + its declared skills/agents). Read-tier endpoint, so a plain anchor click is enough;
+// no auth header needed. `name` is the on-disk basename WITHOUT the .js extension.
+export function downloadBundle(name) {
+  const a = document.createElement('a');
+  a.href = '/api/bundle/' + encodeURIComponent(name);
+  a.download = name + '-bundle.zip';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 // fetchSkillCatalog — GET /api/skills → [{name, description}].
 // Returns [] on failure.
 export async function fetchSkillCatalog() {

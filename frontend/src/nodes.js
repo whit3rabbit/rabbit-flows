@@ -71,6 +71,9 @@ export function LeafNode(props) {
 // ContainerNode — renders parallel and loop bounding boxes
 export function ContainerNode(props) {
   const d = props.data, sel = props.selected, def = KINDS[d.kind], col = def.color;
+  // Hidden handles: the parser threads flow edges through the box (prev -> container -> lane), and
+  // ReactFlow 11 needs a handle to attach an edge to — without these the fan-out edges don't render.
+  // Mirrors schema.js HANDLES for parallel/loop (target Top 't', source Bottom 's').
   return h('div', {
     style: {
       width: '100%', height: '100%',
@@ -79,6 +82,8 @@ export function ContainerNode(props) {
       boxShadow: sel ? '0 0 0 2px ' + col : 'none', fontFamily: SANS,
     },
   },
+    h(Handle, { key: 't', type: 'target', position: Position.Top,    style: { opacity: 0 } }),
+    h(Handle, { key: 's', type: 'source', position: Position.Bottom, style: { opacity: 0 } }),
     h('div', { style: { position: 'absolute', top: -11, left: 14, background: '#0b0e13', padding: '0 8px', fontSize: 10.5, fontWeight: 600, color: col, letterSpacing: .4 } }, def.icon + '  ' + d.label)
   );
 }

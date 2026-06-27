@@ -11,6 +11,7 @@
 //   POST /api/workflows/:name  — write body to .claude/workflows/:name (path-traversal-guarded)
 //   POST /api/validate         — run validate.py --strict on the body, return {ok, output}
 //   GET  /api/skills           — list skills ({name, description}[]) from both skill roots
+//   GET  /api/bundle/:name     — download a .zip bundling the workflow + its skills/agents
 //   *                          — static files from frontend/
 
 import http from 'http';
@@ -19,7 +20,7 @@ import { PORT, HOST, FRONTEND_DIR, WORKFLOWS_DIR } from './src/server/config.js'
 import { json } from './src/server/http-util.js';
 import { mutationAuthorized, originAllowed } from './src/server/security.js';
 import {
-  listWorkflows, readWorkflow, writeWorkflow, validateWorkflow, listSkills, serveStatic,
+  listWorkflows, readWorkflow, writeWorkflow, validateWorkflow, listSkills, serveStatic, exportBundle,
 } from './src/server/handlers.js';
 
 const UNAUTHORIZED = { error: 'Unauthorized: remote mutations require a Bearer RFD_TOKEN' };
@@ -66,6 +67,12 @@ const server = http.createServer((req, res) => {
 
   if (url === '/api/skills' && method === 'GET') {
     listSkills(res);
+    return;
+  }
+
+  const bundleMatch = url.match(/^\/api\/bundle\/([^/]+)$/);
+  if (bundleMatch && method === 'GET') {
+    exportBundle(res, decodeURIComponent(bundleMatch[1]));
     return;
   }
 

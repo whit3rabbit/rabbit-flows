@@ -163,4 +163,54 @@ const fan = await parallel([ () => agent('x', { label: 'w0' }), () => agent('y',
 }
 
 // ---------------------------------------------------------------------------
+// AC7: a paren character inside a prompt string must not break the balanced-paren scan
+// ---------------------------------------------------------------------------
+{
+  const src = `
+export const meta = { name: 'ac7', description: 'x', phases: [] }
+const x = await agent('rate this :)', { label: 'ok' })
+`;
+  const g = parseWorkflow(src);
+  assert(g.lossy.length === 0, `AC7: ":)" in a prompt does not produce lossy (got ${JSON.stringify(g.lossy)})`);
+  const ok = g.nodes.find((n) => n.label === 'ok');
+  assert(!!ok, 'AC7: agent with ":)" in the prompt parses to a node with label "ok"');
+}
+
+// ---------------------------------------------------------------------------
+// AC8: an `agent(` token INSIDE a prompt string is not a real call (no phantom node, no lossy)
+// ---------------------------------------------------------------------------
+{
+  const src = `
+export const meta = { name: 'ac8', description: 'x', phases: [] }
+const fan = await parallel([ () => agent('use the agent(x) helper', { label: 'p' }) ])
+`;
+  const g = parseWorkflow(src);
+  const lanes = g.nodes.filter((n) => n.kind === 'agent' || n.kind === 'gate');
+  assert(lanes.length === 1, `AC8: in-string "agent(" is not a second node (got ${lanes.length})`);
+  assert(lanes[0] && lanes[0].label === 'p', 'AC8: the real lane keeps its label "p"');
+  assert(g.lossy.length === 0, `AC8: no false lossy from in-string "agent(" (got ${JSON.stringify(g.lossy)})`);
+}
+
+// ---------------------------------------------------------------------------
+// AC9: a while-loop becomes a loop container; body agents are wired container->child
+// ---------------------------------------------------------------------------
+{
+  const src = `
+export const meta = { name: 'ac9', description: 'x', phases: [] }
+let i = 0;
+while (i < 5) {
+  const r = await agent('body work', { label: 'w' });
+  i++;
+}
+`;
+  const g = parseWorkflow(src);
+  const loop = g.nodes.find((n) => n.kind === 'loop');
+  assert(!!loop, 'AC9: while-loop yields a loop container node');
+  const lane = g.nodes.find((n) => n.label === 'w');
+  assert(!!lane && lane.kind === 'agent', 'AC9: a loop-body agent() becomes a child node');
+  assert(!!lane && g.edges.some((e) => e.from === loop.id && e.to === lane.id),
+    'AC9: the loop-body agent is wired container->child (not orphaned)');
+}
+
+// ---------------------------------------------------------------------------
 process.exit(failures > 0 ? 1 : 0);

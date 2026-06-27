@@ -33,6 +33,29 @@ export function extractBalancedBracket(src, startIdx) {
   return null;
 }
 
+/** Extract a balanced-paren block starting at the first '(' at or after startIdx.
+ *  String-literal aware: a `(` or `)` inside a quoted string does NOT change depth (so a prompt
+ *  like 'rate this :)' or one mentioning 'agent(x)' is handled correctly). Honors `\` escapes
+ *  and all three quote chars. Returns {text, start, end} or null if unbalanced. */
+export function extractBalancedParen(src, startIdx) {
+  const i = src.indexOf('(', startIdx);
+  if (i === -1) return null;
+  let depth = 0, j = i, str = null;
+  while (j < src.length) {
+    const c = src[j];
+    if (str) {
+      if (c === '\\') { j += 2; continue; }
+      if (c === str) str = null;
+      j++; continue;
+    }
+    if (c === "'" || c === '"' || c === '`') { str = c; j++; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return { text: src.slice(i, j + 1), start: i, end: j }; }
+    j++;
+  }
+  return null; // unbalanced
+}
+
 /** Read one or more string literals joined by `+` starting at the first quote at/after i.
  *  Returns the concatenated value, or null if no literal there. Handles ', ", `. */
 export function readConcatString(src, i) {

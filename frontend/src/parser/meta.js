@@ -1,7 +1,7 @@
 // meta.js — parse the `export const meta = { ... }` block from a workflow source.
 // Reliable: balanced-brace extraction (mirrors validate.py find_meta_block).
 
-import { extractBalancedBraces, extractBalancedBracket, extractStringValue } from './scan.js';
+import { extractBalancedBraces, extractBalancedBracket, extractStringValue, readConcatString } from './scan.js';
 
 /**
  * Parse the `export const meta = { ... }` block from a workflow source string.
@@ -39,9 +39,22 @@ export function parseMeta(src) {
   if (phasesIdx !== -1) {
     const arr = extractBalancedBracket(block.text, phasesIdx);
     if (arr) {
-      const titleRe = /\btitle\s*:\s*(['"`])((?:\\.|(?!\1)[^])*?)\1/g;
-      let m;
-      while ((m = titleRe.exec(arr)) !== null) result.phases.push(m[2]);
+      // Collect each `title:` value, string-aware: a literal "title:" sitting INSIDE another value's
+      // string (e.g. a phase `detail: 'set the title: foo'`) must not be mistaken for a phase title.
+      let str = null;
+      for (let i = 0; i < arr.length; i++) {
+        const c = arr[i];
+        if (str) { if (c === '\\') { i++; continue; } if (c === str) str = null; continue; }
+        if (c === "'" || c === '"' || c === '`') { str = c; continue; }
+        if (c !== 't' || !arr.startsWith('title', i)) continue;
+        const prev = i > 0 ? arr[i - 1] : '';
+        if (/[A-Za-z0-9_$]/.test(prev)) continue; // word boundary before the key
+        let j = i + 5;
+        while (j < arr.length && /\s/.test(arr[j])) j++;
+        if (arr[j] !== ':') continue;
+        const v = readConcatString(arr, j + 1);
+        if (v != null) result.phases.push(v);
+      }
     }
   }
 

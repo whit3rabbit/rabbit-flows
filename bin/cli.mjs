@@ -9,11 +9,11 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { readRegistry, writeRegistry, registryWorkflows, removeBundle, storeDirFor } from './registry.mjs'
+import { readBundle, writeBundleToStore, listScripts, parseRequires, sameSet, isBundleName } from './bundle.mjs'
 const execFileP = promisify(execFile)
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const SKILLS_DIR = path.join(ROOT, 'plugins', 'workflow-kit', 'skills')
-const AGENTS_DIR = path.join(ROOT, 'plugins', 'workflow-kit', 'agents')
 
 const RECEIPT = '.rabbit-flows-receipt.json' // per-scope install ledger, lives in scopeRoot
 const BACKUP_ROOT = '.rabbit-flows-backups' // displaced user files land here, restored on uninstall
@@ -29,20 +29,34 @@ const parseList = (s) => s.split(',').map((x) => x.trim()).filter(Boolean)
 const NO_TTY =
   'no TTY: pass --workflow <name> or --all (optionally --scope user|project, or --silo <id> for a ccsilo silo).'
 
+// The installer catalog is two sources merged: the baked-in built-ins, and any bundles the user
+// imported (registry.mjs). Both are manifest-shaped; the _base/_builtin tags let sources() resolve
+// each entry's files from the right root, so the rest of install/list/TUI is source-agnostic.
 async function loadManifest() {
   const raw = await readFile(path.join(ROOT, 'installer', 'manifest.json'), 'utf8')
-  return JSON.parse(raw).workflows
+  const baked = JSON.parse(raw).workflows.map((w) => ({ ...w, _base: ROOT, _builtin: true }))
+  const imported = registryWorkflows(await readRegistry())
+  return [...baked, ...imported]
 }
 
-const sameSet = (a, b) =>
-  a.length === b.length && [...a].sort().join('|') === [...b].sort().join('|')
-
-// Parse a "// requires-skills: a, b" or "// requires-agents: x" header comment.
-// Returns null when the comment is absent (nothing to assert).
-function parseRequires(src, key) {
-  const m = src.match(new RegExp(`//\\s*requires-${key}:\\s*(.*)`, 'i'))
-  if (!m) return null
-  return m[1].split(',').map((s) => s.trim()).filter(Boolean)
+// Per-entry source paths. Built-ins sit in the repo (workflow at base/<file>, skills/agents under
+// the plugin tree); imported bundles use the flat store layout (base/workflows|skills|agents).
+// An untagged entry (raw manifest object, e.g. from a test) defaults to built-in against ROOT, so
+// the resolver is backward-compatible with callers that pass plain manifest entries.
+function sources(w) {
+  const builtin = w._builtin !== false
+  const base = w._base || ROOT
+  return {
+    workflow: path.join(base, w.file),
+    skill: (s) =>
+      builtin
+        ? path.join(base, 'plugins', 'workflow-kit', 'skills', s)
+        : path.join(base, 'skills', s),
+    agent: (a) =>
+      builtin
+        ? path.join(base, 'plugins', 'workflow-kit', 'agents', `${a}.md`)
+        : path.join(base, 'agents', `${a}.md`),
+  }
 }
 
 // --check: assert every referenced file exists AND that each workflow's header comment
@@ -50,17 +64,20 @@ function parseRequires(src, key) {
 async function check(workflows) {
   const missing = []
   const drift = []
-  for (const w of workflows) {
-    const wfPath = path.join(ROOT, w.file)
+  // Only the baked-in built-ins are this repo's CI concern; imported bundles were validated at
+  // import time (bundle.mjs) and live under ~/.rabbit-flows, not the repo.
+  for (const w of workflows.filter((x) => x._builtin)) {
+    const src_ = sources(w)
+    const wfPath = src_.workflow
     if (!existsSync(wfPath)) {
       missing.push(w.file)
       continue
     }
     for (const s of w.skills ?? []) {
-      if (!existsSync(path.join(SKILLS_DIR, s, 'SKILL.md'))) missing.push(`skill:${s}`)
+      if (!existsSync(path.join(src_.skill(s), 'SKILL.md'))) missing.push(`skill:${s}`)
     }
     for (const a of w.agents ?? []) {
-      if (!existsSync(path.join(AGENTS_DIR, `${a}.md`))) missing.push(`agent:${a}`)
+      if (!existsSync(src_.agent(a))) missing.push(`agent:${a}`)
     }
     const src = await readFile(wfPath, 'utf8')
     for (const [key, manifestList] of [['skills', w.skills ?? []], ['agents', w.agents ?? []]]) {
@@ -89,7 +106,7 @@ async function check(workflows) {
 function list(workflows) {
   for (const w of workflows) {
     const deps = [...(w.skills ?? []), ...(w.agents ?? [])]
-    console.log(`${w.name}  -  ${w.description}`)
+    console.log(`${w.name}  -  ${w.description}${w._builtin ? '' : '  (imported)'}`)
     if (deps.length) console.log(`    bundles: ${deps.join(', ')}`)
   }
 }
@@ -221,9 +238,10 @@ export async function install(chosen, scopeRoot, force) {
   }
 
   for (const w of chosen) {
-    let owned = await place(path.join(ROOT, w.file), path.join(scopeRoot, 'workflows', path.basename(w.file)), false, 'workflow', w.name)
-    for (const s of w.skills ?? []) owned = (await place(path.join(SKILLS_DIR, s), path.join(scopeRoot, 'skills', s), true, 'skill', s)) || owned
-    for (const a of w.agents ?? []) owned = (await place(path.join(AGENTS_DIR, `${a}.md`), path.join(scopeRoot, 'agents', `${a}.md`), true, 'agent', a)) || owned
+    const src = sources(w)
+    let owned = await place(src.workflow, path.join(scopeRoot, 'workflows', path.basename(w.file)), false, 'workflow', w.name)
+    for (const s of w.skills ?? []) owned = (await place(src.skill(s), path.join(scopeRoot, 'skills', s), true, 'skill', s)) || owned
+    for (const a of w.agents ?? []) owned = (await place(src.agent(a), path.join(scopeRoot, 'agents', `${a}.md`), true, 'agent', a)) || owned
     // Claim the workflow if we own ANY of its files (the .js, or a freshly-copied dep). A foreign .js
     // collision still leaves the .js the user's, but its installed skills stay selectively removable.
     if (owned && !receipt.workflows.includes(w.name)) receipt.workflows.push(w.name)
@@ -289,10 +307,141 @@ export async function uninstall(chosenNames, scopeRoot, manifest, all) {
   return { empty: false, done }
 }
 
+// --- import (bundle catalog) --------------------------------------------
+// Import = add-to-catalog: validate a .zip bundle, store its source under ~/.rabbit-flows, and
+// register it so its workflow shows up in the install TUI. It does NOT install into a scope; the
+// user runs install afterward and picks it. The security boundary lives in bundle.mjs.
+
+function printRegistry(reg) {
+  const names = Object.keys(reg.bundles ?? {})
+  if (!names.length) {
+    console.log('No bundles imported. Add one: rabbit-flows import <bundle.zip>')
+    return
+  }
+  for (const n of names) {
+    const b = reg.bundles[n]
+    const wfs = (b.workflows ?? []).map((w) => w.name).join(', ')
+    console.log(`${n}  -  ${wfs}`)
+    console.log(`    imported ${b.importedAt}  sha256 ${(b.sha256 ?? '').slice(0, 12)}  from ${b.archive ?? '?'}`)
+  }
+}
+
+async function removeImport(reg, name) {
+  if (!name) {
+    console.error('usage: rabbit-flows import --remove <name>')
+    process.exit(1)
+  }
+  if (!reg.bundles?.[name]) {
+    console.error(`not imported: ${name} (rabbit-flows import --list to see what is)`)
+    process.exit(1)
+  }
+  await removeBundle(reg, name)
+  console.log(
+    `Removed "${name}" from the catalog. Already-installed copies are separate — ` +
+      `remove those with: rabbit-flows uninstall`,
+  )
+}
+
+// Collect positional args from the post-`import` argv, skipping --flags and the value of --name/--remove.
+function positionalsOf(rest) {
+  const valueFlags = new Set(['--name', '--remove'])
+  const out = []
+  for (let i = 0; i < rest.length; i++) {
+    const t = rest[i]
+    if (t.startsWith('--')) {
+      if (valueFlags.has(t)) i++
+      continue
+    }
+    out.push(t)
+  }
+  return out
+}
+
+async function runImport(rest, workflows) {
+  const reg = await readRegistry()
+  if (has('list')) return printRegistry(reg)
+  if (has('remove')) return removeImport(reg, flag('remove'))
+
+  const archivePath = positionalsOf(rest)[0]
+  if (!archivePath) {
+    console.error('usage: rabbit-flows import <bundle.zip> [--name <n>] [--force] [--yes]')
+    process.exit(1)
+  }
+
+  let bundle
+  try {
+    bundle = await readBundle(path.resolve(archivePath))
+  } catch (e) {
+    console.error(`bundle rejected: ${e.message}`)
+    process.exit(1)
+  }
+  const { manifest, entries, sha256 } = bundle
+  const w = manifest.workflows[0]
+
+  // Built-in shadowing: hard refuse, no --force. A bundle must never replace a trusted built-in.
+  if (workflows.some((x) => x._builtin && x.name === w.name)) {
+    console.error(`refused: "${w.name}" is a built-in workflow; a bundle may not shadow it.`)
+    process.exit(1)
+  }
+
+  const override = flag('name')
+  if (override && !isBundleName(override)) {
+    console.error(`invalid --name "${override}" (allowed: ${'[a-z0-9][a-z0-9-]*'}).`)
+    process.exit(1)
+  }
+  const bundleName = override || w.name
+  const force = has('force')
+  if (reg.bundles?.[bundleName] && !force) {
+    console.error(`"${bundleName}" already imported; re-run with --force to replace it.`)
+    process.exit(1)
+  }
+
+  // Trust gate: show provenance + every executable script that will run with the user's permissions.
+  console.log(`Bundle: ${path.basename(archivePath)}`)
+  console.log(`  sha256:   ${sha256}`)
+  console.log(`  workflow: ${w.name} — ${w.description ?? ''}`)
+  if (w.skills.length) console.log(`  skills:   ${w.skills.join(', ')}`)
+  if (w.agents.length) console.log(`  agents:   ${w.agents.join(', ')}`)
+  const scripts = listScripts(entries, manifest)
+  if (scripts.length) {
+    console.log(`\n  WARNING: this bundle ships executable scripts that run with YOUR permissions`)
+    console.log(`  when the workflow runs. Only import bundles you trust:`)
+    for (const s of scripts) console.log(`    - ${s}`)
+  }
+
+  const consented = has('yes') || force
+  if (!consented) {
+    if (!process.stdin.isTTY) {
+      console.error('\nnon-interactive: pass --yes to consent to importing (and later running) this bundle.')
+      process.exit(1)
+    }
+    const p = await import('@clack/prompts')
+    const ok = await p.confirm({ message: 'Import this bundle into your catalog?' })
+    if (p.isCancel(ok) || !ok) {
+      console.log('cancelled')
+      return
+    }
+  }
+
+  const storeDir = storeDirFor(bundleName)
+  await rm(storeDir, { recursive: true, force: true }) // clean slate (covers --force replace)
+  await writeBundleToStore(entries, manifest, storeDir)
+  reg.bundles[bundleName] = {
+    workflows: [{ name: w.name, file: w.file, description: w.description ?? '', skills: w.skills, agents: w.agents }],
+    importedAt: new Date().toISOString(),
+    sha256,
+    archive: path.basename(archivePath),
+  }
+  await writeRegistry(reg)
+  console.log(`\nImported "${bundleName}". Next: rabbit-flows install  (pick ${w.name}).`)
+}
+
 // --- main ---------------------------------------------------------------
 async function main() {
   const workflows = await loadManifest()
 
+  // `import` owns its own --list/--remove, so dispatch it before the generic --check/--list below.
+  if (argv[0] === 'import') return runImport(argv.slice(1), workflows)
   if (has('check')) return check(workflows)
   if (has('list')) return list(workflows)
 
@@ -404,7 +553,7 @@ async function runInstall(workflows, scopeArg, siloArg, force, all) {
     if (!target) return p.cancel('cancelled')
     const picked = await p.multiselect({
       message: 'Pick workflows to install (their skills/agents come along):',
-      options: workflows.map((w) => ({ value: w.name, label: w.name, hint: w.description })),
+      options: workflows.map((w) => ({ value: w.name, label: w._builtin ? w.name : `${w.name} (imported)`, hint: w.description })),
       required: true,
     })
     if (p.isCancel(picked)) return p.cancel('cancelled')

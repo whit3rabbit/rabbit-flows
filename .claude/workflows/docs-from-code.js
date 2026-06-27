@@ -5596,6 +5596,25 @@ const basePath = typeof args?.basePath === 'string' && args.basePath.trim() ? ar
 const planNewModules = args?.planNewModules === true
 // @generated-end arg-contract/guards
 const root = typeof args === 'string' ? args : args?.root ?? '.'   // bare string supported -> custom, not generated
+// Guard: a stringified args blob (the whole {root,framework,...} flattened to one string — the recurring
+// "named-workflow args didn't thread" failure, WORKFLOW_ANALYSIS.md "Documentation Gaps") lands here as a
+// bare-string `root`, silently switching to custom mode on a nonsense path. Fail LOUD. Reads only the
+// `root`/`board` locals (adds no new per-arg access) so the arg-contract drift check stays green.
+// ponytail: regex heuristic, known ceiling — false-positives only on a real path enumerating >=2 arg keys.
+// `["']?` after each key catches BOTH a comma-blob (`root: src`) and a JSON-stringified object (`{"root":"src"}`).
+const _argKeys =
+  /\b(goal|execute|board|constraints|root|question|outDir|brief|framework|targetLang|targetDir|grounding|maxRounds|maxTokens|workerModel|scaffoldMode|site|basePath)["']?\s*[:=]/gi
+const _keyHits = [...new Set([...String(root).matchAll(_argKeys)].map((m) => m[1].toLowerCase()))]
+if (/^\s*['"{]*\s*(root|goal)["']?\s*[:=]/i.test(root) || _keyHits.length >= 2) {
+  return {
+    root,
+    board,
+    written: false,
+    error:
+      `args appear stringified: \`root\` carries argument keys (${_keyHits.join(', ')}). Pass a STRUCTURED ` +
+      `object, not one string blob: Workflow({name:"docs-from-code", args:{root:"src", framework:"starlight"}}).`,
+  }
+}
 const fwEntry = FRAMEWORKS[framework] ?? FRAMEWORKS._unfilled       // derived from framework; unknown -> _unfilled sentinel
 const mode = args?.mode === 'update' ? 'update' : 'fresh'
 const updateMode = args?.updateMode === 'refine' ? 'refine' : 'diff'

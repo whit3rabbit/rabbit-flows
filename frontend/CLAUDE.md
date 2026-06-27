@@ -34,6 +34,7 @@ reads real workflow files from `.claude/workflows/` and can validate generated c
 | POST | `/api/workflows/:name` | Write body to `.claude/workflows/:name` (path-traversal-guarded) |
 | POST | `/api/validate` | Validate body via `validate.py --strict` (`{ok, output}`) |
 | GET | `/api/skills` | List `{name, description}[]` from both skill roots (deduped) |
+| GET | `/api/bundle/:name` | Download a `.zip` of the workflow + its declared skills/agents (read-tier) |
 
 The server binds `127.0.0.1` by default (it writes executable workflow files and runs
 `validate.py`, so it must not be LAN-reachable). Set `HOST=0.0.0.0` to override. Request
@@ -59,16 +60,27 @@ handler without restoring an Origin allowlist on the mutating routes.
   `toolbar`/`palette`/`inspector`/`manager`/`codepanel`/`flowpane` (UI), `nodes`/`graph`/`visual`
   (rendering), `api` (backend calls), `library` (localStorage), `codegen` (graph→code).
   - `src/parser/` — parser internals: `scan.js`, `meta.js`, `calls.js` (entry is `../parser.js`).
-  - `src/server/` — Node server internals: `config.js`, `http-util.js`, `security.js`, `handlers.js`.
+  - `src/server/` — Node server internals: `config.js`, `http-util.js`, `security.js`, `handlers.js`,
+    `bundle.js` (assembles the `/api/bundle/:name` export zip).
 - `parser.js` — public parser entry (browser + Node); thin facade over `src/parser/`.
 - `server.js` — stdlib HTTP server entry (Node 18+): dispatcher + listen over `src/server/`.
 - `vendor/` — pinned React 18.3.1, ReactDOM 18.3.1, ReactFlow 11.11.4 (UMD + CSS), served by
-  `server.js`. Committed on purpose; re-download to upgrade. Not bundled by Vite.
+  `server.js`. Committed on purpose; re-download to upgrade. Not bundled by Vite. Also
+  `fflate.module.js` (vendored zip lib) — the ONE runtime module the server imports
+  (`src/server/bundle.js`), kept vendored rather than an npm dep so `node server.js` still needs no
+  `npm install`. Upgrade by re-copying `node_modules/fflate/esm/index.mjs`.
 - `package.json` — Node engine + the `start`/`build`/`lint`/`test` scripts; **devDependencies only**
   (Vite + ESLint). The server and parser import zero runtime deps.
 - `vite.config.js` / `eslint.config.js` — build + lint config. ESLint splits browser (`src/**`,
   minus `src/server/`) from Node (`server.js`, `src/server/**`, `parser.js`, tests, configs).
+- `src/schema.js` — canonical graph schema: node-kind/edge-type vocabularies (imported from
+  `visual.js`), per-kind handle inventory, connection rules (`CONNECTION_RULES`/`edgeTypeFor`/
+  `connectionAllowed`, wired into the canvas `onConnect`+`isValidConnection`), Draft-07
+  `GRAPH_JSON_SCHEMA`, and dependency-free `validateGraph()`. Full reference: `docs/flow-schema.md`.
 - `test-parser.mjs` — `parser.js` self-checks. Run: `node frontend/test-parser.mjs` (exits 0/1).
+- `test-schema.mjs` — `schema.js` self-checks: every `.claude/workflows/*.js` parses to a graph that
+  passes `validateGraph()`, plus handle-count / connection-rule / validator checks. `npm test` runs
+  all three suites (test-parser.mjs, test-schema.mjs, test-bundle.mjs).
 - `Dockerfile` — builds the server image with python3 for `/api/validate`.
 - `docker-compose.yml` — convenience compose wrapper (mounts `.claude/` read-only).
 - Every source file is kept under 400 lines (tests may exceed); split a module rather than grow it.
@@ -84,7 +96,7 @@ cd frontend
 npm install        # or: pnpm install
 npm run build      # or: pnpm build   — vite build → dist/
 npm run lint       # or: pnpm lint    — eslint .
-npm test           # or: pnpm test    — node test-parser.mjs (27 assertions)
+npm test           # or: pnpm test    — runs test-parser.mjs && test-schema.mjs && test-bundle.mjs
 npm start          # or: pnpm start   — node server.js
 ```
 
@@ -144,8 +156,11 @@ docker compose -f frontend/docker-compose.yml up --build
 It uses regex and simple token walks to extract workflow structure. Known limitations:
 
 - **Supported forms**: `await agent(...)`, `phase('...')`, `await parallel([...])` AND
-  `await parallel(items.map(() => agent(...)))` (bare thunks), and `await pipeline(items, s1, s2)`
-  (stages emitted as sequential nodes). A `//` or `/*` inside a prompt string is preserved.
+  `await parallel(items.map(() => agent(...)))` (bare thunks), `await pipeline(items, s1, s2)`
+  (stages emitted as sequential nodes), and `while`/`for (...) { ... }` loops (a `loop` container
+  whose body `agent()` calls become child lanes; a braceless or agent-less loop body is skipped).
+  A `//` or `/*` inside a prompt string is preserved, and a paren or `agent(` inside a prompt
+  string no longer breaks the scan.
 - **Lossy flags**: `model`, `isolation`, and per-agent options inside object literals
   may be silently dropped if they appear in complex expressions.
 - **No perfect round-trip**: parsed-then-exported graphs will not reproduce the original

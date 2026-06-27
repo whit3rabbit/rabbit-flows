@@ -19,7 +19,9 @@ export function initCodePanel(ReactIn) {
 //   onClose        - () => void
 //   onValidate     - () => void
 //   onSave         - () => void
-export function buildCodePanel({ codeOpen, code, validateResult, metaName, onClose, onValidate, onSave }) {
+//   bundleName     - string|null: on-disk basename of the saved workflow (null = not saved yet)
+//   onExportBundle - () => void: download a .zip bundle of the saved workflow + its skills/agents
+export function buildCodePanel({ codeOpen, code, validateResult, metaName, onClose, onValidate, onSave, bundleName, onExportBundle }) {
   if (!codeOpen) return null;
 
   const vr = validateResult;
@@ -43,6 +45,12 @@ export function buildCodePanel({ codeOpen, code, validateResult, metaName, onClo
           style: { height: 28, padding: '0 14px', background: vr && vr.pending ? '#1a1e26' : 'linear-gradient(180deg,#2dd4bf,#1ab8a4)', border: 'none', color: vr && vr.pending ? '#5d6776' : '#06101f', fontWeight: 600, borderRadius: 7, cursor: vr && vr.pending ? 'default' : 'pointer', fontSize: 11.5, fontFamily: SANS },
         }, vr && vr.pending ? 'Validating...' : 'Export + Validate'),
         h('button', { onClick: onSave, style: { height: 28, padding: '0 14px', background: '#11161e', border: '1px solid #2b3a52', color: '#9fc2ff', fontWeight: 600, borderRadius: 7, cursor: 'pointer', fontSize: 11.5, fontFamily: SANS } }, 'Save to repo'),
+        h('button', {
+          onClick: onExportBundle,
+          disabled: !bundleName,
+          title: bundleName ? 'Download a .zip bundle (workflow + its skills/agents)' : 'Save to repo first',
+          style: { height: 28, padding: '0 14px', background: '#11161e', border: '1px solid ' + (bundleName ? '#2b3a52' : '#1d2530'), color: bundleName ? '#9fc2ff' : '#5d6776', fontWeight: 600, borderRadius: 7, cursor: bundleName ? 'pointer' : 'default', fontSize: 11.5, fontFamily: SANS },
+        }, 'Download bundle'),
         vr && !vr.pending && h('span', { style: { fontSize: 11.5, fontWeight: 600, color: vr.ok ? '#2dd4bf' : '#e07a8c' } }, vr.ok ? '✓ Passed validate.py --strict' : '✕ Failed validate.py --strict'),
         h('div', { style: { flex: 1 } }),
         h('span', { style: { fontSize: 10.5, color: '#5d6776' } },

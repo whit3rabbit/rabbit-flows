@@ -156,7 +156,10 @@ no user IO, so gather these here first):
    the board only; `true` makes **unattended edits** to the project. Default to `false` unless the
    user clearly opted into autonomous execution.
 3. Launch: `Workflow({ name: "eatahorse", args: { goal, execute, board } })` (`board` defaults to
-   `.eatahorse`; omit args you did not gather — the workflow defaults them).
+   `.eatahorse`; omit args you did not gather — the workflow defaults them). Pass `args` as a real JSON
+   **object**, never a single string. WRONG: `args: "goal: X, execute: true"`. RIGHT:
+   `args: { goal: "X", execute: true }`. A stringified blob makes the workflow bail loud (`goal` swallows
+   `execute`/`board`/`constraints` → silent plan-only).
 4. Hand back the workflow's board summary (counts, what's blocked, the written CLAUDE.md note).
 
 The skill name (`eatahorse`) and the workflow `meta.name` (`eatahorse`) live in separate

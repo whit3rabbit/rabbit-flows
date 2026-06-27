@@ -249,6 +249,27 @@ const execute = args?.execute ?? false
 const slugify = (s) =>
   (String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'board')
 const board = args?.board ?? '.eatahorse-' + slugify(goal)
+// Guard: a stringified args blob (the whole {goal,execute,board,...} flattened to one string — the
+// recurring "named-workflow args didn't thread" failure, WORKFLOW_ANALYSIS.md "Documentation Gaps")
+// lands here as a bare-string `goal`: execute reads undefined -> false -> SILENT plan-only, and slugify
+// bakes the blob into .eatahorse-goal-... . Fail LOUD (return, matching the collision-trap idiom below).
+// ponytail: regex heuristic, known ceiling — false-positives only on a real goal that itself enumerates
+// >=2 of these arg keys with a `:`/`=` after; the error is actionable so the cost is one re-launch.
+// `["']?` after each key catches BOTH a comma-blob (`goal: x`) and a JSON-stringified object (`{"goal":"x"}`).
+const _argKeys =
+  /\b(goal|execute|board|constraints|root|question|outDir|brief|framework|targetLang|targetDir|grounding|maxIterations|maxTokens|budgetFloor|workerModel|preserveApi|testCmd)["']?\s*[:=]/gi
+const _keyHits = [...new Set([...String(goal).matchAll(_argKeys)].map((m) => m[1].toLowerCase()))]
+if (/^\s*['"{]*\s*(goal|root)["']?\s*[:=]/i.test(goal) || _keyHits.length >= 2) {
+  return {
+    goal,
+    board,
+    written: false,
+    error:
+      `args appear stringified: \`goal\` carries argument keys (${_keyHits.join(', ')}). Pass a STRUCTURED ` +
+      `object, not one string blob: Workflow({name:"eatahorse", args:{goal:"<task>", execute:true, ` +
+      `board:".eatahorse-<topic>"}}). execute/board/constraints were dropped, so this run would silently plan only.`,
+  }
+}
 // Default to the bundled skill copy (works when run in this repo / after npx install into .claude). The
 // worker is told to `find` it if the default is absent, so a relocated install still resolves.
 const scriptPath = args?.scriptPath ?? 'plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py'

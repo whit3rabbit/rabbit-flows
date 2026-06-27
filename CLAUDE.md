@@ -11,7 +11,9 @@ npm run build:skill   # regenerate guardrails skill from .claude/rules/ (run aft
 npm run check         # assert no drift: guardrails skill matches rules AND installer manifest matches workflows
 python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py .claude/workflows --strict   # lint workflow scripts (NOT scripts/validate.py); --selftest checks the linter. CI runs this. NOTE: its pure-literal check false-flags "(" in meta.description — keep meta strings paren-free.
 npx @whit3rabbit/rabbit-flows --list   # preview the installable workflow catalog
-npm test               # installer CLI self-checks (node --test, test/cli.test.mjs); run after editing bin/cli.mjs
+npm test               # installer CLI self-checks (node --test over test/*.test.mjs: cli.test.mjs + bundle.test.mjs); run after editing bin/cli.mjs
+node --test test/bundle.test.mjs   # BUNDLE import self-checks (readBundle guards + import->install flow); run after editing bin/bundle.mjs, bin/registry.mjs, or the import path in bin/cli.mjs
+node frontend/test-bundle.mjs      # frontend bundle EXPORT self-checks (gatherBundle); run after editing frontend/src/server/bundle.js
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_eatahorse.py   # eatahorse CLI self-checks (stdlib, no framework); run after editing eatahorse.py
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_build_inventory.py   # Kahn topo/layer/cycle pass self-checks; run after editing build_inventory.py
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_diff_test.py   # differential-equivalence harness self-checks; run after editing diff_test.py
@@ -160,6 +162,7 @@ durable knowledge, append it to that file (one per workflow), and add a pointer 
 | `scaffold` / `new-project` | `docs/scaffold-workflow-log.md` |
 | `eatahorse` / `eatahorse-research` / `eatahorse.py` / port pipeline | `docs/eatahorse-workflow-log.md` |
 | `frontend/` Visual Workflow Designer (server, parser, codegen) | `docs/frontend-designer-workflow-log.md` + `frontend/CLAUDE.md` |
+| bundle import/export (`bin/bundle.mjs`, `bin/registry.mjs`, `frontend/src/server/bundle.js`) | `docs/bundle-format.md` |
 
 Workflow OUTPUT can be sensitive: a `security-audit` run writes a vulnerability inventory to
 `.security-audit/` — gitignored here, and the workflow ensures gitignore in any target repo. Do not

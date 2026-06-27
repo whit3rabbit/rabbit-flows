@@ -169,6 +169,25 @@ const question = args?.question ?? 'Summarize what each file does and flag anyth
 const include = args?.include ?? '' // optional glob, e.g. "**/*.py"
 const exclude = args?.exclude ?? '' // optional glob to drop
 const board = args?.board ?? '.eatahorse-research'
+// Guard: a stringified args blob (the whole {root,question,...} flattened to one string — the recurring
+// "named-workflow args didn't thread" failure, WORKFLOW_ANALYSIS.md "Documentation Gaps") lands here as a
+// bare-string `root`, so the research targets a nonsense path. Fail LOUD instead of degrading.
+// ponytail: regex heuristic, known ceiling — false-positives only on a real path that enumerates >=2 arg
+// keys with a `:`/`=` after; the error is actionable so the cost is one re-launch.
+// `["']?` after each key catches BOTH a comma-blob (`root: src`) and a JSON-stringified object (`{"root":"src"}`).
+const _argKeys =
+  /\b(goal|execute|board|constraints|root|question|outDir|brief|framework|targetLang|targetDir|grounding|maxRounds|maxTokens|budgetFloor|workerModel|extract)["']?\s*[:=]/gi
+const _keyHits = [...new Set([...String(root).matchAll(_argKeys)].map((m) => m[1].toLowerCase()))]
+if (/^\s*['"{]*\s*(root|goal)["']?\s*[:=]/i.test(root) || _keyHits.length >= 2) {
+  return {
+    root,
+    board,
+    written: false,
+    error:
+      `args appear stringified: \`root\` carries argument keys (${_keyHits.join(', ')}). Pass a STRUCTURED ` +
+      `object, not one string blob: Workflow({name:"eatahorse-research", args:{root:"src", question:"..."}}).`,
+  }
+}
 const workerModel = args?.workerModel ?? 'haiku'
 const maxRounds = Math.min(args?.maxRounds ?? 3, 10)
 const out = args?.out ?? 'eatahorse-research.md'

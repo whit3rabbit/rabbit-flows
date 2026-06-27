@@ -12,7 +12,10 @@ import { DIMS } from './visual.js';
 
 const camel = (s) => {
   const w = String(s).replace(/[^a-zA-Z0-9]+/g, ' ').trim().split(' ');
-  return w.map((x, i) => i ? x.charAt(0).toUpperCase() + x.slice(1) : x.toLowerCase()).join('') || 'step';
+  const name = w.map((x, i) => i ? x.charAt(0).toUpperCase() + x.slice(1) : x.toLowerCase()).join('');
+  // A label like "2nd pass" yields "2ndPass" — an invalid identifier that fails validate.py.
+  // Prefix `_` when it starts with a digit. (The loop path already prefixes `_r`.)
+  return /^[0-9]/.test(name) ? '_' + name : name || 'step';
 };
 
 // Escape for a single-quoted JS literal. Newlines/CRs MUST be escaped too, or a multi-line

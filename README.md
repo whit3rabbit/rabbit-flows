@@ -25,13 +25,18 @@ npx @whit3rabbit/rabbit-flows install --workflow scaffold
 npx @whit3rabbit/rabbit-flows install --all
 npx @whit3rabbit/rabbit-flows uninstall --workflow scaffold
 npx @whit3rabbit/rabbit-flows uninstall --all
+
+npx @whit3rabbit/rabbit-flows import ./my-flow-bundle.zip    # add a shared bundle to your catalog
+npx @whit3rabbit/rabbit-flows import --list                  # list imported bundles
+npx @whit3rabbit/rabbit-flows import --remove my-flow        # drop one from the catalog
 ```
 
 Flags:
 
 - `--scope user|project`, defaults to `user`.
-- `--force`, overwrite on install and back up displaced files.
+- `--force`, overwrite on install and back up displaced files (on `import`, replace an existing bundle).
 - `--check`, check manifest files and workflow headers for drift.
+- `--yes` (import only), consent without a prompt (required for non-interactive import).
 
 Scopes:
 
@@ -39,6 +44,21 @@ Scopes:
 - `project`: `./.claude`
 
 Install writes `<scope>/.rabbit-flows-receipt.json`. `--force` backups go under `<scope>/.rabbit-flows-backups/<timestamp>/`.
+
+## Bundles (share a workflow)
+
+A **bundle** is a `.zip` packaging one workflow plus the skills/agents it depends on. Build one in
+the [Visual Designer](frontend/) ("Download bundle" in the generated-code panel, after Save to repo)
+and share the file. `rabbit-flows import <bundle.zip>` validates it, stores it under
+`~/.rabbit-flows/`, and registers it so its workflow shows up in the install menu tagged
+`(imported)` — then install it like any built-in.
+
+**A bundle is third-party code.** Its skill scripts and workflow run with **your** permissions when
+the workflow runs; there is no sandbox. On import, rabbit-flows prints the archive sha256 and lists
+every executable script the bundle ships, then asks you to confirm. Treat an unknown bundle like
+`npm install` of an unknown package: only import what you trust. Imports can never shadow a built-in
+workflow (that is refused outright), and the archive never controls where files are written.
+The bundle format is documented in [docs/bundle-format.md](docs/bundle-format.md).
 
 ## Workflows
 

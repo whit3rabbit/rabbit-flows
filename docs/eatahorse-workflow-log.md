@@ -309,3 +309,18 @@ logic and one verifyOnly precedence bug. All fixes are prompt/control-flow excep
   ported in verify-only); `resumed: resume && !verifyOnly`.
 - **maxTokens:0 falsy trap (`eatahorse-port-pipeline.js` + `eatahorse-research.js`).** `maxTokens ? ... :
   Infinity` treated 0 as "no ceiling"; changed to `maxTokens != null`.
+- **Stringified-args → silent plan-only (2026-06-26, `eatahorse.js` + `eatahorse-research.js` +
+  `docs-from-code.js`).** A named launch whose `args` arrived as ONE string blob (comma-form
+  `"goal: X, execute: true, board: ..."` OR a JSON-stringified object) hit the `typeof args === 'string'`
+  bare-string path: the whole blob became `goal`/`root`, `execute` read undefined → `false` → the Ralph
+  loop never entered → SILENT plan-only, with the blob slugged into `.eatahorse-goal-...`. The recurring
+  "named-workflow args didn't thread" failure (WORKFLOW_ANALYSIS.md "Documentation Gaps"; `args` must be a
+  JSON value, not a string). Added an inline FAIL-LOUD guard at the top of each: if the resolved
+  `goal`/`root` carries argument keys (regex with `["']?\s*[:=]` after each key, catching BOTH blob forms;
+  trips on `^(goal|root)[:=]` or ≥2 distinct keys), return `{error, written:false}` instead of degrading.
+  `eatahorse-port-pipeline.js` already had this (its `_args` JSON.parse + required-fields bail) — left as-is.
+  Per-file regex (no runtime sharing — VM sandbox), keyed to that file's arg vocab + its bare-string var.
+  Skill prose alone was insufficient (the docs were already thorough), so the guard is the durable fix;
+  both `SKILL.md` copies also gained a WRONG/RIGHT object-vs-string note. **Ceiling:** false-positives on a
+  real goal/path that itself enumerates ≥2 arg keys with a `:`/`=` after — actionable error, cost is one
+  re-launch. Heuristic self-checked via a `node -e` assert run (both blob forms trip, real goals/paths pass).

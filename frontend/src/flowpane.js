@@ -16,17 +16,17 @@ export function initFlowPane(ReactIn, RFIn) {
 // @param {object} opts
 //   wrapRef       - React ref for the pane DOM node
 //   nodes, edges  - ReactFlow state
-//   onNodesChange, onEdgesChange, onConnect, onNodeClick, onPaneClick
+//   onNodesChange, onEdgesChange, onConnect, isValidConnection, onNodeClick, onPaneClick
 //   onDragOver, onDrop
 //   nodeTypes     - ReactFlow node type map
 //   lossyCount    - null | number of unparsed sections
-export function buildFlowPane({ wrapRef, nodes, edges, onNodesChange, onEdgesChange, onConnect, onNodeClick, onPaneClick, onDragOver, onDrop, nodeTypes, lossyCount }) {
+export function buildFlowPane({ wrapRef, nodes, edges, onNodesChange, onEdgesChange, onConnect, isValidConnection, onNodeClick, onPaneClick, onDragOver, onDrop, nodeTypes, lossyCount }) {
   const ReactFlowComp = RF.ReactFlow || RF.default || RF;
   const LEGEND = [['agent', 'Agent'], ['gate', 'Gate'], ['parallel', 'Parallel'], ['loop', 'Loop'], ['skill', 'Skill'], ['knob', 'Knob']];
 
   return h('div', { ref: wrapRef, onDragOver, onDrop, style: { flex: 1, position: 'relative', minWidth: 0 } },
     h(ReactFlowComp, {
-      nodes, edges, onNodesChange, onEdgesChange, onConnect, onNodeClick, onPaneClick, nodeTypes,
+      nodes, edges, onNodesChange, onEdgesChange, onConnect, isValidConnection, onNodeClick, onPaneClick, nodeTypes,
       fitView: true, minZoom: 0.2, maxZoom: 1.8, proOptions: { hideAttribution: true }, defaultEdgeOptions: { type: 'default' },
     },
       h(Background, { color: '#1a2230', gap: 26, size: 1.2 }),
