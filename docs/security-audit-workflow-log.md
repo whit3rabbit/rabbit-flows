@@ -203,3 +203,30 @@ evidence (e.g. `eval`, `symlink`, `inject`) could hijack a finding whose gate ca
 correct, emitting the wrong CWE/ruleId/OWASP into the SARIF (pre-diff used `f.category` verbatim). Fixed:
 match the category FIRST (authoritative); fall back to evidence ONLY when the category alone matches
 nothing — evidence can break a tie for a generic/unmapped category but can never override a specific one.
+
+## recon.py path resolution — stop the stray copy (2026-06-28)
+
+**Symptom:** running the audit in an installed project left a stray `recon.py` in the project tree.
+**Cause:** the workflow hardcoded the DEV-repo path `plugins/workflow-kit/skills/secure-review/scripts/recon.py`
+(via `reconScript`/`reconDir`/`reconSetup`/`venvPy`), baked into the Recon/Map/Secrets/lane/gate prompts.
+The npx installer copies the `secure-review` skill to `<target>/.claude/skills/secure-review/scripts/`
+(project scope) or `~/.claude/skills/...` (user scope) — never `plugins/...`. So in any installed target
+the path pointed at a missing file and the Recon agent (Haiku, Bash) improvised by COPYING recon.py into
+the project. Never reproduces in this dev repo because recon.py exists at BOTH paths.
+
+**Fix (security-audit.js only):** replaced `reconDir`/`reconSetup`/`venvPy` with one shell prelude const
+`reconResolve` injected into every recon-using agent. It probes candidates in order — `reconScript`
+(override + dev path) → `.claude/skills/secure-review/scripts/recon.py` → `$HOME/.claude/skills/...` —
+sets `$RECON` (the recon.py to run), `$RDIR` (its dir, for `setup_venv.sh`), `$PY` (venv python else
+python3), and states "run IN PLACE, never copy/move/recreate". All baked `"${reconScript}"`/`"${venvPy}"`
+command interpolations downstream now use `"$PY" "$RECON"`. `reconBlock` carries the prelude into
+lane/gate/escalate/deep/arbiter transitively; Recon, Map, Secrets prepend it themselves.
+
+CONSTRAINTS (do not re-litigate):
+- recon.py legitimately ships under `.claude/skills/...` (bundled skill) — NOT a bug; the fix targets only
+  the SECOND stray copy. Installer bundling unchanged (user scoped it to "stop the stray copy only").
+- `plugins/.../recon.py` and `.claude/skills/.../recon.py` in THIS dev repo currently DIFFER (pre-existing
+  drift) — out of scope, flag separately if they should be kept in sync.
+- Verified: `validate.py --strict` + `npm run check` green; a deterministic resolver test in a simulated
+  install layout (no `plugins/` dir) resolves to the `.claude` copy, copies nothing, creates no `plugins/`.
+  No end-to-end workflow run was made (heavy, many agents) — the change is prompt-string substitution.

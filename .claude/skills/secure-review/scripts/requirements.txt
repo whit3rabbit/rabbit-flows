@@ -1,6 +1,0 @@
-# OPTIONAL accuracy upgrade for recon.py — installed into a cached venv by setup_venv.sh, NOT project
-# deps. recon.py runs fine WITHOUT these (stdlib `ast` for Python + regex/brace heuristics for other
-# languages); with them it gets precise multi-language function spans and call edges.
-# tree-sitter-language-pack bundles 100+ grammars in one wheel, so recon stays language-agnostic.
-tree-sitter>=0.21,<1
-tree-sitter-language-pack>=0.2

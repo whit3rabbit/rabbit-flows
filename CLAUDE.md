@@ -124,6 +124,11 @@ Two homes, two ways to share:
 - **Skills + agents → shared by plugin/marketplace.** These install into *other* projects
   without cloning. A plugin's CLAUDE.md does NOT load, so the guardrails travel as a skill
   (`skills/workflow-guardrails/`), generated from the rules — never hand-edited.
+  Source of truth is `plugins/workflow-kit/skills/<name>/`. The dogfood copies under
+  `.claude/skills/<name>/` are **symlinks** into that dir (so this repo's own session loads them
+  without drift) — edit the plugin, never the link, and don't `cp` over a symlink.
+  `.claude/skills/dynamic-workflow-authoring/` is the exception: a real, `.claude`-native dir
+  (no plugin counterpart).
 
 Where new things go:
 

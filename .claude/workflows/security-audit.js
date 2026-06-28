@@ -298,12 +298,21 @@ const secretsScan = ['auto', 'on', 'off'].includes(args?.secretsScan) ? args.sec
 const secretsBin = args?.secretsBin // undefined -> recon.py resolves $SECRETS_SCANNER_BIN, else 'secrets-scanner'
 const secretsBaseline = args?.secretsBaseline ?? '.security-audit/secrets-baseline.txt'
 
-// recon.py is bundled in the secure-review skill; agents shell out to it. Paths are strings the script
-// passes through (it cannot read them). venvPy is the optional tree-sitter python the Recon stage builds.
+// recon.py is bundled in the secure-review skill; agents shell out to it IN PLACE. The script can't read
+// the filesystem, so it can't know where the install put recon.py: the dev repo has it at plugins/...,
+// an npx project-scope install at .claude/skills/..., a user-scope install at ~/.claude/skills/.... A
+// single hardcoded path is wrong in installed targets, which made the Recon agent COPY recon.py into the
+// project to satisfy it (a stray script in the repo). Instead, every agent that runs recon.py first runs
+// `reconResolve`: it probes the candidate locations, sets $RECON to the first that exists and $PY to its
+// venv python (else python3), and NEVER copies the script. reconScript (override + dev path) is the first
+// candidate, so an explicit arg or a dev-repo run still wins.
 const reconScript = args?.reconScript ?? 'plugins/workflow-kit/skills/secure-review/scripts/recon.py'
-const reconDir = reconScript.replace(/recon\.py$/, '')
-const reconSetup = `${reconDir}setup_venv.sh`
-const venvPy = `${reconDir}.venv/bin/python`
+// Shell prelude injected into every recon-using agent. Sets $RECON (the recon.py to run), $RDIR (its dir,
+// for setup_venv.sh), and $PY (the tree-sitter venv python if built, else python3). Forbids copying.
+const reconResolve =
+  `RECON=""; for c in "${reconScript}" ".claude/skills/secure-review/scripts/recon.py" "$HOME/.claude/skills/secure-review/scripts/recon.py"; do [ -f "$c" ] && RECON="$c" && break; done\n` +
+  `RDIR="$(dirname "$RECON")"; PY="$RDIR/.venv/bin/python"; [ -x "$PY" ] || PY=python3\n` +
+  `# recon.py is READ-ONLY tooling: run it IN PLACE from "$RECON" — never copy, move, or recreate it in the project.`
 const reconOut = args?.reconOut ?? '.security-audit/recon.json'
 // Slash-less reconOut (e.g. "recon.json") has no directory part; the regex replace would no-op and leave
 // a FILENAME as auditDir. Test for the slash first so a bare filename correctly yields '.'.
@@ -337,11 +346,12 @@ const gitignoreStep = auditDir !== '.'
 // Uses reconReachOut (full-repo index) so callers/const/extract always have the complete call graph,
 // even in diff mode where reconAuditOut is scoped to changed files only.
 const reconBlock =
-  `Deterministic recon — PREFER these over ad-hoc grep. Use "${venvPy}" as PY if it exists, else python3:\n` +
-  `  PY "${reconScript}" callers <symbol|file#fn[:line]> --index "${reconReachOut}"   -> callers; it states when a function with no in-code caller is an ENTRY POINT or referenced-as-a-value (reachable) vs genuinely dead\n` +
-  `  PY "${reconScript}" const <NAME> --index "${reconReachOut}"       -> resolved constant value (then DO THE ARITHMETIC)\n` +
-  `  PY "${reconScript}" extract <file#fn[:line] | file:line> --index "${reconReachOut}"  -> the exact function body. Its header carries key=<file#name> (a STABLE, line-shift-resistant fingerprint of the enclosing function) and a "# taint: <param>-><call>(...)" line listing which of the function's params flow DIRECTLY into each call's arguments. The taint line is PRECISE-BACKEND-ONLY: a taint hit is positive evidence of attacker-control reaching that sink; "# taint: none detected" is NOT a defense (the degraded/regex backend cannot compute taint, and recon does not track transitive or cross-function flow). Add --context-lines N (default 60) for config/IaC files where no function span exists — emits a line-centred window marked "# fallback window, not exact function"\n` +
-  `  PY "${reconScript}" scan <scope> --format json [--changed-files --base <ref>] [--baseline <file>]  -> optional deterministic secret scan via external secrets-scanner binary; emits {ran,findings[]} (ran:false if the binary is absent — expected, not an error)\n` +
+  `Deterministic recon — PREFER these over ad-hoc grep. FIRST run this prelude to locate recon.py in place ` +
+  `(do NOT copy it anywhere), then use "$PY" and "$RECON":\n${reconResolve}\n` +
+  `  "$PY" "$RECON" callers <symbol|file#fn[:line]> --index "${reconReachOut}"   -> callers; it states when a function with no in-code caller is an ENTRY POINT or referenced-as-a-value (reachable) vs genuinely dead\n` +
+  `  "$PY" "$RECON" const <NAME> --index "${reconReachOut}"       -> resolved constant value (then DO THE ARITHMETIC)\n` +
+  `  "$PY" "$RECON" extract <file#fn[:line] | file:line> --index "${reconReachOut}"  -> the exact function body. Its header carries key=<file#name> (a STABLE, line-shift-resistant fingerprint of the enclosing function) and a "# taint: <param>-><call>(...)" line listing which of the function's params flow DIRECTLY into each call's arguments. The taint line is PRECISE-BACKEND-ONLY: a taint hit is positive evidence of attacker-control reaching that sink; "# taint: none detected" is NOT a defense (the degraded/regex backend cannot compute taint, and recon does not track transitive or cross-function flow). Add --context-lines N (default 60) for config/IaC files where no function span exists — emits a line-centred window marked "# fallback window, not exact function"\n` +
+  `  "$PY" "$RECON" scan <scope> --format json [--changed-files --base <ref>] [--baseline <file>]  -> optional deterministic secret scan via external secrets-scanner binary; emits {ran,findings[]} (ran:false if the binary is absent — expected, not an error)\n` +
   `If a query reports "ambiguous function <name>", the symbol has multiple definitions: re-run with ` +
   `the printed file#fn or file#fn:line form (applies to callers/extract; const lists every defining file).\n` +
   `Entry-point detection is heuristic — treat it as a signal, then confirm the path yourself.`
@@ -357,22 +367,23 @@ const diffStep = mode === 'diff'
     `{ git diff --name-only ${since}...HEAD 2>/dev/null; ` +
     `git diff --name-only ${since} 2>/dev/null; } | sort -u > "${reconFiles}"\n` +
     `3. Build the full-repo reach index (used by callers/map for complete call graph): ` +
-    `"$PY" "${reconScript}" index "${scope}" --out "${reconReachOut}"\n` +
+    `"$PY" "$RECON" index "${scope}" --out "${reconReachOut}"\n` +
     `4. Build the changed-files audit index (used for lane sharding and file count): ` +
-    `"$PY" "${reconScript}" index "${scope}" --files "${reconFiles}" --out "${reconAuditOut}"\n`
+    `"$PY" "$RECON" index "${scope}" --files "${reconFiles}" --out "${reconAuditOut}"\n`
   : ''
 const recon = await agent(
   `Build the deterministic security recon index for "${scope}". Run these via Bash; do NOT analyze code — ` +
     `just produce the artifact and report its summary.\n` +
-    `1. Best-effort enable the precise backend: PY=$(bash "${reconSetup}" 2>/dev/null | tail -1); ` +
-    `[ -x "$PY" ] || PY=python3   (recon.py works either way; the venv only adds tree-sitter precision)\n` +
+    `1. Locate recon.py IN PLACE and enable the precise backend (do NOT copy recon.py anywhere):\n${reconResolve}\n` +
+    `   Then best-effort build the tree-sitter venv from its own dir: bash "$RDIR/setup_venv.sh" >/dev/null 2>&1 || true; ` +
+    `[ -x "$RDIR/.venv/bin/python" ] && PY="$RDIR/.venv/bin/python"   (recon.py works either way; the venv only adds tree-sitter precision)\n` +
     diffStep +
     gitignoreStep +
     (mode === 'diff'
       ? `5. Return file_count (from the audit index "${reconAuditOut}"), reach_file_count (the file count ` +
         `reported when building the full-repo reach index "${reconReachOut}" — 0 if that build failed), ` +
         `entrypoint_count, whether tree-sitter was on, and the printed summary line.`
-      : `2. Build the index: "$PY" "${reconScript}" index "${scope}" --out "${reconOut}"\n` +
+      : `2. Build the index: "$PY" "$RECON" index "${scope}" --out "${reconOut}"\n` +
         `3. Return file_count, reach_file_count (same value as file_count in paths mode), entrypoint_count, ` +
         `whether tree-sitter was on, and the printed summary line.`),
   { label: 'recon', phase: 'Recon', model: workerModel, schema: RECON_SCHEMA },
@@ -404,8 +415,9 @@ const plan = await agent(
     `Read the reach index at "${reconReachOut}" (JSON: files[], symbols, callees/callers graph, entrypoints, ` +
     `languages, exports, imports_external, filegraph, summary.file_count, summary.source_file_count). ` +
     `Use it instead of re-walking ` +
-    `the tree. For a compressed module map of where untrusted input can flow, run: ` +
-    `python3 "${reconScript}" map --hops 2 --index "${reconReachOut}" (focus defaults to entry-point files; ` +
+    `the tree. For a compressed module map of where untrusted input can flow, FIRST locate recon.py in ` +
+    `place (do NOT copy it anywhere):\n${reconResolve}\nthen run: ` +
+    `"$PY" "$RECON" map --hops 2 --index "${reconReachOut}" (focus defaults to entry-point files; ` +
     `external libraries are listed but not traversed; reading a prebuilt index never needs the venv).\n` +
     (reconAuditOut !== reconReachOut
       ? `For the coverage size decision (thematic vs partition) read the audit index at "${reconAuditOut}" ` +
@@ -453,8 +465,8 @@ let secretFindings = []
 let secretsRan = false
 if (secretsScan !== 'off') {
   const scanCmd =
-    `PY="${venvPy}"; [ -x "$PY" ] || PY=python3\n` +
-    `"$PY" "${reconScript}" scan "${scope}" --format json` +
+    `${reconResolve}\n` +
+    `"$PY" "$RECON" scan "${scope}" --format json` +
     (mode === 'diff' ? ` --changed-files --base "${since}"` : '') +
     ` --baseline "${secretsBaseline}"` +
     (secretsBin ? ` --bin "${secretsBin}"` : '')
@@ -491,8 +503,9 @@ const laneResults = await parallel(
     const fileDirective = lane.shard
       ? (() => {
           const [si, sn] = lane.shard.split('/')
-          return `Your files are shard ${si} of ${sn}. List them first (PY as defined below): ` +
-            `PY "${reconScript}" shard --i ${si} --n ${sn} --index "${reconAuditOut}". Audit EVERY file listed.`
+          return `Your files are shard ${si} of ${sn}. List them first ($PY and $RECON come from the recon ` +
+            `prelude below — run it first): ` +
+            `"$PY" "$RECON" shard --i ${si} --n ${sn} --index "${reconAuditOut}". Audit EVERY file listed.`
         })()
       : `Scope you own: ${lane.scope}`
     return () =>
