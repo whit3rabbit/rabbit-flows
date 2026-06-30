@@ -360,3 +360,61 @@ logic and one verifyOnly precedence bug. All fixes are prompt/control-flow excep
   count; the real cause was elsewhere (most likely a relative-board-path resolving against the workflow cwd, or
   a transient probe-agent death). Diagnostic before any guard: `report --json` / `next --json` against the real
   board; only add a guard if a genuine 0-active-with-backlog reproduces.
+
+## 2026-06-30 — Simplification: two-phase plan/execute, drop port mode/research/pipeline
+
+**Summary:** Collapsed the eatahorse ecosystem from 4 workflows + 2 skills to 1 skill + 3 workflows
+(one a thin orchestrator). Port mode, research workflow, and port pipeline removed. The clear winner
+after extended use is a **two-phase pattern**: plan the board, then work it.
+
+**Changes:**
+
+1. **New `eatahorse-plan.js`** — extracted from the old `eatahorse.js`. Phases: Probe -> Decompose ->
+   Seed -> Plan-gate. Single `CARDS_SCHEMA` (no port mode). Accepts an optional `inventory` arg (path
+   to `map_codebase.py` output) for richer decomposition context, NOT the old grounded/port mode. No
+   dep wiring, no DAG spot-checks, no cycle handling. CMD map: report, init, add, list, show, remove,
+   addbite, sync (planning verbs only).
+
+2. **New `eatahorse-execute.js`** — extracted from the old `eatahorse.js`. Phases: Probe -> Execute ->
+   Verify -> Write-back. The Ralph loop unchanged: one bite per iteration, fresh-context workers,
+   completion gate per done card, residual escape, write-back. CMD map: report, list, show, next, move,
+   bite, reopen, sync (execute verbs only). No verifyEquivalence phase (port-only, removed).
+
+3. **`eatahorse.js` simplified** — thin orchestrator that calls `workflow('eatahorse-plan')` then
+   `workflow('eatahorse-execute')` when `execute:true`. No CMD map of its own.
+
+4. **New `scripts/map_codebase.py`** — stdlib-only Python script that walks a directory and produces a
+   structured JSON inventory: `{files: [{path, ext, size, imports, exports}], stats: {total, byExt}}`.
+   Regex-based import/export detection for .py, .js, .ts, .rs, .go (extensible pattern map). Replaces
+   the per-file research worker pattern that `eatahorse-research.js` used. 10 tests, all pass.
+
+5. **`SKILL.md` rewritten** — single entry point with `--plan`, `--execute`, `--map-codebase` flags.
+   Default `/eatahorse "goal"` runs planner then asks about execution. All port/research/pipeline docs
+   removed. Operating rules added for the two-phase flow.
+
+6. **Removed files:**
+   - `.claude/workflows/eatahorse-research.js` — per-file research, replaced by map_codebase.py + planner
+   - `.claude/workflows/eatahorse-port-pipeline.js` — concurrent comprehend+port, removed
+   - `plugins/workflow-kit/skills/eatahorse-port/*` — front-door skill for pipeline, removed
+   - `scripts/build_inventory.py` + `test_build_inventory.py` — Kahn topo pass (port-only), removed
+   - `scripts/diff_test.py` + `test_diff_test.py` — differential equivalence (port-only), removed
+   - Port mode code from old `eatahorse.js` (PORT_CARDS_SCHEMA, PORT_MODE, PORT_RULE, grounded
+     decompose branch, dep-wiring in seed, DAG spot-check in plan-gate, Verify-equivalence phase,
+     EQUIV_SCHEMA, SEED_RESULT_SCHEMA, all port args)
+
+7. **CMD drift test updated** — from 4 tracked workflows to 3 (`eatahorse-plan.js`, `eatahorse-execute.js`,
+   `docs-from-code.js`). The orchestrator `eatahorse.js` has no CMD map of its own.
+
+**Backward compatibility:** Old boards with `depends_on` frontmatter or `externalId: source:...` still
+work — the CLI still supports these fields. They're just not used by the simplified planner or executor.
+No migration needed.
+
+**Known gap:** `docs-from-code.js` still carries its own CMD map copy. Its refactor to use the planner is
+deferred (follow-up).
+
+**Verification:**
+- `test_eatahorse.py` — 21 tests, unchanged, green
+- `test_map_codebase.py` — 10 tests, all pass
+- `test_cmd_drift.py` — updated, passes against 3 remaining workflow CMD maps
+- `npm run check` — manifests, guardrails drift
+- `validate.py --strict` — lints the new workflow scripts

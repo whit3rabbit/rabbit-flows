@@ -15,9 +15,8 @@ npm test               # installer CLI self-checks (node --test over test/*.test
 node --test test/bundle.test.mjs   # BUNDLE import self-checks (readBundle guards + import->install flow); run after editing bin/bundle.mjs, bin/registry.mjs, or the import path in bin/cli.mjs
 node frontend/test-bundle.mjs      # frontend bundle EXPORT self-checks (gatherBundle); run after editing frontend/src/server/bundle.js
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_eatahorse.py   # eatahorse CLI self-checks (stdlib, no framework); run after editing eatahorse.py
-python3 plugins/workflow-kit/skills/eatahorse/scripts/test_build_inventory.py   # Kahn topo/layer/cycle pass self-checks; run after editing build_inventory.py
-python3 plugins/workflow-kit/skills/eatahorse/scripts/test_diff_test.py   # differential-equivalence harness self-checks; run after editing diff_test.py
-python3 plugins/workflow-kit/skills/eatahorse/scripts/test_cmd_drift.py   # guards the four-copy inline CMD maps: every verb a workflow advertises must exist in eatahorse.py; run after editing any eatahorse.js/eatahorse-research.js/eatahorse-port-pipeline.js/docs-from-code.js CMD map or eatahorse.py subcommands
+python3 plugins/workflow-kit/skills/eatahorse/scripts/test_map_codebase.py  # codebase mapping help script self-checks; run after editing map_codebase.py
+python3 plugins/workflow-kit/skills/eatahorse/scripts/test_cmd_drift.py  # guards the three-copy inline CMD maps: every verb a workflow advertises must exist in eatahorse.py; also checks docs-from-code.js until its refactor. Run after editing any eatahorse-plan.js/eatahorse-execute.js/docs-from-code.js CMD map or eatahorse.py subcommands
 python3 plugins/workflow-kit/skills/secure-review/scripts/test_recon.py   # security-audit recon self-checks (stdlib, degraded mode); run after editing recon.py. ALSO run under the venv: `bash plugins/workflow-kit/skills/secure-review/scripts/setup_venv.sh && plugins/workflow-kit/skills/secure-review/scripts/.venv/bin/python plugins/workflow-kit/skills/secure-review/scripts/test_recon.py` — several tests are tree-sitter-gated and SKIP in stdlib; the call-graph/import regressions live on the precise backend, so a green stdlib run alone is blind to them.
 ```
 
@@ -165,7 +164,7 @@ durable knowledge, append it to that file (one per workflow), and add a pointer 
 | `security-audit` / `secure-review` / `recon.py` | `docs/security-audit-workflow-log.md` |
 | `docs-from-code` / `docs-create` / `docs-migrate` / docs factory | `docs/docs-from-code-workflow-log.md` |
 | `scaffold` / `new-project` | `docs/scaffold-workflow-log.md` |
-| `eatahorse` / `eatahorse-research` / `eatahorse.py` / port pipeline | `docs/eatahorse-workflow-log.md` |
+| `eatahorse` / `eatahorse-plan` / `eatahorse-execute` / `eatahorse.py` | `docs/eatahorse-workflow-log.md` |
 | `frontend/` Visual Workflow Designer (server, parser, codegen) | `docs/frontend-designer-workflow-log.md` + `frontend/CLAUDE.md` |
 | bundle import/export (`bin/bundle.mjs`, `bin/registry.mjs`, `frontend/src/server/bundle.js`) | `docs/bundle-format.md` |
 

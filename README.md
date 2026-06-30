@@ -79,7 +79,8 @@ Two ways to trigger a workflow:
 | `docs-scrape` | "save these docs locally" → `docs-scraper` skill | `/docs-scrape { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }` |
 | `docs-migrate` | "migrate these docs to Starlight" → `document` skill | `/docs-migrate { "from": "mkdocs", "to": "starlight", "outDir": "./docs-site" }` |
 | `eatahorse` | "break this goal into tasks" → `eatahorse` skill | `/eatahorse { "goal": "Add OAuth login", "execute": true }` |
-| `eatahorse-research` | "research this folder file by file" → `eatahorse` skill | `/eatahorse-research { "root": "src", "question": "What does each module do?" }` |
+| `eatahorse-plan` | "plan this work without executing" → `eatahorse` skill | `/eatahorse-plan { "goal": "Add OAuth login" }` |
+| `eatahorse-execute` | "work an existing board" → `eatahorse` skill | `/eatahorse-execute { "board": ".eatahorse-auth" }` |
 
 The front-door skill ships with its workflow (see the skills table below), so the natural-language
 path works as soon as the workflow is installed. `starter.js` is a reference example for the workflow
@@ -128,7 +129,7 @@ Front-door dependency skills gather inputs, then launch a workflow:
 | `audit-codebase` | Intake for `security-audit`. |
 | `document` | Routes a docs brief, codebase, or migration to the right docs workflow. |
 | `document-codebase` | Intake for `docs-from-code`; can fall back to a conversational board. |
-| `eatahorse` | Drives Kanban boards directly, and is the intake for the `eatahorse` and `eatahorse-research` workflows. |
+| `eatahorse` | Drives Kanban boards directly, and is the intake for the `eatahorse`, `eatahorse-plan`, and `eatahorse-execute` workflows. |
 | `docs-scraper` | Detects a docs site and extracts markdown; intake for `docs-scrape`. |
 
 Specialist dependency skills (used inside a workflow, not a user front door):

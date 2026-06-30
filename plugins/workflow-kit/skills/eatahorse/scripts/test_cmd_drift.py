@@ -1,10 +1,13 @@
 """Drift guard: the hand-synced inline `CMD` maps in the workflow .js files must only advertise verbs
-that actually exist in eatahorse.py's argparse. Four copies are kept by hand (eatahorse.js,
-eatahorse-research.js, eatahorse-port-pipeline.js, docs-from-code.js); a renamed/removed CLI verb would
-otherwise break a workflow SILENTLY at run time. Stdlib only: `python3 test_cmd_drift.py`.
+that actually exist in eatahorse.py's argparse. Three copies are kept by hand (eatahorse-plan.js,
+eatahorse-execute.js, docs-from-code.js); a renamed/removed CLI verb would otherwise break a workflow
+SILENTLY at run time. Stdlib only: `python3 test_cmd_drift.py`.
 
 Dev-only: reaches up to the repo's .claude/workflows/. If that dir isn't found (the bundled/installed
 skill copy), the test SKIPs cleanly rather than failing.
+
+NOTE: eatahorse.js (the thin orchestrator) has no CMD map — it delegates to plan/execute via
+workflow(). docs-from-code.js still carries its own CMD map until its planned refactor.
 """
 import re
 import sys
@@ -12,7 +15,7 @@ from pathlib import Path
 
 # Each CMD value's FIRST token is the verb (e.g. `dep-add <id> ...`, `report --json`). We assert the
 # value tokens, NOT the map keys (keys like `depadd`/`addbite` deliberately differ from `dep-add`/`add-bite`).
-WORKFLOWS = ["eatahorse.js", "eatahorse-research.js", "eatahorse-port-pipeline.js", "docs-from-code.js"]
+WORKFLOWS = ["eatahorse-plan.js", "eatahorse-execute.js", "docs-from-code.js"]
 
 
 def repo_root():

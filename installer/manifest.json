@@ -32,22 +32,22 @@
     {
       "name": "eatahorse",
       "file": ".claude/workflows/eatahorse.js",
-      "description": "Break a goal into a Kanban board of small tasks and check the plan, then optionally work the board unattended one task at a time, verifying each task before moving on.",
+      "description": "Orchestrate the eatahorse two-phase workflow: plan (decompose -> seed -> plan-gate) then, opt-in, execute (Ralph loop + completion gate + write-back). Dispatches to eatahorse-plan and eatahorse-execute.",
       "skills": ["eatahorse"],
       "agents": []
     },
     {
-      "name": "eatahorse-research",
-      "file": ".claude/workflows/eatahorse-research.js",
-      "description": "Research every file in a folder and synthesize a cited report. Progress is tracked on a resumable board so large trees run in batches.",
+      "name": "eatahorse-plan",
+      "file": ".claude/workflows/eatahorse-plan.js",
+      "description": "Decompose a goal into a Kanban board and gate the plan for soundness. Runs decompose -> seed -> plan-gate. Does NOT execute any work.",
       "skills": ["eatahorse"],
       "agents": []
     },
     {
-      "name": "eatahorse-port-pipeline",
-      "file": ".claude/workflows/eatahorse-port-pipeline.js",
-      "description": "Pipeline a code port: comprehend a source tree and concurrently start porting each unit as soon as its comprehension lands and its dependencies are ported.",
-      "skills": ["eatahorse", "eatahorse-port"],
+      "name": "eatahorse-execute",
+      "file": ".claude/workflows/eatahorse-execute.js",
+      "description": "Work an existing Eatahorse Kanban board one task at a time via the Ralph loop, verifying each completion. Runs execute loop -> completion gate -> write-back.",
+      "skills": ["eatahorse"],
       "agents": []
     },
     {

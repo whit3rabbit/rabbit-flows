@@ -112,16 +112,16 @@ test('uninstall selective: keeps a shared skill still needed by a remaining work
   const scope = await mkdtemp(path.join(tmpdir(), 'rabbit-flows-test-'))
   try {
     // both depend on the shared `eatahorse` skill
-    await install([byName('eatahorse'), byName('eatahorse-research')], scope, false)
+    await install([byName('eatahorse-plan'), byName('eatahorse-execute')], scope, false)
     assert.ok(existsSync(path.join(scope, 'skills', 'eatahorse')))
 
-    await uninstall(['eatahorse'], scope, MANIFEST, false)
+    await uninstall(['eatahorse-plan'], scope, MANIFEST, false)
     const r = await readReceipt(scope)
-    assert.deepEqual(r.workflows, ['eatahorse-research'], 'only eatahorse-research remains')
-    assert.ok(!existsSync(path.join(scope, 'workflows', 'eatahorse.js')), 'workflow file removed')
+    assert.deepEqual(r.workflows, ['eatahorse-execute'], 'only eatahorse-execute remains')
+    assert.ok(!existsSync(path.join(scope, 'workflows', 'eatahorse-plan.js')), 'workflow file removed')
     assert.ok(
       existsSync(path.join(scope, 'skills', 'eatahorse')),
-      'shared skill RETAINED (eatahorse-research still needs it)',
+      'shared skill RETAINED (eatahorse-execute still needs it)',
     )
     assert.ok('skills/eatahorse' in r.files, 'shared skill still in receipt')
   } finally {
