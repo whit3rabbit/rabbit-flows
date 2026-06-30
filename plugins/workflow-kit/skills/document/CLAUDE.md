@@ -1,0 +1,18 @@
+# Editing the `document` skill
+
+This is the **front-door** skill for all docs workflows: it runs the `AskUserQuestion`
+intake, then dispatches to the right workflow, with a Tier-2 conversational fallback
+that drives the Eatahorse board by hand when workflows are off.
+
+- **Add / rename / remove a docs-from-code arg -> edit the SCHEMA, then regenerate.** The args list is a
+  single source of truth at `installer/arg-schemas/docs-from-code.mjs`; `npm run build:arg-contract`
+  generates this file's `args` block + Defaults line (between `@generated-start/@generated-end
+  arg-contract/*`) AND the workflow's guard block/header. NEVER hand-edit between those markers; `npm run
+  check` fails on drift and on any arg-name mismatch. The free-text intake prose (which args to ask about)
+  is still hand-maintained here -- keep it consistent with the schema.
+- This skill is bundled by multiple workflows in `installer/manifest.json` (docs-from-code, docs-create,
+  docs-migrate), so it must stay in their `// requires-skills:` headers -- manifest and headers must
+  set-match or `npm run check` fails.
+- Keep the Tier-2 steps aligned with the workflow's stages (one card per page with TWO acceptance items,
+  scope-grounded authoring, single-writer sync, full-coverage grounding gate ticking the second
+  acceptance) so both tiers produce the same board/output.

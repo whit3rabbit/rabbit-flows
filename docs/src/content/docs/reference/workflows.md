@@ -87,7 +87,7 @@ npx @whit3rabbit/rabbit-flows install --workflow <name>
 /docs-from-code { "root": "src", "outDir": "./docs-site", "framework": "mkdocs" }
 ```
 
-**Depends on:** `eatahorse`, `docs-site-builder`, `document-codebase`, `document`
+**Depends on:** `eatahorse`, `docs-site-builder`, `document`
 
 ---
 

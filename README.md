@@ -75,7 +75,7 @@ Two ways to trigger a workflow:
 | `scaffold` | "start a new project" → `new-project` skill | `/scaffold { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }` |
 | `security-audit` | "audit my code for vulnerabilities" → `audit-codebase` skill | `/security-audit { "scope": "src", "focus": ["authz", "ssrf"] }` |
 | `docs-create` | "write docs from this brief" → `document` skill | `/docs-create { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site", "framework": "docusaurus" }` |
-| `docs-from-code` | "document this codebase" → `document-codebase` skill | `/docs-from-code { "root": "src", "outDir": "./docs-site", "framework": "mkdocs" }` |
+| `docs-from-code` | "document this codebase" → `document` skill | `/docs-from-code { "root": "src", "outDir": "./docs-site", "framework": "mkdocs" }` |
 | `docs-scrape` | "save these docs locally" → `docs-scraper` skill | `/docs-scrape { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }` |
 | `docs-migrate` | "migrate these docs to Starlight" → `document` skill | `/docs-migrate { "from": "mkdocs", "to": "starlight", "outDir": "./docs-site" }` |
 | `eatahorse` | "break this goal into tasks" → `eatahorse` skill | `/eatahorse { "goal": "Add OAuth login", "execute": true }` |
@@ -127,8 +127,7 @@ Front-door dependency skills gather inputs, then launch a workflow:
 |---|---|
 | `new-project` | Intake for `scaffold`. |
 | `audit-codebase` | Intake for `security-audit`. |
-| `document` | Routes a docs brief, codebase, or migration to the right docs workflow. |
-| `document-codebase` | Intake for `docs-from-code`; can fall back to a conversational board. |
+| `document` | Single entry point for all docs workflows: --from-code, --from-brief, --migrate, --scrape. Includes a conversational fallback (Tier 2) when workflows are off. |
 | `eatahorse` | Drives Kanban boards directly, and is the intake for the `eatahorse`, `eatahorse-plan`, and `eatahorse-execute` workflows. |
 | `docs-scraper` | Detects a docs site and extracts markdown; intake for `docs-scrape`. |
 

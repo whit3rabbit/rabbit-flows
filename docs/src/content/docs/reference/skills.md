@@ -39,13 +39,11 @@ These skills handle conversational intake with the user, then launch the corresp
 
 ---
 
-### document-codebase
+### document-codebase (consolidated into `document`)
 
-**Description:** Front door for documenting an existing codebase into a docs site. Runs a short discussion (output dir, framework, scaffold mode, tutorials, tier) then launches the `docs-from-code` workflow, or drives the same Eatahorse board conversationally when workflows are off or the repo is small.
+**Description:** This skill has been consolidated into the `document` entry point. Formerly the front door for documenting an existing codebase into a docs site; that path is now `/document --from-code`. See the `document` skill entry above.
 
-**Consumed by:** `docs-from-code` workflow.
-
-**Location:** `plugins/workflow-kit/skills/document-codebase/SKILL.md`
+**Location:** Consolidated — see `plugins/workflow-kit/skills/document/SKILL.md`.
 
 ---
 

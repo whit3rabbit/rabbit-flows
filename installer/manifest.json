@@ -54,7 +54,7 @@
       "name": "docs-from-code",
       "file": ".claude/workflows/docs-from-code.js",
       "description": "Generate a documentation site from an existing codebase: enumerate source, plan a page per module, write grounded reference pages, then assemble config. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks via the framework arg.",
-      "skills": ["eatahorse", "docs-site-builder", "document-codebase", "document"],
+      "skills": ["eatahorse", "docs-site-builder", "document"],
       "agents": []
     },
     {

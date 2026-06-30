@@ -3,7 +3,7 @@
 // installer/arg-schemas/docs-from-code.mjs:
 //   1. the uniform guard block in .claude/workflows/docs-from-code.js
 //   2. that workflow's header "Knobs (args)" comment
-//   3. document-codebase/SKILL.md's Workflow args block + Defaults line
+//   3. document/SKILL.md's Workflow args block + Defaults line
 //
 //   node scripts/build-arg-contract.mjs           # write the generated blocks
 //   node scripts/build-arg-contract.mjs --check    # exit 1 on drift OR arg-name mismatch
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const WORKFLOW = path.join(ROOT, '.claude', 'workflows', 'docs-from-code.js')
-const SKILL = path.join(ROOT, 'plugins', 'workflow-kit', 'skills', 'document-codebase', 'SKILL.md')
+const SKILL = path.join(ROOT, 'plugins', 'workflow-kit', 'skills', 'document', 'SKILL.md')
 const { ARGS } = await import(path.join(ROOT, 'installer', 'arg-schemas', 'docs-from-code.mjs'))
 
 // --- literal + guard-expression rendering -------------------------------------------------------

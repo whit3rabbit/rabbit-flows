@@ -1,7 +1,7 @@
 # docs factory (docs-from-code / docs-create / docs-migrate) — running log
 
 Run history, dead ends, and constraints for the docs-factory workflows + the `docs-site-builder` /
-`document-codebase` skills. **Read this before editing a docs workflow or the FRAMEWORKS registry.**
+`document` skills. **Read this before editing a docs workflow or the FRAMEWORKS registry.**
 Kept out of `CLAUDE.md` so it loads only when relevant.
 
 ## 2026-06-24: three structural hardenings (grounding-as-board-fact, blocked lane, arg-contract codegen)
@@ -35,7 +35,7 @@ Follow-up to the 12-finding review fixes (commit `ee2e9ff`). Three "convention -
 
 3. **Single generated arg contract (4th `npm run check` gate).** `installer/arg-schemas/docs-from-code.mjs`
    is now the source of truth for the ~24 args; `scripts/build-arg-contract.mjs` generates the uniform guard
-   block + header comment in the workflow AND the args block + Defaults line in `document-codebase/SKILL.md`
+   block + header comment in the workflow AND the args block + Defaults line in `document/SKILL.md`
    (markers `@generated-start/@generated-end arg-contract/*`). Bespoke validators (`i18n`/`versioning`/
    `refine`) + derived consts (`root`/`fwEntry`/`mode`/`updateMode`/`normPagePath`) stay HAND-WRITTEN below
    the generated block (`kind:'custom'` in the schema) — bespoke object-shape validation is deliberately NOT

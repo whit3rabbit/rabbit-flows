@@ -47,6 +47,7 @@
 //   scaffoldMode — content-only (default) | add-to-existing | full-project (Starlight only)
 //   brief — focus/scope note for the run
 //   includeTutorials — also author tutorials (default false; expect more gate churn)
+//   planOnly — plan only — enumerate, generate, plan, and seed the board without authoring
 // optional:
 //   board — Eatahorse board directory
 //   workerModel — model for page authors
@@ -84,7 +85,7 @@
 //     needed (docs have no call graph; page<->source is a flat scope match). The card description format
 //     (descOf below) is the contract the Reopen parser depends on; keep them in lockstep.
 //
-// requires-skills: eatahorse, docs-site-builder, document-codebase, document
+// requires-skills: eatahorse, docs-site-builder, document
 //   (Bundling only. The eatahorse CLI surface is distilled INLINE as CMD/cli() and sliced per-agent; the
 //    Starlight CONTRACT + IA_CONTRACT are distilled inline from docs-site-builder. Those consts are the
 //    runtime source of truth; the bundled skills are the portable copies. Workflow stages do NOT auto-load
@@ -97,7 +98,7 @@ export const meta = {
   description:
     'Generate a documentation site from an existing codebase: enumerate source, plan a page per module, write grounded reference pages, then assemble the site config. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks via the framework arg.',
   whenToUse:
-    'Use to document an existing codebase into a docs site. Front door: the document-codebase or document skill.',
+    'Use to document an existing codebase into a docs site. Front door: the document skill.',
   phases: [
     { title: 'Enumerate' },
     { title: 'Detect', detail: 'classify the gitignore-respecting tracked file set against language rules: 12 languages plus OpenAPI and CLI --help cross-cutting lanes' },
@@ -5582,6 +5583,7 @@ const framework = args?.framework ?? 'starlight'
 const scaffoldMode = ['content-only', 'add-to-existing', 'full-project'].includes(args?.scaffoldMode) ? args.scaffoldMode : 'content-only'
 const brief = typeof args?.brief === 'string' ? args.brief : ''
 const includeTutorials = args?.includeTutorials === true
+const planOnly = args?.planOnly === true
 const board = args?.board ?? '.eatahorse-docs'
 const workerModel = args?.workerModel ?? 'sonnet'   // page authoring is real writing, not mechanical -> sonnet (model-routing.md)
 const maxRounds = Math.min(args?.maxRounds ?? 3, 10)   // clamp: keep author+sync+gate fan-out under the 1000-agent lifetime cap
@@ -6368,7 +6370,23 @@ const seed = await agent(
     `Pages (title=path, with description):\n${JSON.stringify(pages.map((p) => ({ title: p.path, description: descOf(p) })))}`,
   { label: 'seed', model: 'haiku', schema: SEED_SCHEMA },
 )
-if (!seed?.cards?.length) return { root, outDir, board, error: 'seed returned no cards', written: false }
+if (!seed?.cards?.length) return { root, outDir, board, error: 'seed returned no cards', written: false, planOnly }
+
+if (planOnly) {
+  log(`Plan-only mode: board "${board}" seeded with ${seed.cards.length} card(s).`)
+  return {
+    root, outDir, board, framework, scaffoldMode,
+    planned: pages.length,
+    generated: generatedPages.length,
+    cardsSeeded: seed.cards.length,
+    detectedLanes: activeLanes.map((l) => l.id),
+    written: true,
+    planOnly: true,
+    ok: true,
+    error: null,
+  }
+}
+
 const cardByTitle = new Map(seed.cards.map((c) => [c.title, c]))
 
 // 4 + 5. Author rounds (loop-until-dry) + FULL-COVERAGE grounding gate. Grounding is a DURABLE per-page board

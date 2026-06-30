@@ -3,7 +3,7 @@
 // scripts/build-arg-contract.mjs generates THREE surfaces from this list:
 //   1. the UNIFORM guard block in .claude/workflows/docs-from-code.js (kind !== 'custom' args)
 //   2. the workflow's header "Knobs (args)" comment
-//   3. document-codebase/SKILL.md's Workflow args block + Defaults line
+//   3. document/SKILL.md's Workflow args block + Defaults line
 // `npm run check` (build:arg-contract --check) fails on drift AND asserts every arg name here
 // set-matches the `args?.X` accesses in the guard region — so a hand-added guard or a dropped arg is caught.
 //
@@ -41,6 +41,8 @@ export const ARGS = [
     oneLiner: 'focus/scope note for the run' },
   { name: 'includeTutorials', kind: 'bool', group: 'core', showInDefaults: true,
     oneLiner: 'also author tutorials (default false; expect more gate churn)' },
+  { name: 'planOnly', kind: 'bool', group: 'core', showInDefaults: true,
+    oneLiner: 'plan only — enumerate, generate, plan, and seed the board without authoring' },
 
   // --- optional ---
   { name: 'board', kind: 'scalar', default: '.eatahorse-docs', group: 'optional', showInDefaults: true,

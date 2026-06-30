@@ -155,7 +155,7 @@ test('uninstall --all: removes our files, restores a backed-up foreign file, del
 test('depsOf: unions skills/agents across workflows', () => {
   const { skills } = depsOf([byName('docs-from-code'), byName('eatahorse')])
   // Exact set, not just membership: a bug that unioned ALL workflows' deps must fail here.
-  assert.deepEqual([...skills].sort(), ['docs-site-builder', 'document', 'document-codebase', 'eatahorse'])
+  assert.deepEqual([...skills].sort(), ['docs-site-builder', 'document', 'eatahorse'])
 })
 
 test('install: a pre-existing foreign workflow .js is left alone but its skills stay selectively removable', async () => {
