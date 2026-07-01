@@ -100,14 +100,15 @@ Uninstall uses the receipt to remove only the files it placed, leaving user file
 
 | Workflow | Description |
 |---|---|
-| `security-audit` | Defensive code audit: map attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation. |
-| `scaffold` | Start a project from scratch and stub+document the whole tree: discuss the brief, research deps, draft blind architecture attempts merged to one, forward-review, fan out cheap workers to build every file under a 400-line ceiling, verify, write back the decisions. |
-| `docs-create` | Author a documentation site from a brief: plan pages, fan out authors, verify + assemble config. Targets Starlight, Docusaurus, MkDocs, VitePress, Fumadocs, mdBook, or Docsify via the framework arg. |
-| `docs-scrape` | Ingest a documentation website into a local markdown corpus: detect platform, enumerate pages, fetch+extract, gate, assemble. |
 | `eatahorse` | Decompose a goal into an Eatahorse Kanban board and gate the plan; optionally work it unattended one bite at a time in a Ralph-style loop, a fresh-context completion-gated worker each iteration, then write back the decisions. |
-| `eatahorse-research` | Research every file in a folder using an Eatahorse board as a durable resumable ledger: enumerate, auto-pick scale by file count, seed one card per unit, then loop research rounds of parallel workers gated and synced until dry, and synthesize a cited report. |
-| `docs-from-code` | Document a whole codebase into a docs site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks via the framework arg. |
+| `eatahorse-plan` | Decompose a goal into a Kanban board and gate the plan for soundness. Runs Decompose -> Seed -> Plan-gate. Does not execute code edits. |
+| `eatahorse-execute` | Work an existing Eatahorse Kanban board one task at a time via the Ralph loop, verifying each completion. Runs Execute -> Verify -> Write-back. |
+| `security-audit` | Defensive code audit: map attack surface, fan out audit lanes, gate findings to drop false positives, report with remediation. |
+| `docs-from-code` | Document a whole codebase into a docs site using an Eatahorse board as a durable resumable ledger: enumerate source, frame IA and plan one card per module page, fan out grounded authors gated and synced until dry, then assemble config and write back. Targets Starlight, Docusaurus, MkDocs, and other supported frameworks. |
+| `docs-create` | Author a documentation site from a brief: plan pages, fan out authors, verify + assemble config. Targets Starlight, Docusaurus, MkDocs, VitePress, Fumadocs, mdBook, or Docsify. |
 | `docs-migrate` | Migrate a documentation site from one framework to another: acquire source corpus, map pages via crosswalk, fan out conversion workers, gate for syntax leaks, assemble target config. |
+| `docs-scrape` | Ingest a documentation website into a local markdown corpus: detect platform, enumerate pages, fetch+extract, gate, assemble. |
+| `scaffold` | Start a project from scratch and stub+document the whole tree: discuss the brief, research deps, draft blind architecture attempts merged to one, forward-review, fan out cheap workers to build every file under a 400-line ceiling, verify, write back the decisions. |
 
 ## Examples
 

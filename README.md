@@ -1,8 +1,17 @@
 # rabbit-flows
 
-`rabbit-flows` installs Claude Code dynamic workflows with the skills and agents they need.
+[![CI](https://github.com/whit3rabbit/rabbit-flows/actions/workflows/ci.yml/badge.svg)](https://github.com/whit3rabbit/rabbit-flows/actions/workflows/ci.yml)
+[![Publish](https://github.com/whit3rabbit/rabbit-flows/actions/workflows/publish.yml/badge.svg)](https://github.com/whit3rabbit/rabbit-flows/actions/workflows/publish.yml)
+[![npm version](https://img.shields.io/npm/v/@whit3rabbit/rabbit-flows.svg)](https://www.npmjs.com/package/@whit3rabbit/rabbit-flows)
+[![npm downloads](https://img.shields.io/npm/dm/@whit3rabbit/rabbit-flows.svg)](https://www.npmjs.com/package/@whit3rabbit/rabbit-flows)
+[![Docker Pulls](https://img.shields.io/docker/pulls/followthewhit3rabbit/rabbit-flow-designer.svg)](https://hub.docker.com/r/followthewhit3rabbit/rabbit-flow-designer)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+`rabbit-flows` allows you to make and install Claude Code dynamic workflows with the skills and agents they need.
 
 The installer copies plain files into `.claude`, records a receipt, and can uninstall only the files it placed.
+
+Developers can modify dynamic workflows/skills to create their own installers so users can easily create their own workflows. It comes with a frontend visual designer too, although I suggest sticking with Claude to help design your workflow.
 
 ## Requirements
 
@@ -72,19 +81,37 @@ Two ways to trigger a workflow:
 
 | Workflow | Say this (front door) | Power-user command |
 |---|---|---|
-| `scaffold` | "start a new project" → `new-project` skill | `/scaffold { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }` |
-| `security-audit` | "audit my code for vulnerabilities" → `audit-codebase` skill | `/security-audit { "scope": "src", "focus": ["authz", "ssrf"] }` |
-| `docs-create` | "write docs from this brief" → `document` skill | `/docs-create { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site", "framework": "docusaurus" }` |
-| `docs-from-code` | "document this codebase" → `document` skill | `/docs-from-code { "root": "src", "outDir": "./docs-site", "framework": "mkdocs" }` |
-| `docs-scrape` | "save these docs locally" → `docs-scraper` skill | `/docs-scrape { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }` |
-| `docs-migrate` | "migrate these docs to Starlight" → `document` skill | `/docs-migrate { "from": "mkdocs", "to": "starlight", "outDir": "./docs-site" }` |
-| `eatahorse` | "break this goal into tasks" → `eatahorse` skill | `/eatahorse { "goal": "Add OAuth login", "execute": true }` |
-| `eatahorse-plan` | "plan this work without executing" → `eatahorse` skill | `/eatahorse-plan { "goal": "Add OAuth login" }` |
-| `eatahorse-execute` | "work an existing board" → `eatahorse` skill | `/eatahorse-execute { "board": ".eatahorse-auth" }` |
+| [`eatahorse`](docs/eatahorse.md) | "break this goal into tasks" → `eatahorse` skill | `/eatahorse { "goal": "Add OAuth login", "execute": true }` |
+| [`eatahorse-plan`](docs/eatahorse.md) | "plan this work without executing" → `eatahorse` skill | `/eatahorse-plan { "goal": "Add OAuth login" }` |
+| [`eatahorse-execute`](docs/eatahorse.md) | "work an existing board" → `eatahorse` skill | `/eatahorse-execute { "board": ".eatahorse-auth" }` |
+| [`security-audit`](docs/security-audit.md) | "audit my code for vulnerabilities" → `audit-codebase` skill | `/security-audit { "scope": "src", "focus": ["authz", "ssrf"] }` |
+| [`docs-from-code`](docs/docs-from-code.md) | "document this codebase" → `document` skill | `/docs-from-code { "root": "src", "outDir": "./docs-site", "framework": "mkdocs" }` |
+| [`docs-create`](docs/docs-create.md) | "write docs from this brief" → `document` skill | `/docs-create { "brief": "Docs for the qz CLI compressor", "outDir": "./docs-site", "framework": "docusaurus" }` |
+| [`docs-migrate`](docs/docs-migrate.md) | "migrate these docs to Starlight" → `document` skill | `/docs-migrate { "from": "mkdocs", "to": "starlight", "outDir": "./docs-site" }` |
+| [`docs-scrape`](docs/docs-scrape.md) | "save these docs locally" → `docs-scraper` skill | `/docs-scrape { "url": "https://example.com/docs", "outDir": "./corpus", "maxPages": 3 }` |
+| [`scaffold`](docs/scaffold.md) | "start a new project" → `new-project` skill | `/scaffold { "brief": "A CLI todo app in Rust", "dir": "./todo", "write": false }` |
 
 The front-door skill ships with its workflow (see the skills table below), so the natural-language
 path works as soon as the workflow is installed. `starter.js` is a reference example for the workflow
 spine and is not in the installer catalog.
+
+### Running the Designer via Docker
+
+You can use the Rabbit Flow Designer to visually inspect, edit, and validate workflows in a local Docker container:
+
+```bash
+# Build the image
+docker build -t rabbit-flow-designer .
+
+# Run in read-only mode to view and validate workflows:
+docker run --rm -p 3001:3001 \
+  -v "$(pwd)/.claude/workflows:/app/.claude/workflows:ro" \
+  -v "$(pwd)/.claude/skills:/app/.claude/skills:ro" \
+  -v "$(pwd)/plugins:/app/plugins:ro" \
+  rabbit-flow-designer
+```
+
+See [Docker (Visual Designer)](#docker-visual-designer) for full instructions, including mounting writeable paths and using Docker Compose.
 
 ## Safe Defaults
 
@@ -181,3 +208,43 @@ The marketplace plugin installs skills and agents without cloning this repo:
 ```
 
 The plugin does not install workflows. Use the `npx` installer when you need workflows plus dependencies.
+
+## Docker (Visual Designer)
+
+The Rabbit Flow Designer can run in Docker — no Node.js install needed on the host:
+
+```bash
+# Build from repo root:
+docker build -t rabbit-flow-designer .
+
+# Run (read-only — view workflows, validate, no writes):
+docker run --rm -p 3001:3001 \
+  -v "$(pwd)/.claude/workflows:/app/.claude/workflows:ro" \
+  -v "$(pwd)/.claude/skills:/app/.claude/skills:ro" \
+  -v "$(pwd)/plugins:/app/plugins:ro" \
+  rabbit-flow-designer
+
+# Run with saving (writable workflows + auth token):
+docker run --rm -p 127.0.0.1:3001:3001 \
+  -e RFD_TOKEN=change-me \
+  -v "$(pwd)/.claude/workflows:/app/.claude/workflows" \
+  -v "$(pwd)/.claude/skills:/app/.claude/skills:ro" \
+  -v "$(pwd)/plugins:/app/plugins:ro" \
+  rabbit-flow-designer
+```
+
+Or use docker compose:
+
+```bash
+docker compose -f frontend/docker-compose.yml up --build
+```
+
+Pre-built images are published on each version tag:
+
+```bash
+docker pull followthewhit3rabbit/rabbit-flow-designer:latest
+# Or a specific version:
+docker pull followthewhit3rabbit/rabbit-flow-designer:0.1.0
+```
+
+Open http://localhost:3001/flow.html. The container runs as a non-root `node` user; writable mounts need host dirs owned by UID 1000.

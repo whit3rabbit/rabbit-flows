@@ -2,29 +2,30 @@
 #
 # Usage (from repo root):
 #   docker compose -f frontend/docker-compose.yml up --build
-# Paths below are relative to this file (frontend/), so context `..` = repo root,
-# matching the Dockerfile's `COPY frontend/ ./frontend/` and `.claude` mount.
+# Paths below are relative to this file (frontend/), so context `..` = repo root.
 #
 # Then open: http://localhost:3001/flow.html
 #
-# The .claude/ directory is mounted read-only so the container reads real workflows
-# and skills without baking them into the image. To allow the canvas to save
-# generated workflows back to the host, change `:ro` to nothing (writable).
+# Workflows and skills are mounted read-only so the container reads real files
+# without baking them into the image. To allow the canvas to save generated
+# workflows back to the host, remove `:ro` from the workflows volume.
 
 services:
   flow-designer:
     build:
       context: ..
-      dockerfile: frontend/Dockerfile
+      dockerfile: Dockerfile
     # Publish to host loopback only — the server writes executable workflow files, so it
     # must not be reachable from the LAN. Drop the 127.0.0.1 prefix only if you mean to expose it.
     ports:
       - "127.0.0.1:3001:3001"
     volumes:
       # Read-only: validates against real workflows and skills, no writes to host
-      - ../.claude:/app/.claude:ro
-      # Remove :ro to allow POST /api/workflows to persist generated files on the host:
-      # - ../.claude:/app/.claude
+      - ../.claude/workflows:/app/.claude/workflows:ro
+      - ../.claude/skills:/app/.claude/skills:ro
+      - ../plugins:/app/plugins:ro
+      # Remove :ro from workflows to allow POST /api/workflows to persist generated files:
+      # - ../.claude/workflows:/app/.claude/workflows
     environment:
       - PORT=3001
       # Inside the container the SPA's requests arrive from the docker bridge (non-loopback),

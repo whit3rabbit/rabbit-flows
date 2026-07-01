@@ -83,8 +83,8 @@ handler without restoring an Origin allowlist on the mutating routes.
 - `test-codegen.mjs` — `codegen.js` self-checks: guards the `genCode()` leaf->container grouping
   (the cidById/contBounds precompute). `npm test` runs all four suites (test-parser.mjs,
   test-schema.mjs, test-bundle.mjs, test-codegen.mjs).
-- `Dockerfile` — builds the server image with python3 for `/api/validate`.
-- `docker-compose.yml` — convenience compose wrapper (mounts `.claude/` read-only).
+- `../Dockerfile` (repo root) — builds the server image with python3 for `/api/validate`.
+- `docker-compose.yml` — convenience compose wrapper (mounts `.claude/workflows/` + `.claude/skills/` read-only).
 - Every source file is kept under 400 lines (tests may exceed); split a module rather than grow it.
 
 ## Build / test / lint (npm or pnpm)
@@ -120,29 +120,34 @@ the environment.
 
 ## Run via Docker
 
-Build from repo root (context must be the repo root so `.claude/` is reachable):
+Build from repo root:
 
 ```bash
-docker build -f frontend/Dockerfile -t rabbit-flow-designer .
+docker build -t rabbit-flow-designer .
 ```
 
-Run with the repo's `.claude/` mounted read-only (validates against real workflows,
+Run with workflows and skills mounted read-only (validates against real files,
 no writes to the host):
 
 ```bash
 docker run --rm -p 3001:3001 \
-  -v "$(pwd)/.claude:/app/.claude:ro" \
+  -v "$(pwd)/.claude/workflows:/app/.claude/workflows:ro" \
+  -v "$(pwd)/.claude/skills:/app/.claude/skills:ro" \
+  -v "$(pwd)/plugins:/app/plugins:ro" \
   rabbit-flow-designer
 # Then open: http://localhost:3001/flow.html
 ```
 
-To allow the canvas to save generated workflows back to the host, mount writable AND set a
-token (in Docker the SPA's requests arrive from the bridge, not loopback, so writes need auth):
+To allow the canvas to save generated workflows back to the host, mount workflows
+writable AND set a token (in Docker the SPA's requests arrive from the bridge,
+not loopback, so writes need auth):
 
 ```bash
 docker run --rm -p 127.0.0.1:3001:3001 \
   -e RFD_TOKEN=change-me \
-  -v "$(pwd)/.claude:/app/.claude" \
+  -v "$(pwd)/.claude/workflows:/app/.claude/workflows" \
+  -v "$(pwd)/.claude/skills:/app/.claude/skills:ro" \
+  -v "$(pwd)/plugins:/app/plugins:ro" \
   rabbit-flow-designer
 # Then in the browser console once: localStorage.setItem('rfd_token','change-me')
 ```
@@ -151,6 +156,12 @@ Or use docker compose (from repo root):
 
 ```bash
 docker compose -f frontend/docker-compose.yml up --build
+```
+
+Pre-built images on Docker Hub:
+
+```bash
+docker pull followthewhit3rabbit/rabbit-flow-designer:latest
 ```
 
 ## Parse limitations

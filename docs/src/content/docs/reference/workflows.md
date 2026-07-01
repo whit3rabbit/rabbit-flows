@@ -176,33 +176,51 @@ Start with a low `maxPages` before crawling a large site; the Python scraper sid
 
 **Depends on:** `eatahorse`
 
----
+## eatahorse-plan
 
-## eatahorse-research
-
-**Purpose:** Research every file in a folder using an Eatahorse board as a durable, resumable ledger. Enumerates files, seeds one card per file, fans out parallel research workers in gated rounds until the board is dry, and synthesizes a cited report.
+**Purpose:** Decompose a goal into a Kanban board and gate the plan for soundness. Runs Decompose -> Seed -> Plan-gate. Does NOT execute any work.
 
 **Args:**
 
 | Key | Type | Meaning |
 |---|---|---|
-| `root` | `string` | Folder to research. Also accepts a bare string: `/eatahorse-research <path>`. Default `.`. |
-| `question` | `string` | Research question applied to every file. Default: `Summarize what each file does and flag anything notable.` |
-| `include` | `string` | Glob filter: keep only matching files. |
-| `exclude` | `string` | Glob filter: drop matching files. |
-| `board` | `string` | Board directory. Default `.eatahorse-research`. |
-| `workerModel` | `string` | Model for research workers. Default `haiku`. |
-| `maxRounds` | `number` | Maximum research loop rounds. Default `3`, max `10`. |
-| `out` | `string` | Output report path. Default `eatahorse-research.md`. |
+| `goal` | `string` (required) | The objective to break down. |
+| `board` | `string` | Board directory path. Default `.eatahorse`. |
+| `inventory` | `string` | Path to `map_codebase.py` JSON output for richer planning context. |
 | `scriptPath` | `string` | Path to `eatahorse.py`. Default: bundled skill copy. |
+| `constraints` | `string[]` | Constraints or board invariants to guide the planner. |
 
 **Example:**
 
 ```
-/eatahorse-research { "root": "src", "question": "What does each module do?" }
+/eatahorse-plan { "goal": "Refactor error handling in src/pdf.rs", "inventory": "./inventory.json" }
 ```
 
-Files beyond the per-run cap stay in `backlog` on the board and carry to the next run. Re-run the workflow to continue; the board tracks what is already done.
+**Depends on:** `eatahorse`
+
+---
+
+## eatahorse-execute
+
+**Purpose:** Work an existing Eatahorse Kanban board one task at a time via the Ralph loop, verifying each completion. Runs Execute -> Verify -> Write-back.
+
+**Args:**
+
+| Key | Type | Meaning |
+|---|---|---|
+| `board` | `string` (required) | Board directory path. |
+| `maxIterations` | `number` | Loop iteration limit. Default `40`. |
+| `workerModel` | `string` | Model for code-writing workers. Default `sonnet`. |
+| `maxTokens` | `number` | Output token ceiling per run. |
+| `budgetFloor` | `number` | Minimum remaining tokens required to continue. |
+| `scriptPath` | `string` | Path to `eatahorse.py`. Default: bundled skill copy. |
+| `constraints` | `string[]` | Constraints or board invariants to guide the workers. |
+
+**Example:**
+
+```
+/eatahorse-execute { "board": ".eatahorse", "maxIterations": 10 }
+```
 
 **Depends on:** `eatahorse`
 
