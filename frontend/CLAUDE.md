@@ -21,7 +21,10 @@ reads real workflow files from `.claude/workflows/` and can validate generated c
 - **Parser** (`parser.js` + `src/parser/*.js`): best-effort source-to-graph parser. `parser.js`
   is the public entry — loaded in the browser via `import('/parser.js')` and in Node by
   `test-parser.mjs`. `src/parser/` holds `scan.js` (string-literal-aware helpers), `meta.js`
-  (the `export const meta` block), `calls.js` (the `agent`/`parallel`/`pipeline`/`phase` scan).
+  (the `export const meta` block), `calls.js` (the `agent`/`parallel`/`pipeline`/`phase` scan),
+  `thunks.js` (resolves `parallel(NAME)` bare-identifier thunk arrays for `calls.js`).
+  `calls.js` delegates option/agent-token scanning to `agent-scan.js` and lossy-hint/snippet text to
+  `lossy.js` (split out to stay under the 400-line cap below).
   Extracts those calls from workflow `.js` sources and maps them to canvas nodes. See "Parse
   limitations" below.
 
@@ -59,7 +62,7 @@ handler without restoring an Origin allowlist on the mutating routes.
 - `src/` — browser SPA ES modules. `main.js` (boot), `canvas.js` (shell state/layout), plus
   `toolbar`/`palette`/`inspector`/`manager`/`codepanel`/`flowpane` (UI), `nodes`/`graph`/`visual`
   (rendering), `api` (backend calls), `library` (localStorage), `codegen` (graph→code).
-  - `src/parser/` — parser internals: `scan.js`, `meta.js`, `calls.js` (entry is `../parser.js`).
+  - `src/parser/` — parser internals: `scan.js`, `meta.js`, `calls.js`, `thunks.js` (entry is `../parser.js`).
   - `src/server/` — Node server internals: `config.js`, `http-util.js`, `security.js`, `handlers.js`,
     `bundle.js` (assembles the `/api/bundle/:name` export zip).
 - `parser.js` — public parser entry (browser + Node); thin facade over `src/parser/`.
@@ -86,6 +89,8 @@ handler without restoring an Origin allowlist on the mutating routes.
 - `../Dockerfile` (repo root) — builds the server image with python3 for `/api/validate`.
 - `docker-compose.yml` — convenience compose wrapper (mounts `.claude/workflows/` + `.claude/skills/` read-only).
 - Every source file is kept under 400 lines (tests may exceed); split a module rather than grow it.
+  `canvas.js`'s library/repo-load/save handlers live in `canvas-library-ops.js` (a factory taking
+  the Shell's current state/setters — same pattern for any future canvas.js split).
 
 ## Build / test / lint (npm or pnpm)
 
@@ -100,11 +105,16 @@ npm install        # or: pnpm install
 npm run build      # or: pnpm build   — vite build → dist/
 npm run lint       # or: pnpm lint    — eslint .
 npm test           # or: pnpm test    — runs test-parser.mjs && test-schema.mjs && test-bundle.mjs && test-codegen.mjs
+node frontend/test-lossy.mjs --report   # check for unparseable "lossy" sections in the graph parser (run before committing)
 npm start          # or: pnpm start   — node server.js
 ```
 
 Running the app needs NO install or build (the server serves `src/` directly); install is only
 for `build`/`lint`. Verified clean under both managers after the modular refactor.
+
+`canvas.js` (the Shell React component) has NO automated test — `npm test` never renders it. Verify
+any change there live: `node frontend/server.js` + the `playwright` MCP tools (navigate, click,
+snapshot, `browser_console_messages`) against `http://localhost:3001/flow.html`.
 
 ## Run locally
 
@@ -155,7 +165,7 @@ docker run --rm -p 127.0.0.1:3001:3001 \
 Or use docker compose (from repo root):
 
 ```bash
-docker compose -f frontend/docker-compose.yml up --build
+docker compose up --build
 ```
 
 Pre-built images on Docker Hub:
@@ -174,7 +184,11 @@ It uses regex and simple token walks to extract workflow structure. Known limita
   (stages emitted as sequential nodes), and `while`/`for (...) { ... }` loops (a `loop` container
   whose body `agent()` calls become child lanes; a braceless or agent-less loop body is skipped).
   A `//` or `/*` inside a prompt string is preserved, and a paren or `agent(` inside a prompt
-  string no longer breaks the scan.
+  string no longer breaks the scan. `parallel(NAME)` — a bare identifier, not an inline
+  array/`.map()` — resolves against a top-level `const NAME = ...` thunk array (`.map()`,
+  `Array.from()`, or an array literal, including conditional `NAME.push(...)` lanes) via
+  `src/parser/thunks.js`; `parallel(` no longer requires an immediately preceding `await` (so
+  `Promise.all([parallel(a), parallel(b)])` renders both fan-outs). See `src/parser/thunks.js`.
 - **Lossy flags**: `model`, `isolation`, and per-agent options inside object literals
   may be silently dropped if they appear in complex expressions.
 - **No perfect round-trip**: parsed-then-exported graphs will not reproduce the original
@@ -184,6 +198,20 @@ It uses regex and simple token walks to extract workflow structure. Known limita
   placeholder prompt.
 - **Nested parallels**: deeply nested `parallel([parallel([...])])` may be flattened
   to a single level in the canvas representation.
+- **`${}` with `.replace(/"/g, "'")`**: a `.replace()` whose regex arg contains `"`
+  inside a template literal's `${...}` expression will be mis-scanned — the `"` in
+  `/"/g` looks like a string opener to the heuristic scanner, consuming text until
+  the next `"`. Pre-compute the replacement outside the template
+  (`const safe = s.replace(/"/g, "'");`) and interpolate `${safe}` instead.
+- **Thin orchestrators** (`eatahorse.js`, etc.): workflows that dispatch to child
+  workflows via `workflow()` with no `agent()` calls produce 0 graph nodes. This is
+  expected — the child workflows render independently.
+- **Don't add a 5th hand-rolled string/regex-literal tracker.** `scan.js`/`calls.js`/`thunks.js`
+  already duplicate string-aware char-by-char scanning several times; a new one at the outer
+  SCANNERS dispatch loop (to string-check `parallelRe` matches) had an off-by-one in its
+  `${...}` brace counting that silently dropped `docs-migrate.js` from 11 nodes to 1 with zero
+  lossy entries — i.e. no warning at all. Any new scanner needs a real `node frontend/test-lossy.mjs`
+  node-count check, not just a 0-lossy check, before it's trusted.
 
 ## Validation gate
 
@@ -202,3 +230,18 @@ python3 .claude/skills/dynamic-workflow-authoring/scripts/validate.py \
 
 A workflow that fails `validate.py --strict` or `npm run check` is not complete.
 The canvas "Generate code" output is a scaffold — review and fix before committing.
+
+## Before committing (visual parser gotchas)
+
+The graph parser (`parser.js` + `src/parser/`) is heuristic — it scans for `agent()`/`parallel()`/`pipeline()`/`phase()` tokens, not a full AST. Run these checks before committing changes to any `.claude/workflows/*.js`:
+
+```bash
+node frontend/test-parser.mjs   # all tests pass (assertions about meta, nodes, edges, lossy)
+node frontend/test-schema.mjs   # every workflow's graph passes schema validation
+node frontend/test-lossy.mjs --report   # <-- check for unparseable sections
+```
+
+All `.claude/workflows/*.js` currently parse with 0 lossy entries (verify with
+`node frontend/test-lossy.mjs --report`). If your change introduces a lossy entry, either flatten
+the offending construct (prefer a nested template literal / `.replace()` fix in the workflow) or
+extend the parser — see "Parse limitations" above.

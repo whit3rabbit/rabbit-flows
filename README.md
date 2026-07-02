@@ -7,6 +7,14 @@
 [![Docker Pulls](https://img.shields.io/docker/pulls/followthewhit3rabbit/rabbit-flow-designer.svg)](https://hub.docker.com/r/followthewhit3rabbit/rabbit-flow-designer)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+<p align="center">
+  <a href="assets/designer.png"><img src="assets/designer.png" width="250" alt="Workflow Designer"/></a>
+  <a href="assets/generate_workflow.png"><img src="assets/generate_workflow.png" width="250" alt="Generate Workflow"/></a>
+  <a href="assets/workflow_manager.png"><img src="assets/workflow_manager.png" width="250" alt="Workflow Manager"/></a>
+  <br>
+  <i>Includes a <a href="#docker-visual-designer">Frontend Workflow Designer</a> to visually build, edit, and export your workflows.</i>
+</p>
+
 `rabbit-flows` allows you to make and install Claude Code dynamic workflows with the skills and agents they need.
 
 The installer copies plain files into `.claude`, records a receipt, and can uninstall only the files it placed.
@@ -18,6 +26,13 @@ Developers can modify dynamic workflows/skills to create their own installers so
 - Claude Code v2.1.154+.
 - Dynamic workflows enabled in `/config`. On Pro, this is off by default.
 - Node.js 18+ for the installer.
+
+## Which one do I want?
+
+- **Install workflows into my project** → `npx @whit3rabbit/rabbit-flows` (below).
+- **Try the visual designer, no local setup** → `docker run followthewhit3rabbit/rabbit-flow-designer`
+  (see [Docker (Visual Designer)](#docker-visual-designer)).
+- **Author or edit workflows seriously** → `git clone` this repo, then `npm run designer`.
 
 ## Install
 
@@ -97,7 +112,13 @@ spine and is not in the installer catalog.
 
 ### Running the Designer via Docker
 
-You can use the Rabbit Flow Designer to visually inspect, edit, and validate workflows in a local Docker container:
+The easiest way to run the Rabbit Flow Designer is using Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Alternatively, you can manually build and run the container:
 
 ```bash
 # Build the image
@@ -111,7 +132,7 @@ docker run --rm -p 3001:3001 \
   rabbit-flow-designer
 ```
 
-See [Docker (Visual Designer)](#docker-visual-designer) for full instructions, including mounting writeable paths and using Docker Compose.
+See [Docker (Visual Designer)](#docker-visual-designer) for full instructions, including mounting writeable paths.
 
 ## Safe Defaults
 
@@ -211,7 +232,24 @@ The plugin does not install workflows. Use the `npx` installer when you need wor
 
 ## Docker (Visual Designer)
 
-The Rabbit Flow Designer can run in Docker — no Node.js install needed on the host:
+The Rabbit Flow Designer can run in Docker — no Node.js install needed on the host.
+
+### Using Docker Compose (Recommended)
+
+Simply run the following command from the repository root:
+
+```bash
+docker compose up --build
+```
+
+This starts the designer in read-only mode by default. If you want to enable saving generated workflows back to the host and use a secure token, edit the `docker-compose.yml` file to uncomment the environment and volume configurations:
+
+- Enable the writable workflows volume mapping (`./.claude/workflows:/app/.claude/workflows`).
+- Set an `RFD_TOKEN` environment variable to secure write endpoints.
+
+### Using Docker CLI
+
+If you prefer to run the container manually:
 
 ```bash
 # Build from repo root:
@@ -231,12 +269,6 @@ docker run --rm -p 127.0.0.1:3001:3001 \
   -v "$(pwd)/.claude/skills:/app/.claude/skills:ro" \
   -v "$(pwd)/plugins:/app/plugins:ro" \
   rabbit-flow-designer
-```
-
-Or use docker compose:
-
-```bash
-docker compose -f frontend/docker-compose.yml up --build
 ```
 
 Pre-built images are published on each version tag:

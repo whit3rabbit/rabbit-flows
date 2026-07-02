@@ -7,6 +7,7 @@
     "rabbit-flows": "bin/cli.mjs"
   },
   "scripts": {
+    "designer": "node frontend/server.js",
     "build:skill": "node scripts/build-skill.mjs",
     "build:docs-contracts": "node scripts/build-docs-contracts.mjs",
     "build:arg-contract": "node scripts/build-arg-contract.mjs",

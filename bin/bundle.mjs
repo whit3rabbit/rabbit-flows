@@ -10,7 +10,13 @@ import { readFile, mkdir, writeFile, stat } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { unzipSync } from 'fflate'
+// Dynamic import: fflate is only needed at readBundle() time, not for --check.
+// This keeps the CI check job dependency-free (import resolves lazily).
+let _fflate = null
+async function fflate() {
+  if (!_fflate) _fflate = await import('fflate')
+  return _fflate
+}
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]*$/
 export const isBundleName = (s) => typeof s === 'string' && NAME_RE.test(s)
@@ -49,6 +55,7 @@ export async function readBundle(archivePath) {
 
   let entries
   try {
+    const { unzipSync } = await fflate()
     entries = unzipSync(new Uint8Array(buf))
   } catch (e) {
     throw new Error(`not a readable zip: ${e.message}`)

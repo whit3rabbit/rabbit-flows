@@ -246,6 +246,8 @@ export function serveStatic(req, res) {
   const allowed =
     rel === 'flow.html' ||
     rel === 'parser.js' ||
+    rel === 'favicon.svg' ||
+    rel === 'favicon.png' ||
     rel.startsWith('vendor' + path.sep) ||
     (rel.startsWith(srcPrefix) && !rel.startsWith(serverPrefix));
   if (!allowed) {

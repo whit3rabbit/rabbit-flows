@@ -15,9 +15,13 @@ npm test               # installer CLI self-checks (node --test over test/*.test
 node --test test/bundle.test.mjs   # BUNDLE import self-checks (readBundle guards + import->install flow); run after editing bin/bundle.mjs, bin/registry.mjs, or the import path in bin/cli.mjs
 node frontend/test-bundle.mjs      # frontend bundle EXPORT self-checks (gatherBundle); run after editing frontend/src/server/bundle.js
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_eatahorse.py   # eatahorse CLI self-checks (stdlib, no framework); run after editing eatahorse.py
+node frontend/test-lossy.mjs --report   # check which workflow .js files have unparseable "lossy" sections in the visual graph parser (run before committing, after editing any .claude/workflows/*.js)
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_map_codebase.py  # codebase mapping help script self-checks; run after editing map_codebase.py
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_cmd_drift.py  # guards the three-copy inline CMD maps: every verb a workflow advertises must exist in eatahorse.py; also checks docs-from-code.js until its refactor. Run after editing any eatahorse-plan.js/eatahorse-execute.js/docs-from-code.js CMD map or eatahorse.py subcommands
+act -j check -j recon -j validate-plugin   # run CI locally (needs Docker + act); do this before pushing to verify CI passes
 python3 plugins/workflow-kit/skills/secure-review/scripts/test_recon.py   # security-audit recon self-checks (stdlib, degraded mode); run after editing recon.py. ALSO run under the venv: `bash plugins/workflow-kit/skills/secure-review/scripts/setup_venv.sh && plugins/workflow-kit/skills/secure-review/scripts/.venv/bin/python plugins/workflow-kit/skills/secure-review/scripts/test_recon.py` — several tests are tree-sitter-gated and SKIP in stdlib; the call-graph/import regressions live on the precise backend, so a green stdlib run alone is blind to them.
+python3 plugins/workflow-kit/skills/docs-scraper/scripts/test_platform_drift.py   # guards docs-migrate.js's hand-copied SELECTORS subset (+ its `from:` header comment) against docs-scrape.js's SELECTORS; run after editing either file's platform coverage
+python3 plugins/workflow-kit/skills/secure-review/scripts/test_sink_catalog_drift.py   # guards security-audit.js's SINK_CATALOG category labels against secure-review/SKILL.md's "Sink/source catalog" bullet list; run after editing either
 ```
 
 Editing a file in `.claude/rules/` without `build:skill` leaves the shipped skill stale; `check` (also in CI) fails the commit.

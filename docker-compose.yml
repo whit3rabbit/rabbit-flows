@@ -1,0 +1,35 @@
+# docker-compose.yml — convenience wrapper for the Rabbit Flow Designer
+#
+# Usage (from repo root):
+#   docker compose up --build
+#
+# Then open: http://localhost:3001/flow.html
+#
+# Workflows and skills are mounted read-only so the container reads real files
+# without baking them into the image. To allow the canvas to save generated
+# workflows back to the host, remove `:ro` from the workflows volume.
+
+services:
+  flow-designer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Publish to host loopback only — the server writes executable workflow files, so it
+    # must not be reachable from the LAN. Drop the 127.0.0.1 prefix only if you mean to expose it.
+    ports:
+      - "127.0.0.1:3001:3001"
+    volumes:
+      # Read-only: validates against real workflows and skills, no writes to host
+      - ./.claude/workflows:/app/.claude/workflows:ro
+      - ./.claude/skills:/app/.claude/skills:ro
+      - ./plugins:/app/plugins:ro
+      # Remove :ro from workflows to allow POST /api/workflows to persist generated files:
+      # - ./.claude/workflows:/app/.claude/workflows
+    environment:
+      - PORT=3001
+      # Inside the container the SPA's requests arrive from the docker bridge (non-loopback),
+      # so mutating routes (POST /api/workflows, /api/validate) require a token. Set one here
+      # and store the SAME value in the browser: localStorage.setItem('rfd_token','<token>').
+      # GET (read/list/skills) needs no token. Leave unset for a read-only-mount, view-only run.
+      # - RFD_TOKEN=change-me
+    restart: unless-stopped

@@ -68,6 +68,6 @@ Workflow stages cannot AUTO-LOAD skills or named agents via `agent()`. How a wor
   A worker that runs NO tool gets ONLY the data fragment it needs (e.g. a card-markdown layout), never the
   command surface — that both saves tokens at fan-out scale AND removes the temptation to run a tool it was
   told not to. Risk: under-slicing = an agent missing a command it needs; keep keys exact to the prompt.
-  Worked example: `.claude/workflows/eatahorse{,-research}.js` (the `CMD`/`cli(...)` slicer).
+  Worked example: `.claude/workflows/eatahorse-plan.js` (the `CMD`/`cli(...)` slicer).
 - The runtime API (`agent/phase/parallel/schema/meta`) is otherwise unspecified — verify a new
   signature once by running a 1-agent probe workflow before building three workflows on it.

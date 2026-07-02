@@ -5,7 +5,7 @@
 //     write-back.
 //
 // FUSION, not "eatahorse-research with a docs prompt" (a doc page is NOT a source file):
-//   - Board substrate from eatahorse-research.js: durable resumable ledger, single-writer discipline,
+//   - Board substrate from eatahorse-plan.js/eatahorse-execute.js: durable resumable ledger, single-writer discipline,
 //     loop-until-dry with load caps, a grounding gate that re-reads source.
 //   - IA framing + Starlight authoring contract + assemble from docs-create.js: group BY READER TASK,
 //     tag Diátaxis, emit content + config.
@@ -25,7 +25,7 @@
 //      need intent the source rarely states, so Plan DEFERS them (needsHumanBrief) instead of authoring
 //      confidently-wrong pages the gate would keep reopening. args.includeTutorials=true opts in.
 //
-// NOTED DEVIATIONS (CLAUDE.md "Bending") — same as eatahorse-research.js:
+// NOTED DEVIATIONS (CLAUDE.md "Bending") — same as eatahorse-plan.js/eatahorse-execute.js:
 //   1. Shared MUTABLE store (the board), made race-free by WRITE DISCIPLINE: within a round every page
 //      author writes ONLY its own page file (under outDir) + its own card markdown (under the board) — both
 //      distinct paths — and runs NO eatahorse CLI. The ONLY writer of state.json/board.md is the single
@@ -92,7 +92,7 @@
 //    skills. See .claude/rules/workflow-design.md.)
 // Run with /workflows or copy via `npx @whit3rabbit/rabbit-flows`.
 // (`node --check` flags the trailing top-level return as "illegal return" — expected; the runtime wraps the
-//  script in an async function. Same as eatahorse-research.js / docs-create.js.)
+//  script in an async function. Same as eatahorse-plan.js/eatahorse-execute.js / docs-create.js.)
 export const meta = {
   name: 'docs-from-code',
   description:
@@ -5899,12 +5899,29 @@ const REOPEN_SCHEMA = {
   },
 }
 
+// eatahorse.py is bundled with the eatahorse skill; agents shell out to it IN PLACE. A single hardcoded
+// path 404s on installed (npx/user-scope) targets, which made agents COPY eatahorse.py into the project
+// to satisfy it. Every Bash call re-runs `eatahorseResolve` first (shell state does NOT persist between
+// Bash tool calls, so it must be chained into the same invocation as the real command each time): it
+// probes the candidate locations and sets $EH, NEVER copying the script. Mirrors reconResolve in
+// security-audit.js and eatahorse-plan.js/eatahorse-execute.js.
+const eatahorseResolve =
+  `EH=""; for c in "${scriptPath}" ".claude/skills/eatahorse/scripts/eatahorse.py" "$HOME/.claude/skills/eatahorse/scripts/eatahorse.py"; do [ -f "$c" ] && EH="$c" && break; done\n` +
+  `[ -z "$EH" ] && EH=$(find . -maxdepth 6 -name eatahorse.py -path '*eatahorse*' 2>/dev/null | head -1)\n` +
+  `PY=python3\n` +
+  `# eatahorse.py is READ-ONLY tooling: run it IN PLACE from "$EH" — never copy, move, or recreate it in the project.`
+
+// Avoids .replace(/"/g, "'") inline in template literals, which confuses the heuristic parser's ${}
+// expression tracking (/"/g regex " looks like a string opener). Mirrors eatahorse-plan.js's _sq().
+const _sq = (s) => String(s).replace(/"/g, "'")
+
 // Sliced per-agent: cli(...) hands each board-touching prompt ONLY the commands its steps call. Page
 // authors run NO CLI — they get CARD_MD (markdown layout) only. Keep `reopen` consistent with the sibling
-// CMD in eatahorse{,-research}.js by hand (no runtime sharing in the VM sandbox).
+// CMD in eatahorse-plan.js/eatahorse-execute.js by hand (no runtime sharing in the VM sandbox).
 const CLI_HEAD =
-  `Eatahorse CLI (stdlib python, no deps): python3 "${scriptPath}" --board "${board}" <cmd>. ` +
-  `If absent: find . -name eatahorse.py -path '*eatahorse*'.`
+  `Eatahorse CLI (stdlib python, no deps). Locate eatahorse.py IN PLACE (do NOT copy it anywhere) by chaining ` +
+  `this prelude into the SAME Bash call as every command below (shell state does not persist between ` +
+  `calls):\n${eatahorseResolve}\nThen run: "$PY" "$EH" --board "${board}" <cmd>.`
 const CMD = {
   report: `report --json -> {counts, active, done}  (read "active" and "done")`,
   list:   `list [--status s] [--json] -> cards (id,title,status,path)`,
@@ -5918,6 +5935,9 @@ const CMD = {
   sync:   `sync  (reconcile cards <-> state.json + board.md; run after edits)`,
 }
 const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
+// Same command menu WITHOUT the CLI_HEAD preamble (which re-embeds eatahorseResolve) — for prompts
+// that already interpolated ${eatahorseResolve} explicitly above, so the prelude isn't duplicated.
+const cmdMenu = (...k) => `Commands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
 // Card layout only — for the page author, which writes its page file + edits its own card markdown, no CLI.
 const CARD_MD =
   `Card markdown: a "## Notes" section + checkbox sections "## One-bite-at-a-time plan" and ` +
@@ -6066,37 +6086,47 @@ CLI HELP LANE WORKER CONTRACT:
   // documents any of the 12 languages: run the generator if available, else READ the source files of the
   // language's extensions and extract `publicApi` symbols with their `docComment`. The worker is sliced per
   // agent — it sees only THIS language's rule, never the whole table.
-  const langContract = (id, rule) => `
+  const langContract = (id, rule, signal) => {
+    // Plain-string ternary, not a nested template literal (a backtick-in-backtick — around
+    // rule.generator, for markdown code-formatting in the prompt — defeats the frontend visual-graph
+    // parser's heuristic comment stripper, which lacks the ${}-nesting awareness the paren balancer has).
+    const genStep = rule.generator
+      ? 'Attempt the generator from "' + root + '": `' + rule.generator + '`. If it is not installed or fails, FALL BACK to a source parse (step 2).'
+      : 'There is no doc generator for this language — go straight to the source parse (step 2).'
+    return `
 LANGUAGE LANE WORKER CONTRACT (lane: ${id}). You document ONE language using ONLY its own rules:
   - Doc-comment convention: ${rule.docComment}
   - Public API surface:     ${rule.publicApi}
   - Generator tool:         ${rule.generator ?? '(none — there is no doc generator; extract directly from source)'}
   - Source extensions:      ${rule.ext.join(', ')}
 Steps:
-1. ${rule.generator
-      ? `Attempt the generator from "${root}": \`${rule.generator}\`. If it is not installed or fails, FALL BACK to a source parse (step 2).`
-      : `There is no doc generator for this language — go straight to the source parse (step 2).`}
+1. ${genStep}
 2. SOURCE PARSE (the grounded path): READ the tracked source files with extensions ${rule.ext.join(', ')}, identify the
    PUBLIC API (${rule.publicApi}), and for each public symbol collect its doc comment (${rule.docComment}).
 3. Write 1-3 reference page(s) under "${outDir}/src/content/docs/reference/", grouped by module/namespace; merge trivial
    single-symbol modules. List each public symbol with its signature and its doc text. NEVER invent a signature.
-   Tag each page: <!-- generated: ${id} lane, signal: ${'${signal}'} -->
+   Tag each page: <!-- generated: ${id} lane, signal: ${signal} -->
 4. DOC-COVERAGE: also report public symbols that LACK a doc comment. Return coverage:{documented:<count with a doc comment>,
    undocumented:[{symbol, file, kind}]} listing every public symbol that has NO doc comment.
 5. Return the pages written (path, title, group="${rule.pageGroup}", brief, scope=[the source files you read]).
+`
+  }
+
+  // Hoisted out of the .map() callback below (was an anonymous template literal inline in a ternary,
+  // which the frontend visual-graph parser's heuristic scanner can't balance) — same contract, named.
+  const genericLaneContract = (lane) => `
+GENERIC GENERATOR LANE WORKER CONTRACT (lane: ${lane.id}):
+Signal file: ${lane.signal}. Generator approach: ${lane.generator}.
+Read the signal file, extract any API/command/schema documentation it describes, and write 1-2 reference
+pages under "${outDir}/src/content/docs/reference/". Content MUST come from the signal file — no invented API.
+Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
 `
 
   const laneResults = await parallel(
     activeLanes.map((lane) => () => {
       const rule = LANG_RULES[lane.id]        // sliced: only this lane's rule is injected
       const contract = LANE_CONTRACTS[lane.id]
-        ?? (rule ? langContract(lane.id, rule).replace('${signal}', lane.signal) : `
-GENERIC GENERATOR LANE WORKER CONTRACT (lane: ${lane.id}):
-Signal file: ${lane.signal}. Generator approach: ${lane.generator}.
-Read the signal file, extract any API/command/schema documentation it describes, and write 1-2 reference
-pages under "${outDir}/src/content/docs/reference/". Content MUST come from the signal file — no invented API.
-Tag each page: <!-- generated: ${lane.id} lane, signal: ${lane.signal} -->
-`)
+        ?? (rule ? langContract(lane.id, rule, lane.signal) : genericLaneContract(lane))
       // Model: sonnet where parsing demands judgment (openapi spec, the 4 richer language parses);
       // haiku for plain captures + the remaining language source-parses (mechanical extraction).
       const sonnetLanes = ['openapi', 'typescript', 'python', 'rust', 'java', 'csharp']
@@ -6351,7 +6381,7 @@ const descOf = (p) => `path=${p.path} | diataxis=${p.diataxisType} | scope=${(p.
   (generatedPathSet.has(p.path) ? ' | generated=true' : '')
 const seed = await agent(
   `Ensure an Eatahorse board exists at "${board}" and holds one card per page below. Steps:\n` +
-    `1. \`report --json\`; if it errors (no board), \`init "Docs: ${root.replace(/"/g, "'")}"\`.\n` +
+    `1. \`report --json\`; if it errors (no board), \`init "Docs: ${_sq(root)}"\`.\n` +
     `2. \`list --json\` to see existing cards. Every NEW card gets TWO acceptance items IN ORDER: ` +
     `"page written from source" (the author ticks) then "grounding verified by gate" (only the gate ticks). ` +
     `For EACH page whose "path" is NOT already a card title:\n` +
@@ -6409,10 +6439,11 @@ const attempts = new Map()        // title -> count of grounding-gate REJECTIONS
 // Reload the board snapshot (status + per-card acceptance flags) — the source of truth between stages.
 const reloadCards = async () => {
   const r = await agent(
-    `\`python3 "${scriptPath}" --board "${board}" list --json\`. Return EVERY card as {title, mdPath (its ` +
+    `Run exactly this via Bash:\n${eatahorseResolve}\n"$PY" "$EH" --board "${board}" list --json\n` +
+      `Return EVERY card as {title, mdPath (its ` +
       `"path"), status, written (its FIRST "Acceptance checks" item is ticked), verified (it has a SECOND ` +
       `acceptance item AND it is ticked; for a legacy card with only ONE acceptance item, verified = written)}.` +
-      `\n\n${cli('list')}`,
+      `\n\n${cmdMenu('list')}`,
     { label: `reload:${round}`, phase: 'Author', model: 'haiku', schema: SEED_SCHEMA },
   )
   if (r?.cards?.length) { for (const c of r.cards) cardByTitle.set(c.title, c); return r.cards }
@@ -6517,8 +6548,9 @@ while (round < maxRounds && (!budget.total || budget.remaining() > BUDGET_FLOOR)
 
   // Single serialized writer: reconcile the round's card edits into state.json + board.md.
   const sync = await agent(
-    `Run \`python3 "${scriptPath}" --board "${board}" sync\` then \`report --json\`. Return activeRemaining ` +
-      `(the "active" count) and done (the "done" count). Reporting only; change nothing else.\n\n${cli('sync', 'report')}`,
+    `Run exactly this via Bash:\n${eatahorseResolve}\n"$PY" "$EH" --board "${board}" sync\n` +
+      `then \`report --json\`. Return activeRemaining ` +
+      `(the "active" count) and done (the "done" count). Reporting only; change nothing else.\n\n${cmdMenu('sync', 'report')}`,
     { label: `sync:${round}`, phase: 'Author', model: 'haiku', schema: SYNC_SCHEMA },
   )
   if (sync) activeRemaining = sync.activeRemaining
@@ -6609,8 +6641,8 @@ const stopReason =
 if (mode === 'update') {
   phase('Assemble')
   const uTitles = (await agent(
-    `\`python3 "${scriptPath}" --board "${board}" list --status done --json\` and return the "title" (page path) of ` +
-      `every done card.\n\n${cli('list')}`,
+    `Run exactly this via Bash:\n${eatahorseResolve}\n"$PY" "$EH" --board "${board}" list --status done --json\n` +
+      `and return the "title" (page path) of every done card.\n\n${cmdMenu('list')}`,
     { label: 'gather-admitted', model: 'haiku', schema: DONE_TITLES_SCHEMA },
   ))?.titles ?? []
   const uDoneSet = new Set(uTitles.map((t) => normPagePath(t)))
@@ -6719,8 +6751,8 @@ phase('Assemble')
 const admittedTitles =
   (
     await agent(
-      `\`python3 "${scriptPath}" --board "${board}" list --status done --json\` and return the "title" (page path) ` +
-        `of every done card.\n\n${cli('list')}`,
+      `Run exactly this via Bash:\n${eatahorseResolve}\n"$PY" "$EH" --board "${board}" list --status done --json\n` +
+        `and return the "title" (page path) of every done card.\n\n${cmdMenu('list')}`,
       { label: 'gather-admitted', model: 'haiku', schema: DONE_TITLES_SCHEMA },
     )
   )?.titles ?? []

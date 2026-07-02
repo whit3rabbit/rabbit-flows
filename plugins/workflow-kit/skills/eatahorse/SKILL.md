@@ -1,6 +1,6 @@
 ---
 name: eatahorse
-description: Maintains lightweight one-bite-at-a-time Kanban boards using .eatahorse JSON state and markdown task cards. Use for planning, tracking, todos, and bite-sized work, or when the user says "break this into tasks", "plan this work", "track progress", or "/eatahorse <goal>". Two-phase workflow: plan the board (decompose, seed, gate) then, opt-in, work it unattended (Ralph loop + completion gate + write-back). Run /eatahorse --plan for the planner only, /eatahorse --execute to work an existing board, or /eatahorse "goal" to plan first (with an optional execute step).
+description: 'Maintains lightweight one-bite-at-a-time Kanban boards using .eatahorse JSON state and markdown task cards. Use for planning, tracking, todos, and bite-sized work, or when the user says "break this into tasks", "plan this work", "track progress", or "/eatahorse <goal>". Two-phase workflow: plan the board (decompose, seed, gate) then, opt-in, work it unattended (Ralph loop + completion gate + write-back). Run /eatahorse --plan for the planner only, /eatahorse --execute to work an existing board, or /eatahorse "goal" to plan first (with an optional execute step).'
 dependencies:
   - python>=3.9
 hooks:
@@ -112,7 +112,8 @@ Runs the `map_codebase.py` help script on a directory, then runs the planner wit
 
 1. Confirm the **root** directory to map.
 2. Optionally gather `--include`/`--exclude` globs and `--max-files`.
-3. Run: `python3 <script_dir>/map_codebase.py --root <dir> --out <inventory.json> [--include <glob>] [--exclude <glob>] [--max-files 500]`
+3. Locate `map_codebase.py` IN PLACE next to `eatahorse.py` (same bundled-location caveat as above — never
+   copy it into the target project) and run: `python3 <script_dir>/map_codebase.py --root <dir> --out <inventory.json> [--include <glob>] [--exclude <glob>] [--max-files 500]`
 4. Use the inventory: `Workflow({ name: "eatahorse-plan", args: { goal, inventory: "<inventory.json>", constraints } })`
 
 Help script output: `{files: [{path, ext, size, imports, exports}], stats: {total, byExt}}`. The planner reads this for file structure, dependencies, and exported interfaces. The plan is NOT limited to one card per file — the script provides context, not a template.
@@ -154,7 +155,12 @@ Statuses: `backlog`, `ready`, `doing`, `blocked`, `done`, `dropped`.
 
 ## Use the bundled Python tool
 
-Run these from the project root:
+`scripts/eatahorse.py` is bundled tooling, not something to copy into a project. Its location depends
+on how this skill was installed — the dev repo has it at `plugins/workflow-kit/skills/eatahorse/scripts/eatahorse.py`,
+an npx project-scope install at `.claude/skills/eatahorse/scripts/eatahorse.py`, a user-scope install at
+`~/.claude/skills/eatahorse/scripts/eatahorse.py`. Locate the one that exists and run it IN PLACE from
+there (never copy, move, or recreate it in the target project); the commands below use `scripts/eatahorse.py`
+as shorthand for whichever path resolved.
 
 ```bash
 python scripts/eatahorse.py init "Project name" --goal "What success means"

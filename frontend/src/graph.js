@@ -23,7 +23,7 @@ export const toRFNodes = (g) => g.nodes.map((n) => {
     connectable: !isC,
     selectable: true,
     style: { width: n.w, height: n.h },
-    data: { kind: n.kind, label: n.label, model: n.model, schema: n.schema, phase: n.phase, detail: n.detail, body: n.body },
+    data: { kind: n.kind, label: n.label, model: n.model, schema: n.schema, phase: n.phase, detail: n.detail, body: n.body, snippet: n.snippet, fix: n.fix },
   };
 });
 

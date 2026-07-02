@@ -2,34 +2,13 @@
 // canvas nodes + edges. Unrecognised/unbalanced constructs go to lossy[] with {line, reason}.
 
 import { optsOf, stripComments, extractBalancedParen, extractBalancedBraces } from './scan.js';
+import { indexThunkSources, bareIdentifierArg } from './thunks.js';
+import { extractModel, extractSchema, extractLabel, extractPhase, scanAgents as scanAgentsRaw } from './agent-scan.js';
+import { fixHint, snippetSrc as snippetSrcOf } from './lossy.js';
 
 /** Auto-incrementing ID counter for node IDs. */
 let _uid = 0;
 function uid(prefix) { return prefix + '_' + (++_uid); }
-
-/** Detect the model hint from an options-like snippet. */
-function extractModel(optSnippet) {
-  const m = /model\s*:\s*['"`](opus|sonnet|haiku)['"`]/.exec(optSnippet);
-  return m ? m[1] : null;
-}
-
-/** Detect the schema name from an options-like snippet. */
-function extractSchema(optSnippet) {
-  const m = /schema\s*:\s*([A-Z_][A-Z0-9_]*)/.exec(optSnippet);
-  return m ? m[1] : null;
-}
-
-/** Detect the label from an options-like snippet (label: '...'). */
-function extractLabel(optSnippet) {
-  const m = /label\s*:\s*(['"`])((?:\\.|(?!\1)[^])*?)\1/.exec(optSnippet);
-  return m ? m[2] : null;
-}
-
-/** Detect the phase from an options-like snippet. */
-function extractPhase(optSnippet) {
-  const m = /phase\s*:\s*(['"`])((?:\\.|(?!\1)[^])*?)\1/.exec(optSnippet);
-  return m ? m[2] : null;
-}
 
 /**
  * Parse agent()/parallel()/pipeline()/phase() calls from workflow source.
@@ -92,9 +71,16 @@ export function parseCalls(src) {
   // Global (sticky via lastIndex) so the main loop can search forward from `pos` with no slice.
   const phaseCallRe   = /\bphase\s*\(\s*(['"`])((?:\\.|(?!\1)[^])*?)\1\s*\)/g;
   const agentCallRe   = /\bawait\s+agent\s*\(/g;
-  const parallelRe    = /\bawait\s+parallel\s*\(/g;
+  // No mandatory `await` prefix: `Promise.all([parallel(a), parallel(b)])` awaits the Promise.all,
+  // not each parallel() call directly, but each is still a real fan-out the graph should show.
+  const parallelRe    = /\bparallel\s*\(/g;
   const pipelineRe    = /\bawait\s+pipeline\s*\(/g;
   const loopRe        = /\b(?:while|for)\s*\(/g;
+
+  // NAME -> initializer source text, for resolving `parallel(NAME)` bare-identifier args (a hoisted
+  // thunk array built via `.map()`/`Array.from()`, optionally with conditional `.push()` lanes) to
+  // the same agent()-scanning path as an inline array. See thunks.js.
+  const thunkIndex = indexThunkSources(stripped);
 
   // We process the full source as a string, tracking position for line numbers.
   let pos = 0;
@@ -109,6 +95,11 @@ export function parseCalls(src) {
     let lo = 0, hi = nlOffsets.length;
     while (lo < hi) { const mid = (lo + hi) >> 1; if (nlOffsets[mid] < p) lo = mid + 1; else hi = mid; }
     return lo + 1; // 1-based: newlines strictly before p, plus 1
+  }
+
+  // Build an enriched lossy entry: {line, reason, snippet, fix}
+  function makeLossy(absPos, reason) {
+    return { line: posLine(absPos), reason, snippet: snippetSrcOf(src, absPos), fix: fixHint(reason) };
   }
 
   function addNode(node) {
@@ -126,46 +117,12 @@ export function parseCalls(src) {
     return extractBalancedParen(S, startPos);
   }
 
-  // Scan inner text for agent() calls; return [{model, schema, label, phase, kind}] + push
-  // any unbalanced span to lossy. offset is inner's absolute start in S (for line numbers).
-  // String-aware: an `agent(` that appears INSIDE a prompt string (e.g. 'use the agent(x) helper')
-  // is not a call and is skipped, so it neither spawns a phantom node nor a false lossy entry.
+  // Scan inner text for agent() calls; return [{model, schema, label, phase, kind}] + push any
+  // unbalanced span to lossy. offset is inner's absolute start in S (for line numbers). See
+  // agent-scan.js for the string/template-literal-aware scan itself.
   function scanAgents(inner, offset, labelFor) {
-    const found = [];
-    let str = null;
-    for (let i = 0; i < inner.length; i++) {
-      const c = inner[i];
-      if (str) {
-        if (c === '\\') { i++; continue; }
-        if (c === str) str = null;
-        continue;
-      }
-      if (c === "'" || c === '"' || c === '`') { str = c; continue; }
-      // `agent` at a word boundary, followed by `(` (optional whitespace) — a real call token.
-      if (c !== 'a' || !inner.startsWith('agent', i)) continue;
-      const prev = i > 0 ? inner[i - 1] : '';
-      if (/[A-Za-z0-9_$]/.test(prev)) continue; // e.g. "subagent" — not the agent() helper
-      let k = i + 5;
-      while (k < inner.length && /\s/.test(inner[k])) k++;
-      if (inner[k] !== '(') continue;
-      const span = extractBalancedParen(inner, k);
-      if (!span) {
-        lossy.push({ line: posLine(offset + i), reason: 'unbalanced agent() paren inside a container' });
-        i = k; // skip past this token; keep scanning for more
-        continue;
-      }
-      const optsFrag = optsOf(span.text);
-      const label = extractLabel(optsFrag) || labelFor(found.length);
-      found.push({
-        model: extractModel(optsFrag),
-        schema: extractSchema(optsFrag),
-        label,
-        phase: extractPhase(optsFrag) || currentPhase,
-        kind: /gate/i.test(label) ? 'gate' : 'agent',
-      });
-      i = span.end; // continue after the matched call (loop's i++ moves to the next char)
-    }
-    return found;
+    return scanAgentsRaw(inner, offset, labelFor, currentPhase,
+      (absPos) => lossy.push(makeLossy(absPos, 'unbalanced agent() paren inside a container')));
   }
 
   const SCANNERS = [
@@ -176,6 +133,14 @@ export function parseCalls(src) {
   while (pos < S.length) {
     // Find the nearest of the five constructs at or after `pos`. Global regexes searched via
     // lastIndex (no per-iteration slice); m.index is already absolute in S.
+    //
+    // NOT string-literal aware here (unlike scanAgents/extractBalancedParen): a correct check would
+    // need a 4th hand-rolled tokenizer that also understands regex literals (stripComments already
+    // has that logic; duplicating it was tried and it desynced on a regex literal containing a quote
+    // char, corrupting the scan for docs-migrate.js/docs-create.js). Prose that merely MENTIONS a
+    // construct (e.g. "explain how parallel(...) works") can in principle false-match; accepted risk
+    // — no tracked workflow triggers it (see frontend/test-lossy.mjs). Fix properly only alongside a
+    // shared, tested string+regex-aware scanner (reuse stripComments' tokenizer), not a copy of it.
     let hit = null;
     for (const [type, re] of SCANNERS) {
       re.lastIndex = pos;
@@ -196,7 +161,7 @@ export function parseCalls(src) {
       const parenStart = absPos + hit.m[0].length - 1; // points to '('
       const span = extractParen(parenStart);
       if (!span) {
-        lossy.push({ line: posLine(absPos), reason: 'unbalanced agent() paren' });
+        lossy.push(makeLossy(absPos, 'unbalanced agent() paren'));
         pos = absPos + 1;
         continue;
       }
@@ -219,16 +184,39 @@ export function parseCalls(src) {
       const parenStart = absPos + hit.m[0].length - 1; // '(' position
       const span = extractParen(parenStart);
       if (!span) {
-        lossy.push({ line: posLine(absPos), reason: 'unbalanced parallel() paren' });
+        lossy.push(makeLossy(absPos, 'unbalanced parallel() paren'));
         pos = absPos + 1;
         continue;
       }
 
       const containerY = y;
-      const laneNodes = scanAgents(span.text, parenStart, (i) => 'worker:' + i);
+      let laneNodes = scanAgents(span.text, parenStart, (i) => 'worker:' + i);
+
+      // parallel(NAME) — a bare identifier, not an inline array/`.map()`. Resolve it against the
+      // top-level thunk index (see thunks.js) and scan ITS source text the same way, so a hoisted
+      // `const NAME = items.map(() => () => agent(...))` renders lanes instead of an empty container.
+      const identifier = laneNodes.length === 0 ? bareIdentifierArg(span.text) : null;
+      const thunkEntry = identifier ? thunkIndex.get(identifier) : null;
+      if (thunkEntry) {
+        // Scan with the DECLARATION's own position as the offset, not the parallel(NAME) call site —
+        // otherwise a lossy entry surfaced from the thunk's text (e.g. an unbalanced agent() paren
+        // inside it) would report a line/snippet near the call site instead of near the declaration.
+        laneNodes = scanAgents(thunkEntry.text, thunkEntry.start, (i) => 'worker:' + i);
+      }
 
       if (laneNodes.length === 0) {
-        lossy.push({ line: posLine(absPos), reason: 'parallel() contains no parseable agent() calls' });
+        if (identifier) {
+          // Resolution was attempted (it's a bare identifier) but failed to find any agent() calls —
+          // either NAME isn't a top-level const in this file, or it has none. Flag it instead of the
+          // prior silent skip, so a genuinely missing thunk array isn't invisible in the graph.
+          lossy.push(makeLossy(absPos, 'parallel() references an unresolved identifier'));
+        } else {
+          // Non-identifier arg (not `.map()`/inline either): could be a real parse gap, or an opaque
+          // pre-constructed-thunks expression (e.g. `parallel(buildLanes())`) that's expected and
+          // harmless. Flag it either way — a lossy entry is informational, not an error, and staying
+          // silent here would let a genuine gap (a typo'd helper, a broken call) vanish with zero trace.
+          lossy.push(makeLossy(absPos, 'parallel() contains no parseable agent() calls'));
+        }
         pos = span.end + 1;
         continue;
       }
@@ -273,13 +261,16 @@ export function parseCalls(src) {
       const parenStart = absPos + hit.m[0].length - 1; // '(' position
       const span = extractParen(parenStart);
       if (!span) {
-        lossy.push({ line: posLine(absPos), reason: 'unbalanced pipeline() paren' });
+        lossy.push(makeLossy(absPos, 'unbalanced pipeline() paren'));
         pos = absPos + 1;
         continue;
       }
       const stages = scanAgents(span.text, parenStart, (i) => 'stage:' + i);
       if (stages.length === 0) {
-        lossy.push({ line: posLine(absPos), reason: 'pipeline() contains no parseable agent() calls' });
+        // Flag every zero-stage pipeline() — could be pre-constructed thunks (harmless) or a real
+        // gap (a typo'd stage function, a broken call); a lossy entry is informational, not an
+        // error, so staying silent here would let a genuine gap vanish with zero trace.
+        lossy.push(makeLossy(absPos, 'pipeline() contains no parseable agent() calls'));
       } else {
         stages.forEach((st) => addNode(makeNode(st.kind, st.label, {
           model: st.model, schema: st.schema, phase: st.phase, y,
@@ -297,7 +288,7 @@ export function parseCalls(src) {
       const headerParenStart = absPos + hit.m[0].length - 1; // '(' of the loop header
       const headerSpan = extractParen(headerParenStart);
       if (!headerSpan) {
-        lossy.push({ line: posLine(absPos), reason: 'unbalanced loop header paren' });
+        lossy.push(makeLossy(absPos, 'unbalanced loop header paren'));
         pos = absPos + 1;
         continue;
       }
@@ -311,7 +302,7 @@ export function parseCalls(src) {
       }
       const body = extractBalancedBraces(S, braceIdx);
       if (!body) {
-        lossy.push({ line: posLine(absPos), reason: 'unbalanced loop body block' });
+        lossy.push(makeLossy(absPos, 'unbalanced loop body block'));
         pos = braceIdx + 1;
         continue;
       }

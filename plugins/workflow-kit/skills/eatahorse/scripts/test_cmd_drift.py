@@ -47,6 +47,38 @@ def cmd_verbs(js_path):
     return out
 
 
+def eatahorse_resolve_block(js_path):
+    """The `const eatahorseResolve = ...` template-literal body, hand-copied across all three
+    workflows (see the skill's CLAUDE.md). Returns None if the file has no such const."""
+    src = js_path.read_text(encoding="utf-8")
+    m = re.search(r"const eatahorseResolve =\n((?:\s*`.*`\s*\+?\n)+)", src)
+    return m.group(1) if m else None
+
+
+def test_eatahorse_resolve_identical_across_workflows():
+    """The three eatahorseResolve copies must stay byte-identical (modulo the workflow's own
+    ${scriptPath}/${board} interpolation, which is textually identical across files since all three
+    reference the same local `scriptPath` variable name) — a hand-edit to one that isn't mirrored to
+    the other two silently reintroduces the copy-into-project bug this prelude exists to prevent."""
+    root = repo_root()
+    if root is None:
+        print("SKIP: no .claude/workflows (installed skill copy); drift test is dev-only.")
+        return
+    blocks = {}
+    for name in WORKFLOWS:
+        js = root / ".claude/workflows" / name
+        block = eatahorse_resolve_block(js)
+        assert block, f"{name}: expected a `const eatahorseResolve = ...` block, found none"
+        blocks[name] = block
+    first_name, first_block = next(iter(blocks.items()))
+    for name, block in blocks.items():
+        assert block == first_block, (
+            f"{name}'s eatahorseResolve differs from {first_name}'s — hand-sync the three copies "
+            f"(plan/execute/docs-from-code) per plugins/workflow-kit/skills/eatahorse/CLAUDE.md"
+        )
+    print(f"  eatahorseResolve identical across {len(blocks)} workflows")
+
+
 def test_every_advertised_verb_exists():
     root = repo_root()
     if root is None:
@@ -70,7 +102,7 @@ def test_every_advertised_verb_exists():
 
 
 def main():
-    tests = [test_every_advertised_verb_exists]
+    tests = [test_every_advertised_verb_exists, test_eatahorse_resolve_identical_across_workflows]
     failed = 0
     for t in tests:
         try:

@@ -25,7 +25,7 @@ export { parseCalls, mapToFlowCanvas } from './src/parser/calls.js';
  *     meta: { name, description, phases, raw, unbalanced },
  *     nodes: Node[],
  *     edges: Edge[],
- *     lossy: [{line, reason}]
+ *     lossy: [{line: number, reason: string, snippet: string, fix: string}]
  *   }
  *
  * The returned nodes/edges use the flow-canvas internal shape (id/kind/label/…/x/y/w/h).

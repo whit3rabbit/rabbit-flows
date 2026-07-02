@@ -20,6 +20,8 @@ changes. The `frameworks/registry.js` splice fragment references `CONTRACT` and 
 - `docs-migrate.js` is deliberately NOT wired into these blocks: it carries migration-specific
   consts (ADMONITION_CROSSWALK, DETECTION, SELECTORS) and a different-shaped resolver, and does not
   use the FRAMEWORKS registry. Forcing it into the shared substrate would be coupling for its own sake.
+  It also hand-copies its own abridged `STARLIGHT_FRONTMATTER` and its own `resolveLinksAndAssets`
+  (different signature from the generated one) — unguarded drift, accepted for the same reason.
 - Starlight is first-class. Other frameworks with a full `frameworks/<fw>/references/` set are
   distilled into `<FW>_CONTRACT` blocks the same way; frameworks without references author from
   current official docs (find-docs / context7) at runtime.

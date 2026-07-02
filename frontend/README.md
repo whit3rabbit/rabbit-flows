@@ -42,10 +42,10 @@ docker run --rm -p 127.0.0.1:3001:3001 \
   rabbit-flow-designer
 ```
 
-Or with compose:
+Or with compose (from the repository root):
 
 ```bash
-docker compose -f frontend/docker-compose.yml up --build
+docker compose up --build
 ```
 
 Open http://localhost:3001/flow.html. The container runs as UID 1000 (`node`); writable mounts need host dirs owned by that user.

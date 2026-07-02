@@ -19,13 +19,21 @@ export function extractBalancedBraces(src, startIdx) {
   return null; // unbalanced
 }
 
-/** Extract a balanced-bracket block starting at the first '[' at or after startIdx. */
+/** Extract a balanced-bracket block starting at the first '[' at or after startIdx.
+ *  String-literal aware: a `[` or `]` inside a quoted string does NOT change depth. Honors `\`
+ *  escapes and all three quote chars, same as extractBalancedParen. */
 export function extractBalancedBracket(src, startIdx) {
   const i = src.indexOf('[', startIdx);
   if (i === -1) return null;
-  let depth = 0, j = i;
+  let depth = 0, j = i, str = null;
   while (j < src.length) {
     const c = src[j];
+    if (str) {
+      if (c === '\\') { j += 2; continue; }
+      if (c === str) str = null;
+      j++; continue;
+    }
+    if (c === "'" || c === '"' || c === '`') { str = c; j++; continue; }
     if (c === '[') depth++;
     else if (c === ']') { depth--; if (depth === 0) return src.slice(i, j + 1); }
     j++;
@@ -36,7 +44,10 @@ export function extractBalancedBracket(src, startIdx) {
 /** Extract a balanced-paren block starting at the first '(' at or after startIdx.
  *  String-literal aware: a `(` or `)` inside a quoted string does NOT change depth (so a prompt
  *  like 'rate this :)' or one mentioning 'agent(x)' is handled correctly). Honors `\` escapes
- *  and all three quote chars. Returns {text, start, end} or null if unbalanced. */
+ *  and all three quote chars. Template-expression aware: a `\`${...}\`` inside a backtick string
+ *  skips to the matching `}`, so a nested template literal like \`\`\`${x ? 'a' : \`b\`}\`\`\`
+ *  does NOT close the outer string context with its inner backtick. Returns {text, start, end}
+ *  or null if unbalanced. */
 export function extractBalancedParen(src, startIdx) {
   const i = src.indexOf('(', startIdx);
   if (i === -1) return null;
@@ -45,6 +56,29 @@ export function extractBalancedParen(src, startIdx) {
     const c = src[j];
     if (str) {
       if (c === '\\') { j += 2; continue; }
+      // Template-expression awareness: inside a backtick string, `${...}` may contain nested
+      // template literals. Skip to the matching `}` with string-aware brace tracking so inner
+      // backticks don't close the outer string. Quotes inside the expression are tracked too,
+      // so a `{` or `}` inside a string literal (e.g. `${a ? '{' : '}'}`) does NOT affect
+      // the expression brace depth.
+      if (str === '`' && c === '$' && j + 1 < src.length && src[j + 1] === '{') {
+        let exprDepth = 1;
+        let exprStr = null; // string context inside the expression
+        j += 2; // skip past ${
+        while (j < src.length && exprDepth > 0) {
+          const ec = src[j];
+          if (exprStr) {
+            if (ec === '\\') { j++; }
+            else if (ec === exprStr) { exprStr = null; }
+            j++; continue;
+          }
+          if (ec === "'" || ec === '"' || ec === '`') { exprStr = ec; j++; continue; }
+          if (ec === '{') exprDepth++;
+          else if (ec === '}') exprDepth--;
+          j++;
+        }
+        continue; // skip regular j++ at loop bottom — j is past the closing }
+      }
       if (c === str) str = null;
       j++; continue;
     }

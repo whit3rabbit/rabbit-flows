@@ -213,4 +213,58 @@ while (i < 5) {
 }
 
 // ---------------------------------------------------------------------------
+// AC10: parallel(NAME) — a bare identifier referencing a hoisted top-level thunk array —
+//   resolves through the thunks.js index for the three shapes real workflows use:
+//   `.map()`, `Array.from()`, and an array literal with conditional `.push()` lanes.
+//   An identifier that resolves to NO agent() calls (or doesn't exist) gets a targeted
+//   lossy warning instead of the old silent 0-node skip.
+// ---------------------------------------------------------------------------
+{
+  const src = `
+export const meta = { name: 'ac10', description: 'x', phases: [] }
+const mapThunks = items.map((it, i) => () => agent('map lane ' + it, { label: 'map' + i }))
+const fromThunks = Array.from({ length: 2 }, (_, i) => () => agent('from lane', { label: 'from' + i }))
+const pushThunks = [
+  () => agent('literal lane', { label: 'lit0' }),
+]
+if (wantExtra) {
+  pushThunks.push(() => agent('pushed lane', { label: 'pushed0' }))
+}
+const a = await parallel(mapThunks)
+const b = await parallel(fromThunks)
+const c = await parallel(pushThunks)
+const d = await parallel(neverDeclared)
+`;
+  const g = parseWorkflow(src);
+  const containers = g.nodes.filter((n) => n.kind === 'parallel');
+  assert(containers.length === 3, `AC10: 3 resolved parallel(NAME) containers (got ${containers.length})`);
+  const labels = g.nodes.map((n) => n.label);
+  assert(labels.some((l) => l.startsWith('map')), 'AC10: .map() thunk array resolves');
+  assert(labels.some((l) => l.startsWith('from')), 'AC10: Array.from() thunk array resolves');
+  assert(labels.includes('lit0'), 'AC10: array-literal thunk resolves');
+  assert(labels.includes('pushed0'), 'AC10: NAME.push(...) conditional lane also resolves');
+  assert(
+    g.lossy.some((l) => l.reason === 'parallel() references an unresolved identifier'),
+    `AC10: parallel(neverDeclared) gets a targeted lossy warning (got ${JSON.stringify(g.lossy)})`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AC11: scaffold.js's real 4 thunk-array fan-outs (proposeThunks, researchThunks,
+//   fileStubThunks, supportThunks) all produce lane nodes, not 4 silent 0-node gaps.
+// ---------------------------------------------------------------------------
+{
+  const src = readFileSync(join(WORKFLOWS_DIR, 'scaffold.js'), 'utf8');
+  const g = parseWorkflow(src);
+  const labels = g.nodes.map((n) => n.label);
+  assert(labels.some((l) => l.includes('architect:')), 'AC11: scaffold.js proposeThunks (Promise.all-wrapped) resolves');
+  assert(labels.some((l) => l.includes('research:')), 'AC11: scaffold.js researchThunks (Promise.all-wrapped) resolves');
+  assert(labels.some((l) => l.includes('build:')), 'AC11: scaffold.js fileStubThunks resolves');
+  assert(labels.includes('tests') && labels.includes('docs'), 'AC11: scaffold.js supportThunks literal lanes resolve');
+  assert(labels.includes('guardrails') && labels.includes('ci'), 'AC11: scaffold.js supportThunks .push() lanes resolve');
+  const containers = g.nodes.filter((n) => n.kind === 'parallel');
+  assert(containers.length >= 6, `AC11: scaffold.js has >=6 parallel containers (got ${containers.length})`);
+}
+
+// ---------------------------------------------------------------------------
 process.exit(failures > 0 ? 1 : 0);

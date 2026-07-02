@@ -37,7 +37,7 @@
 // PERMISSIONS: reads source URL (network), writes under outDir. Does NOT modify source.
 //
 // args: {
-//   from:         string  (required) source framework: mkdocs|starlight|docusaurus|vitepress|gitbook|sphinx|generic
+//   from:         string  (required) source framework: mkdocs|starlight|docusaurus|vitepress|gitbook|sphinx|docsify|generic
 //   to:           string  (required) target framework: starlight|docusaurus|vitepress|mkdocs
 //   source:       string  (required) source URL or local directory path
 //   outDir:       string  (required) where to write the migrated site

@@ -109,6 +109,10 @@ function list(workflows) {
     console.log(`${w.name}  -  ${w.description}${w._builtin ? '' : '  (imported)'}`)
     if (deps.length) console.log(`    bundles: ${deps.join(', ')}`)
   }
+  console.log(
+    `\ntip: want a visual editor? git clone this repo && npm run designer\n` +
+      `(or docker run followthewhit3rabbit/rabbit-flow-designer)`,
+  )
 }
 
 // Copy src->dest unless dest exists (skip, unless force). Returns 'copied'|'skipped'.
@@ -575,7 +579,9 @@ async function runInstall(workflows, scopeArg, siloArg, force, all) {
     `\nNext: enable "Dynamic workflows" in /config (off by default on Pro),\n` +
       `then run a workflow by name, e.g. /${chosen[0].name}.\n` +
       `Installed: ${chosen.map((w) => w.name).join(', ')}\n` +
-      `Remove later: rabbit-flows uninstall ${removeArgs} (--all for everything).`,
+      `Remove later: rabbit-flows uninstall ${removeArgs} (--all for everything).\n` +
+      `Tip: want a visual editor? git clone this repo && npm run designer\n` +
+      `(or docker run followthewhit3rabbit/rabbit-flow-designer).`,
   )
 }
 

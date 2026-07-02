@@ -101,13 +101,35 @@ const constraints = normList(args?.constraints)
 const maxTokens = args?.maxTokens ?? null
 const budgetFloor = args?.budgetFloor ?? 50_000
 
+if (maxTokens != null && maxTokens <= budgetFloor) {
+  return {
+    board,
+    error: `maxTokens (${maxTokens}) must be greater than budgetFloor (${budgetFloor}) — the execute loop's ` +
+      `tokensLeft() would start at or below budgetFloor and zero iterations run.`,
+    written: false,
+  }
+}
+
 const tokensLeft = () =>
   Math.min(budget.remaining(), maxTokens != null ? Math.max(0, maxTokens - budget.spent()) : Infinity)
 
+// eatahorse.py is bundled with the eatahorse skill; agents shell out to it IN PLACE. A single hardcoded
+// path 404s on installed (npx/user-scope) targets, which made agents COPY eatahorse.py into the project
+// to satisfy it. Every Bash call re-runs `eatahorseResolve` first (shell state does NOT persist between
+// Bash tool calls, so it must be chained into the same invocation as the real command each time): it
+// probes the candidate locations and sets $EH, NEVER copying the script. Mirrors reconResolve in
+// security-audit.js and eatahorse-plan.js.
+const eatahorseResolve =
+  `EH=""; for c in "${scriptPath}" ".claude/skills/eatahorse/scripts/eatahorse.py" "$HOME/.claude/skills/eatahorse/scripts/eatahorse.py"; do [ -f "$c" ] && EH="$c" && break; done\n` +
+  `[ -z "$EH" ] && EH=$(find . -maxdepth 6 -name eatahorse.py -path '*eatahorse*' 2>/dev/null | head -1)\n` +
+  `PY=python3\n` +
+  `# eatahorse.py is READ-ONLY tooling: run it IN PLACE from "$EH" — never copy, move, or recreate it in the project.`
+
 // Inline CLI contract — sliced per agent.
 const CLI_HEAD =
-  `Eatahorse CLI (stdlib python, no deps): python3 "${scriptPath}" --board "${board}" <cmd>. ` +
-  `If absent: find . -name eatahorse.py -path '*eatahorse*'.`
+  `Eatahorse CLI (stdlib python, no deps). Locate eatahorse.py IN PLACE (do NOT copy it anywhere) by chaining ` +
+  `this prelude into the SAME Bash call as every command below (shell state does not persist between ` +
+  `calls):\n${eatahorseResolve}\nThen run: "$PY" "$EH" --board "${board}" <cmd>.`
 const CMD = {
   report:  `report --json -> {counts, active, done}  (read "active" for activeRemaining)`,
   list:    `list [--status s] [--json] -> cards (id,title,status,path)`,
@@ -119,6 +141,9 @@ const CMD = {
   sync:    `sync  (reconcile cards <-> state.json + board.md; run after edits)`,
 }
 const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
+// Same command menu WITHOUT the CLI_HEAD preamble (which re-embeds eatahorseResolve) — for prompts
+// that already interpolated ${eatahorseResolve} explicitly above, so the prelude isn't duplicated.
+const cmdMenu = (...k) => `Commands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
 const CARD_RULE = `Card model: each card = one outcome / next 1-3 bites / what proves it done. Keep <=2 cards in "doing".`
 
 const INVARIANTS = constraints.length
@@ -132,9 +157,10 @@ const INVARIANTS = constraints.length
 // 0. Probe — confirm the board exists and has active cards.
 phase('Probe')
 const probe = await agent(
-  `Probe an Eatahorse board dir, READ-ONLY. Run \`python3 "${scriptPath}" --board "${board}" report --json\`. ` +
+  `Probe an Eatahorse board dir, READ-ONLY. Run exactly this via Bash:\n${eatahorseResolve}\n` +
+    `"$PY" "$EH" --board "${board}" report --json\n` +
     `If it ERRORS (no board there yet), return exists=false, active=0, project="". Otherwise return ` +
-    `exists=true, active = the report's "active" count, and project = the board's project name.\n\n${cli('report')}`,
+    `exists=true, active = the report's "active" count, and project = the board's project name.\n\n${cmdMenu('report')}`,
   { label: 'probe', model: 'haiku', schema: PROBE_SCHEMA },
 )
 

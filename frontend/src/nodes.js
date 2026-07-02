@@ -90,25 +90,28 @@ export function ContainerNode(props) {
 }
 
 // LossyNode — placeholder for workflow sections the parser could not parse.
-// Rendered with an amber warning style; not connectable in the palette sense
-// but the graph may wire flow edges to/from it.
+// Shows the {line, reason, snippet, fix} enriched error data from the parser.
 export function LossyNode(props) {
   const d = props.data, sel = props.selected;
   const col = '#f5a524';
+  const snippet = d.snippet || '';
+  const fix = d.fix || '';
   return h('div', {
     style: {
       width: '100%', height: '100%', background: '#1a1200',
       border: '1px solid ' + (sel ? col : '#5a3800'), borderLeft: '3px solid ' + col,
       borderRadius: 10,
       boxShadow: sel ? '0 0 0 1px ' + col : '0 2px 10px rgba(0,0,0,.3)',
-      overflow: 'hidden', fontFamily: SANS, display: 'flex', alignItems: 'center', gap: 8, padding: '0 13px',
+      overflow: 'hidden', fontFamily: SANS, display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 13px',
     },
   },
     h(Handle, { type: 'target', position: Position.Top,    style: dotHandle(col) }),
-    h('div', { style: { fontSize: 14, color: col } }, '⚠'),
-    h('div', { style: { flex: 1, minWidth: 0 } },
+    h('div', { style: { fontSize: 14, color: col, flexShrink: 0, marginTop: 2 } }, '⚠'),
+    h('div', { style: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 } },
       h('div', { style: { fontSize: 9.5, letterSpacing: .7, textTransform: 'uppercase', fontWeight: 600, color: '#7a5a1a' } }, 'Unparsed section'),
-      h('div', { style: { fontSize: 11.5, color: '#c49a30', marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, d.label || 'unrecognized construct')
+      h('div', { style: { fontSize: 11.5, color: '#c49a30', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, d.label || 'unrecognized construct'),
+      snippet && h('div', { style: { fontSize: 10.5, color: '#a07a28', fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', background: '#0f0b00', padding: '2px 6px', borderRadius: 4 } }, snippet),
+      fix && h('div', { style: { fontSize: 10.5, color: '#dfc08a', lineHeight: 1.4 } }, fix)
     ),
     h(Handle, { type: 'source', position: Position.Bottom, style: dotHandle(col) })
   );

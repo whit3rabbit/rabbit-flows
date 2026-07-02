@@ -18,8 +18,9 @@ orchestrator) has no CMD map — it delegates to the sub-workflows.
 - Stdlib self-checks, no framework — run after touching a matching script:
   `python3 scripts/test_eatahorse.py` (CLI),
   `python3 scripts/test_map_codebase.py` (codebase mapping help script),
-  `python3 scripts/test_cmd_drift.py` (guards the three-copy `CMD` hand-sync above: every verb a
-  workflow advertises must exist in `eatahorse.py`; SKIPs when run outside the repo).
+  `python3 scripts/test_cmd_drift.py` (guards the three-copy `CMD` hand-sync above — every verb a
+  workflow advertises must exist in `eatahorse.py` — AND that the three `eatahorseResolve` shell-prelude
+  copies stay byte-identical; SKIPs when run outside the repo).
 - **Single-writer invariant** the workflows rely on: in the execute loop, the per-iteration worker
   edits ONLY its own card markdown and runs NO CLI; the workflow's sync step is the sole
   `state.json`/`board.md` writer per iteration. The PostToolUse autosync was removed as that exact

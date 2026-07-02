@@ -108,6 +108,10 @@ const slugify = (s) =>
   (String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'board')
 const board = args?.board ?? '.eatahorse-' + slugify(goal)
 
+// Pre-compute safe-quoted versions to avoid .replace(/"/g, "'") inside template literals,
+// which confuses the heuristic parser's ${} expression tracking (/"/g regex " looks like a string opener).
+const _sq = (s) => String(s).replace(/"/g, "'")
+
 // Stringified-args guard — same check as the main eatahorse.js workflow.
 const _argKeys =
   /\b(goal|execute|board|constraints|root|question|outDir|brief|framework|targetLang|targetDir|grounding|maxIterations|maxTokens|budgetFloor|workerModel|preserveApi|testCmd|inventory)["']?\s*[:=]/gi
@@ -129,10 +133,27 @@ const normList = (v) => (Array.isArray(v) ? v : v ? [v] : []).map((s) => String(
 const constraints = normList(args?.constraints)
 const inventory = args?.inventory ?? '' // optional path to map_codebase.py JSON
 
+// eatahorse.py is bundled with the eatahorse skill; agents shell out to it IN PLACE. The script can't
+// read the filesystem, so it can't know where the install put eatahorse.py: the dev repo has it at
+// plugins/..., an npx project-scope install at .claude/skills/..., a user-scope install at
+// ~/.claude/skills/.... A single hardcoded path is wrong in installed targets, which made agents COPY
+// eatahorse.py into the project to satisfy it (a stray script in the repo). Instead, every Bash call
+// re-runs `eatahorseResolve` first (shell state does NOT persist between Bash tool calls, so it must be
+// chained into the same invocation as the real command each time): it probes the candidate locations,
+// sets $EH to the first that exists, and NEVER copies the script. scriptPath (override + dev path) is
+// the first candidate, so an explicit arg or a dev-repo run still wins. Mirrors reconResolve in
+// security-audit.js.
+const eatahorseResolve =
+  `EH=""; for c in "${scriptPath}" ".claude/skills/eatahorse/scripts/eatahorse.py" "$HOME/.claude/skills/eatahorse/scripts/eatahorse.py"; do [ -f "$c" ] && EH="$c" && break; done\n` +
+  `[ -z "$EH" ] && EH=$(find . -maxdepth 6 -name eatahorse.py -path '*eatahorse*' 2>/dev/null | head -1)\n` +
+  `PY=python3\n` +
+  `# eatahorse.py is READ-ONLY tooling: run it IN PLACE from "$EH" — never copy, move, or recreate it in the project.`
+
 // Inline CLI contract (runtime source of truth).
 const CLI_HEAD =
-  `Eatahorse CLI (stdlib python, no deps): python3 "${scriptPath}" --board "${board}" <cmd>. ` +
-  `If absent: find . -name eatahorse.py -path '*eatahorse*'.`
+  `Eatahorse CLI (stdlib python, no deps). Locate eatahorse.py IN PLACE (do NOT copy it anywhere) by chaining ` +
+  `this prelude into the SAME Bash call as every command below (shell state does not persist between ` +
+  `calls):\n${eatahorseResolve}\nThen run: "$PY" "$EH" --board "${board}" <cmd>.`
 const CMD = {
   report:  `report --json -> {counts, active, done}`,
   init:    `init "<project>" [--goal "<g>"]  (errors if board exists)`,
@@ -144,6 +165,9 @@ const CMD = {
   sync:    `sync  (reconcile cards <-> state.json + board.md; run after edits)`,
 }
 const cli = (...k) => CLI_HEAD + `\nCommands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
+// Same command menu WITHOUT the CLI_HEAD preamble (which re-embeds eatahorseResolve) — for prompts
+// that already interpolated ${eatahorseResolve} explicitly above, so the prelude isn't duplicated.
+const cmdMenu = (...k) => `Commands:\n  ` + k.map((x) => CMD[x]).join('\n  ')
 const CARD_RULE = `Card model: each card = one outcome / next 1-3 bites / what proves it done. Keep <=2 cards in "doing".`
 
 // If inventory is set, inject a reference into the decompose prompt.
@@ -165,10 +189,11 @@ const INVARIANTS = constraints.length
 // 0. Probe — Haiku (mechanical, read-only). Check the board dir before decomposing.
 phase('Probe')
 const probe = await agent(
-  `Probe an Eatahorse board dir, READ-ONLY. Run \`python3 "${scriptPath}" --board "${board}" report --json\`. ` +
+  `Probe an Eatahorse board dir, READ-ONLY. Run exactly this via Bash:\n${eatahorseResolve}\n` +
+    `"$PY" "$EH" --board "${board}" report --json\n` +
     `If it ERRORS (no board there yet), return exists=false, active=0, project="". Otherwise return ` +
     `exists=true, active = the report's "active" count, and project = the board's project name. Do NOT ` +
-    `create or modify anything.\n\n${cli('report')}`,
+    `create or modify anything.\n\n${cmdMenu('report')}`,
   { label: 'probe', model: 'haiku', schema: PROBE_SCHEMA },
 )
 
@@ -233,17 +258,21 @@ if (!plan?.cards?.length) {
 // 2. Seed — Haiku (mechanical). Create the board and add every card.
 phase('Seed')
 const seedResult = await agent(
-  `Create an Eatahorse board and seed it with the cards below. Use EXACTLY the board dir "${board}" for ` +
+  `Create an Eatahorse board and seed it with the cards below. Locate eatahorse.py IN PLACE (do NOT copy it ` +
+    `anywhere) — before EVERY command below, chain this prelude into the SAME Bash call (shell state does not ` +
+    `persist between calls):\n${eatahorseResolve}\n\n` +
+    `Use EXACTLY the board dir "${board}" for ` +
     `every command — do NOT invent, switch to, or improvise a different dir even if one already exists. ` +
     `Steps:\n` +
     `1. Create the board: run ` +
-    `\`python3 "${scriptPath}" --board "${board}" init "${(plan.project || 'Eatahorse Project').replace(/"/g, "'")}" --goal "${goal.replace(/"/g, "'")}"\`. ` +
+    `\`"$PY" "$EH" --board "${board}" init "${_sq(plan.project || 'Eatahorse Project')}" --goal "${_sq(goal)}"\` ` +
+    `(prefixed with the prelude above). ` +
     `If it reports the board already exists, skip this step (do not --force).\n` +
     `2. For EACH card below, run one \`add\` with --priority, -d (description), a --bite per bite, and a ` +
     `--accept per acceptance check. Put the highest-priority card(s) (lowest priority number, e.g. P0) in ` +
     `--status ready, the rest backlog.\n` +
     `3. Run \`sync\`, then \`report --json\` and report the seeded count + active count.\n` +
-    `Do NOT start working any task. Only create cards.\n\n${cli('report', 'init', 'add', 'list', 'sync')}\n${CARD_RULE}\n\n` +
+    `Do NOT start working any task. Only create cards.\n\n${cmdMenu('report', 'init', 'add', 'list', 'sync')}\n${CARD_RULE}\n\n` +
     `Cards (JSON):\n${JSON.stringify(plan.cards)}`,
   { label: 'seed', model: 'haiku', schema: SEED_SCHEMA },
 )
