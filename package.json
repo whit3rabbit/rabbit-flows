@@ -1,6 +1,6 @@
 {
   "name": "@whit3rabbit/rabbit-flows",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "npx installer that bundles Claude Code workflows with the skills and agents they depend on.",
   "type": "module",
   "bin": {

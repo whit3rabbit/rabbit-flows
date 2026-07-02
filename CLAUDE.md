@@ -18,7 +18,7 @@ python3 plugins/workflow-kit/skills/eatahorse/scripts/test_eatahorse.py   # eata
 node frontend/test-lossy.mjs --report   # check which workflow .js files have unparseable "lossy" sections in the visual graph parser (run before committing, after editing any .claude/workflows/*.js)
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_map_codebase.py  # codebase mapping help script self-checks; run after editing map_codebase.py
 python3 plugins/workflow-kit/skills/eatahorse/scripts/test_cmd_drift.py  # guards the three-copy inline CMD maps: every verb a workflow advertises must exist in eatahorse.py; also checks docs-from-code.js until its refactor. Run after editing any eatahorse-plan.js/eatahorse-execute.js/docs-from-code.js CMD map or eatahorse.py subcommands
-act -j check -j recon -j validate-plugin   # run CI locally (needs Docker + act); do this before pushing to verify CI passes
+act -j check && act -j recon && act -j validate-plugin   # run CI locally (needs Docker + act); do this before pushing to verify CI passes. `-j` is single-value (last one wins) — `act -j a -j b` silently runs only `b`, so each job needs its own invocation. Bare `act` (no -j) also matches publish.yml's `publish`/`docker` jobs on the default push event — don't run it unqualified, it'll attempt a real npm publish/docker push.
 python3 plugins/workflow-kit/skills/secure-review/scripts/test_recon.py   # security-audit recon self-checks (stdlib, degraded mode); run after editing recon.py. ALSO run under the venv: `bash plugins/workflow-kit/skills/secure-review/scripts/setup_venv.sh && plugins/workflow-kit/skills/secure-review/scripts/.venv/bin/python plugins/workflow-kit/skills/secure-review/scripts/test_recon.py` — several tests are tree-sitter-gated and SKIP in stdlib; the call-graph/import regressions live on the precise backend, so a green stdlib run alone is blind to them.
 python3 plugins/workflow-kit/skills/docs-scraper/scripts/test_platform_drift.py   # guards docs-migrate.js's hand-copied SELECTORS subset (+ its `from:` header comment) against docs-scrape.js's SELECTORS; run after editing either file's platform coverage
 python3 plugins/workflow-kit/skills/secure-review/scripts/test_sink_catalog_drift.py   # guards security-audit.js's SINK_CATALOG category labels against secure-review/SKILL.md's "Sink/source catalog" bullet list; run after editing either
@@ -31,6 +31,21 @@ The `@generated-start/@generated-end` blocks in `.claude/workflows/docs-{create,
 A SECOND, independent generator owns the `arg-contract/*` marker blocks: `node scripts/build-arg-contract.mjs` generates the docs-from-code ARG surfaces (the uniform guard block + the header `Knobs` comment in `docs-from-code.js`, and the Workflow args block + Defaults line in `document/SKILL.md`) from the single source `installer/arg-schemas/docs-from-code.mjs`. Edit the SCHEMA + regenerate (no `--check`); never hand-edit between `@generated-start/@generated-end arg-contract/*`. Bespoke validators (`i18n`/`versioning`/`refine`) and derived consts (`root`/`fwEntry`/`mode`/`updateMode`/`normPagePath`) stay HAND-WRITTEN below the generated guard block (`kind:'custom'`), down to the `// --- end args / guards` sentinel; `--check` lints that every schema arg name set-matches the `args?.X` accesses in that region, so a hand-added guard or a dropped arg fails the build. `npm run check` = FOUR gates: installer manifest, `build:skill`, `build:docs-contracts`, and `build:arg-contract` drift.
 
 When `validate.py` reports a workflow JS syntax error it points at `:1` generically; `node --check` is no help (it stops at the expected top-level-`return` "Illegal return"). The cause is usually unbalanced parens, e.g. `(await parallel(...)).filter()` needs the grouping paren or `.filter` binds to the promise.
+
+## Releasing
+
+`.github/workflows/publish.yml` triggers on `v*` tag push: it verifies the tag matches
+`package.json`'s version, runs `npm run check` + the workflow linter + `npm test`, then
+publishes to npm via OIDC trusted publishing (no local token needed), creates a GitHub
+release (`gh release create --generate-notes`), and a second job builds + pushes the
+Docker image (`followthewhit3rabbit/rabbit-flow-designer`) to Docker Hub. Before tagging:
+
+1. Update `CHANGELOG.md` with the new version's entry.
+2. Bump `package.json`'s `version` to match.
+3. Run `act -j check && act -j recon && act -j validate-plugin` locally (one job per invocation —
+   `-j` is single-value, and bare `act` also matches `publish.yml`'s jobs on the default push
+   event) — this is the same gate CI runs; catch a failure here, not after the tag is pushed.
+4. Commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
 
 ## Prime directive
 
