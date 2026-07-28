@@ -5,6 +5,22 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Docker image base bumped from `node:20-slim` to `node:24-slim`. Node 20 reached
+  end of life on 2026-04-30, so the old base no longer receives security updates.
+- CI now tests on Node 24 instead of Node 20, matching the version `publish.yml`
+  already builds and publishes with.
+- Bumped GitHub Actions to their current majors: `actions/checkout` v7,
+  `actions/setup-node` v7, `actions/setup-python` v7, `docker/login-action` v4,
+  `docker/metadata-action` v6, `docker/build-push-action` v7. The three
+  `docker/*` actions still targeted the Node 20 runtime and were being force-run
+  on Node 24 by the runner, which raised a deprecation annotation on every
+  release. All are SHA-pinned, matching the convention already used for the
+  `actions/*` entries in `publish.yml`.
+
 ## [0.1.2] - 2026-07-28
 
 ### Security

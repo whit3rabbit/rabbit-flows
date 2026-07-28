@@ -24,7 +24,7 @@
 #     -v "$(pwd)/plugins:/app/plugins:ro" \
 #     rabbit-flow-designer
 
-FROM node:20-slim
+FROM node:24-slim
 
 # python3 is needed for POST /api/validate (runs validate.py --strict)
 RUN apt-get update && apt-get install -y --no-install-recommends python3 \
@@ -49,7 +49,7 @@ ENV HOST=0.0.0.0
 
 EXPOSE 3001
 
-# Drop root (F3): node:20-slim ships a non-root `node` user (UID 1000). Running as root meant
+# Drop root (F3): node:24-slim ships a non-root `node` user (UID 1000). Running as root meant
 # files written via a writable .claude mount landed root-owned on the host. Copied files are
 # world-readable, so the server can still read frontend/ and vendor/. With a writable mount,
 # the host .claude/workflows dir must be writable by UID 1000.
