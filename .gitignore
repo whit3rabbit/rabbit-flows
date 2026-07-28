@@ -136,8 +136,6 @@ dist/
 
 # Icon must end with two carriage returns
 Icon
-
-
 # Thumbnails
 ._*
 
@@ -190,3 +188,5 @@ CLAUDE.local.md
 
 # playwright-mcp scratch output (console logs, page snapshots)
 .playwright-mcp/
+# security-audit output (vulnerability inventory — do not commit)
+.security-audit/

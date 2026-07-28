@@ -5,6 +5,26 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] - 2026-07-28
+
+### Security
+
+- Resolved all open Dependabot alerts by updating transitive dependencies in the
+  `frontend/` and `docs/` lockfiles:
+  - `postcss` 8.5.15 -> 8.5.24 (GHSA-r28c-9q8g-f849, high) in both.
+  - `js-yaml` 4.2.0 -> 4.3.0 (GHSA-52cp-r559-cp3m, high) in both.
+  - `brace-expansion` 1.1.15 -> 1.1.16 (GHSA-3jxr-9vmj-r5cp, high) in `frontend/`.
+  - `nanoid` 3.3.15 -> 3.3.16 pulled in alongside `postcss`.
+- No production dependency of the published package changed; both affected
+  lockfiles cover dev/site tooling only.
+
+### Known issues
+
+- `npm audit` still reports `brace-expansion` GHSA-mh99-v99m-4gvg in `frontend/`
+  via `eslint` -> `minimatch`. No patched version of `brace-expansion` exists for
+  that advisory, so it is unfixable today. It is dev-only lint tooling and is not
+  reachable from any shipped code path.
+
 ## [0.1.1] - 2026-07-02
 
 ### Added
